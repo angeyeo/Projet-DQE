@@ -1,0 +1,74 @@
+# Apps `projets` et `api`
+
+Backend DRF : modèles, endpoints, verrou logiciel de validation, pont
+avec le moteur de calcul.
+
+## État actuel (même niveau d'avancement que `moteur_calcul`)
+
+- ✅ Modèles `Projet` et `ElementStructurel` (avec statuts `propose` /
+  `modifie` / `valide`)
+- ✅ Serializers DRF complets
+- ✅ Couche `services.py` qui appelle `moteur_calcul` proprement (gère
+  `NotImplementedError` -> 503, pas une erreur brute)
+- ✅ Vues DRF avec routeur (`ProjetViewSet`, `ElementStructurelViewSet`)
+- ✅ Actions dédiées : `/calculer/`, `/valider/`, `/recalculer/`,
+  `/generer_dqe/`
+- ✅ Verrou logiciel fonctionnel : un élément ne devient `valide` que
+  via l'action `/valider/` ; le modifier après coup le repasse
+  automatiquement à `modifie`
+- ✅ Admin Django configuré (pratique pour inspecter les données pendant
+  les tests)
+- ✅ Tests complets : modèles, endpoints, verrou logiciel -- tous
+  passent dès maintenant, indépendamment des formules
+- ⏳ En attente : les vraies formules du moteur de calcul (mercredi) --
+  une fois injectées, `/calculer/` renverra un vrai résultat au lieu de
+  503
+
+## Installation dans le projet
+
+1. Copier `projets/` et `api/` dans `backend/`
+2. Ajouter dans `settings.py` :
+   ```python
+   INSTALLED_APPS = [
+       ...
+       "rest_framework",
+       "moteur_calcul",
+       "projets",
+       "api",
+   ]
+   ```
+3. Dans `backend/urls.py` (le fichier racine) :
+   ```python
+   from django.urls import path, include
+
+   urlpatterns = [
+       ...
+       path("api/", include("api.urls")),
+   ]
+   ```
+4. Migrations :
+   ```bash
+   python manage.py makemigrations projets
+   python manage.py migrate
+   ```
+5. Tests :
+   ```bash
+   python manage.py test projets
+   ```
+
+## Ce que ça débloque pour le Dev 3 (frontend)
+
+Le frontend peut dès maintenant :
+- créer un projet (`POST /api/projets/`)
+- ajouter des éléments (`POST /api/elements/`)
+- tenter un calcul (`POST /api/elements/{id}/calculer/`) -- recevra 503
+  jusqu'à mercredi, donc prévoir l'affichage d'un message "calcul pas
+  encore disponible" côté UI
+- valider un élément une fois qu'un résultat existe
+  (`POST /api/elements/{id}/valider/`)
+
+## Ce que ça débloque pour le Dev 4 (DQE + IA)
+
+`/api/projets/{id}/generer_dqe/` est prêt et vérifie déjà que tous les
+éléments sont validés avant d'aller plus loin. Il ne reste qu'à
+brancher le vrai module de génération (`TODO` marqué dans `views.py`).
