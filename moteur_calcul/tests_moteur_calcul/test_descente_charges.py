@@ -7,7 +7,6 @@ squelette est branché correctement. Une fois les formules ajoutées
 (mercredi), remplacer les assertions par les vraies valeurs attendues.
 """
 
-import pytest
 from django.test import SimpleTestCase
 
 from moteur_calcul.formules.descente_charges import (
