@@ -1,0 +1,43 @@
+# Module `moteur_calcul`
+
+Ce module contient toute la logique de descente de charges et de
+pré-dimensionnement (poteaux, poutres, semelles), selon les formules
+BAEL/Eurocode fournies par le technicien BTP.
+
+## État actuel
+
+- ✅ Structure du module en place
+- ✅ Signatures de toutes les fonctions figées (le Dev backend peut déjà
+  brancher les endpoints API dessus)
+- ✅ Validators des entrées utilisateur fonctionnels
+- ✅ Structure des tests en place
+- ⏳ **Formules réelles en attente** (technicien BTP, prévu mercredi)
+- ⏳ Constantes normatives (`constantes.py`) à remplir une fois les
+  formules reçues
+
+## Pourquoi les fonctions lèvent `NotImplementedError`
+
+C'est volontaire : tant que la vraie formule normative n'est pas
+confirmée, la fonction ne doit renvoyer aucune valeur (même approximative)
+pour éviter qu'un calcul faux passe inaperçu. Chaque fonction contient un
+commentaire `TODO` précisant ce qui manque.
+
+## Pour le Dev backend (DRF)
+
+Vous pouvez dès maintenant importer et appeler ces fonctions dans vos
+vues/serializers avec leurs signatures actuelles. Elles lèveront
+`NotImplementedError` jusqu'à mercredi -- c'est normal, ça vous permet de
+construire le flux API (saisie → appel du moteur → statut `proposé`)
+sans attendre le calcul réel.
+
+## Prochaine étape (mercredi)
+
+1. Remplir `constantes.py` avec les valeurs normatives fournies par le
+   technicien BTP
+2. Remplacer le corps de chaque fonction dans `formules/` par la vraie
+   formule
+3. Compléter `tests/donnees_test.py` avec les résultats attendus
+4. Activer les blocs de tests commentés dans `test_descente_charges.py`
+   et `test_dimensionnement.py`
+5. Documenter dans `docs/` la source normative de chaque formule (BAEL
+   ou Eurocode) pour la traçabilité
