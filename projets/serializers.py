@@ -8,7 +8,7 @@ par le moteur de calcul (voir services.py).
 
 from rest_framework import serializers
 
-from .models import Projet, ElementStructurel
+from .models import Projet, ElementStructurel, PosteMainDoeuvre
 
 
 class ElementStructurelSerializer(serializers.ModelSerializer):
@@ -48,10 +48,34 @@ class ElementValidationSerializer(serializers.Serializer):
         return data
 
 
+class PosteMainDoeuvreSerializer(serializers.ModelSerializer):
+    montant = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PosteMainDoeuvre
+        fields = [
+            "id",
+            "projet",
+            "designation",
+            "unite",
+            "quantite",
+            "prix_unitaire",
+            "montant",
+            "date_creation",
+            "date_modification",
+        ]
+        read_only_fields = ["date_creation", "date_modification"]
+
+    def get_montant(self, obj):
+        return obj.montant
+
+
 class ProjetSerializer(serializers.ModelSerializer):
     elements = ElementStructurelSerializer(many=True, read_only=True)
+    postes_main_doeuvre = PosteMainDoeuvreSerializer(many=True, read_only=True)
     nb_elements_valides = serializers.SerializerMethodField()
     nb_elements_total = serializers.SerializerMethodField()
+    total_main_doeuvre = serializers.SerializerMethodField()
 
     class Meta:
         model = Projet
@@ -61,8 +85,10 @@ class ProjetSerializer(serializers.ModelSerializer):
             "usage_batiment",
             "nb_niveaux",
             "elements",
+            "postes_main_doeuvre",
             "nb_elements_valides",
             "nb_elements_total",
+            "total_main_doeuvre",
             "date_creation",
             "date_modification",
         ]
@@ -72,3 +98,6 @@ class ProjetSerializer(serializers.ModelSerializer):
 
     def get_nb_elements_total(self, obj):
         return obj.elements.count()
+
+    def get_total_main_doeuvre(self, obj):
+        return sum(poste.montant for poste in obj.postes_main_doeuvre.all())

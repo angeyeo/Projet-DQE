@@ -15,11 +15,12 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .models import Projet, ElementStructurel
+from .models import Projet, ElementStructurel, PosteMainDoeuvre
 from .serializers import (
     ProjetSerializer,
     ElementStructurelSerializer,
     ElementValidationSerializer,
+    PosteMainDoeuvreSerializer,
 )
 from .services import calculer_element, recalculer_projet, CalculNonDisponible
 from moteur_calcul.validators import EntreeInvalide
@@ -130,3 +131,21 @@ class ElementStructurelViewSet(viewsets.ModelViewSet):
             serializer.save(statut=ElementStructurel.Statut.MODIFIE)
         else:
             serializer.save()
+
+
+class PosteMainDoeuvreViewSet(viewsets.ModelViewSet):
+    """
+    Postes de main d'œuvre : toujours saisis manuellement par
+    l'ingénieur, jamais calculés automatiquement (voir docstring du
+    modèle PosteMainDoeuvre).
+    """
+
+    queryset = PosteMainDoeuvre.objects.all()
+    serializer_class = PosteMainDoeuvreSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        projet_id = self.request.query_params.get("projet")
+        if projet_id:
+            queryset = queryset.filter(projet_id=projet_id)
+        return queryset
