@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import Header from './components/Header';
-import Stepper from './components/Stepper';
+import Sidebar from './components/Sidebar';
+import TopBar from './components/TopBar';
+import DashboardView from './components/DashboardView';
 import Step1_Parametres from './components/Step1_Parametres';
 import Step2_Calculs from './components/Step2_Calculs';
 import Step3_ValidationLock from './components/Step3_ValidationLock';
@@ -8,10 +9,10 @@ import Step4_DQEExport from './components/Step4_DQEExport';
 import { dqeService } from './api/dqeService';
 
 export default function App() {
-  const [currentStep, setCurrentStep] = useState(1);
-  const [completedSteps, setCompletedSteps] = useState([]);
+  const [activeView, setActiveView] = useState('dashboard');
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
-  // État du Projet
+  // État du Projet BTP
   const [projectData, setProjectData] = useState({
     nomProjet: 'Résidence des Palmes R+3',
     planFileName: 'Plan_Coffrage_Niveau1.PLN',
@@ -33,42 +34,38 @@ export default function App() {
   // Données du Devis DQE
   const [dqeData, setDqeData] = useState(null);
 
-  // Mettre à jour les paramètres
+  // Calcul automatique au chargement initial pour alimenter les KPIs
+  useEffect(() => {
+    handleCalculateInitial();
+  }, []);
+
+  const handleCalculateInitial = async () => {
+    const results = await dqeService.calculateSections(projectData);
+    setSections(results);
+  };
+
   const updateProjectData = (newFields) => {
     setProjectData((prev) => ({ ...prev, ...newFields }));
   };
 
-  // Lancer le calcul à l'étape 2
   const handleCalculate = async () => {
     const results = await dqeService.calculateSections(projectData);
     setSections(results);
-    if (!completedSteps.includes(1)) {
-      setCompletedSteps((prev) => [...prev, 1]);
-    }
-    setCurrentStep(2);
+    setActiveView('step2');
   };
 
-  // Passer à l'étape 3 (Validation & Verrouillage)
   const handleGoToValidation = () => {
-    if (!completedSteps.includes(2)) {
-      setCompletedSteps((prev) => [...prev, 2]);
-    }
-    setCurrentStep(3);
+    setActiveView('step3');
   };
 
-  // Passer à l'étape 4 (Génération DQE)
   const handleGenerateDQE = async () => {
     const dqeResults = await dqeService.calculateDQE(sections, projectData);
     setDqeData(dqeResults);
-    if (!completedSteps.includes(3)) {
-      setCompletedSteps((prev) => [...prev, 3]);
-    }
-    setCurrentStep(4);
+    setActiveView('step4');
   };
 
-  // Basculer le verrou d'un élément
   const toggleLock = (id, category) => {
-    const key = category.toLowerCase() + 's'; // poteaux, poutres, semelles
+    const key = category.toLowerCase() + 's';
     setSections((prev) => ({
       ...prev,
       [key]: prev[key].map((item) =>
@@ -77,7 +74,6 @@ export default function App() {
     }));
   };
 
-  // Verrouiller ou déverrouiller TOUTES les sections
   const toggleLockAll = (lockState) => {
     setSections((prev) => ({
       poteaux: prev.poteaux.map((item) => ({ ...item, locked: lockState })),
@@ -86,7 +82,6 @@ export default function App() {
     }));
   };
 
-  // Modifier une section non verrouillée
   const updateSection = (id, category, field, value) => {
     const key = category.toLowerCase() + 's';
     setSections((prev) => ({
@@ -97,7 +92,6 @@ export default function App() {
     }));
   };
 
-  // Calcul du nombre de sections verrouillées
   const allElements = [
     ...(sections.poteaux || []),
     ...(sections.poutres || []),
@@ -106,60 +100,75 @@ export default function App() {
   const lockedCount = allElements.filter((e) => e.locked).length;
 
   return (
-    <div className="app-container">
-      <Header
-        projectName={projectData.nomProjet}
+    <div className="app-layout">
+      {/* Sidebar Core 2.0 */}
+      <Sidebar
+        activeView={activeView}
+        setActiveView={setActiveView}
+        isCollapsed={isCollapsed}
+        setIsCollapsed={setIsCollapsed}
         lockedCount={lockedCount}
         totalCount={allElements.length}
       />
 
-      <Stepper
-        currentStep={currentStep}
-        setStep={setCurrentStep}
-        completedSteps={completedSteps}
-      />
+      {/* Workspace Principal */}
+      <div className="main-wrapper">
+        <TopBar
+          projectName={projectData.nomProjet}
+          onNewCalculation={() => setActiveView('step1')}
+          lockedCount={lockedCount}
+          totalCount={allElements.length}
+        />
 
-      <main>
-        {currentStep === 1 && (
-          <Step1_Parametres
-            projectData={projectData}
-            updateProjectData={updateProjectData}
-            onNext={handleCalculate}
-          />
-        )}
+        <main className="content-body">
+          {activeView === 'dashboard' && (
+            <DashboardView
+              projectData={projectData}
+              sections={sections}
+              lockedCount={lockedCount}
+              totalCount={allElements.length}
+              onNavigate={setActiveView}
+            />
+          )}
 
-        {currentStep === 2 && (
-          <Step2_Calculs
-            sections={sections}
-            projectData={projectData}
-            onBack={() => setCurrentStep(1)}
-            onNext={handleGoToValidation}
-          />
-        )}
+          {activeView === 'step1' && (
+            <Step1_Parametres
+              projectData={projectData}
+              updateProjectData={updateProjectData}
+              onNext={handleCalculate}
+            />
+          )}
 
-        {currentStep === 3 && (
-          <Step3_ValidationLock
-            sections={sections}
-            toggleLock={toggleLock}
-            toggleLockAll={toggleLockAll}
-            updateSection={updateSection}
-            onBack={() => setCurrentStep(2)}
-            onNext={handleGenerateDQE}
-          />
-        )}
+          {activeView === 'step2' && (
+            <Step2_Calculs
+              sections={sections}
+              projectData={projectData}
+              onBack={() => setActiveView('step1')}
+              onNext={handleGoToValidation}
+            />
+          )}
 
-        {currentStep === 4 && (
-          <Step4_DQEExport
-            dqeData={dqeData}
-            projectData={projectData}
-            onBack={() => setCurrentStep(3)}
-            onReset={() => {
-              setCurrentStep(1);
-              setCompletedSteps([]);
-            }}
-          />
-        )}
-      </main>
+          {activeView === 'step3' && (
+            <Step3_ValidationLock
+              sections={sections}
+              toggleLock={toggleLock}
+              toggleLockAll={toggleLockAll}
+              updateSection={updateSection}
+              onBack={() => setActiveView('step2')}
+              onNext={handleGenerateDQE}
+            />
+          )}
+
+          {activeView === 'step4' && (
+            <Step4_DQEExport
+              dqeData={dqeData || {}}
+              projectData={projectData}
+              onBack={() => setActiveView('step3')}
+              onReset={() => setActiveView('step1')}
+            />
+          )}
+        </main>
+      </div>
     </div>
   );
 }
