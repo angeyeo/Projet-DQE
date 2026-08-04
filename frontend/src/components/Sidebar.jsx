@@ -4,10 +4,10 @@ import { LayoutDashboard, FileUp, Calculator, Lock, FileSpreadsheet, ChevronLeft
 export default function Sidebar({ activeView, setActiveView, isCollapsed, setIsCollapsed, lockedCount, totalCount }) {
   const menuItems = [
     { id: 'dashboard', label: 'Tableau de Bord', icon: LayoutDashboard },
-    { id: 'step1', label: '1. Plans & Saisie', icon: FileUp, badge: 'Étape 1' },
-    { id: 'step2', label: '2. Calculs Structurels', icon: Calculator, badge: 'Étape 2' },
-    { id: 'step3', label: '3. Validation & Verrou', icon: Lock, badge: lockedCount > 0 ? `${lockedCount}/${totalCount}` : 'Étape 3' },
-    { id: 'step4', label: '4. Devis DQE & IA', icon: FileSpreadsheet, badge: 'Étape 4' },
+    { id: 'step1', label: 'Plans & Saisie', icon: FileUp },
+    { id: 'step2', label: 'Calculs Structurels', icon: Calculator },
+    { id: 'step3', label: 'Validation & Verrou', icon: Lock, badge: lockedCount > 0 ? `${lockedCount}/${totalCount}` : null },
+    { id: 'step4', label: 'Devis DQE & IA', icon: FileSpreadsheet },
   ];
 
   return (
