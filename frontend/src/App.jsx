@@ -12,19 +12,19 @@ export default function App() {
   const [activeView, setActiveView] = useState('dashboard');
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  // État du Projet BTP
+  // État du Projet BTP (initialement vide pour la saisie de l'utilisateur)
   const [projectData, setProjectData] = useState({
-    nomProjet: 'Résidence des Palmes R+3',
-    planFileName: 'Plan_Coffrage_Niveau1.PLN',
-    planFileSize: '4.2 MB',
+    nomProjet: '',
+    planFileName: '',
+    planFileSize: '',
     typeUsage: 'habitation',
-    nombreNiveaux: 3,
-    porteeMax: 6.0,
-    chargeExploitation: 2.5,
+    nombreNiveaux: '',
+    porteeMax: '',
+    chargeExploitation: '',
     norme: 'BAEL91',
   });
 
-  // Sections calculées
+  // Sections calculées (initialement vides)
   const [sections, setSections] = useState({
     poteaux: [],
     poutres: [],
@@ -33,16 +33,6 @@ export default function App() {
 
   // Données du Devis DQE
   const [dqeData, setDqeData] = useState(null);
-
-  // Calcul automatique au chargement initial pour alimenter les KPIs
-  useEffect(() => {
-    handleCalculateInitial();
-  }, []);
-
-  const handleCalculateInitial = async () => {
-    const results = await dqeService.calculateSections(projectData);
-    setSections(results);
-  };
 
   const updateProjectData = (newFields) => {
     setProjectData((prev) => ({ ...prev, ...newFields }));
