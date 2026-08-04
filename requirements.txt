@@ -2,3 +2,5 @@ asgiref==3.12.1
 Django==6.0.7
 djangorestframework==3.17.1
 sqlparse==0.5.5
+reportlab==4.2.2
+openpyxl==3.1.5

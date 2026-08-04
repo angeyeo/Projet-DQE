@@ -9,6 +9,7 @@ vue -> service -> moteur_calcul fonctionne correctement de bout en bout.
 
 from rest_framework.test import APITestCase
 from rest_framework import status
+from unittest.mock import patch
 
 from projets.models import Projet, ElementStructurel
 
@@ -55,11 +56,13 @@ class TestElementStructurelAPI(APITestCase):
         response = self.client.get(f"/api/elements/?projet={self.projet.id}")
         self.assertEqual(len(response.data), 1)
 
-    def test_calculer_element_renvoie_moteur_non_disponible(self):
+    @patch("projets.services.calculations.dimensionner_poteau")
+    def test_calculer_element_renvoie_moteur_non_disponible(self, mock_dim):
         """
         Tant que les formules ne sont pas injectées dans moteur_calcul,
         cet appel doit renvoyer 503 -- pas une erreur 500 non gérée.
         """
+        mock_dim.side_effect = NotImplementedError("Formule en attente")
         element = ElementStructurel.objects.create(
             projet=self.projet,
             type_element="poteau",
