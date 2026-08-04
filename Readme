@@ -459,3 +459,19 @@ Le module DQE est désormais :
 * cohérent entre les formats PDF et Excel.
 
 La branche `feature/export-dqe` peut maintenant être soumise en Pull Request vers `dev`.
+
+
+---
+
+## État d'avancement Backend DRF (Samuel YEO)
+
+### Module `projets` & API REST (100% Fonctionnel)
+- **Modèles de données** : Gestion complète des entités `Projet` et `ElementStructurel` avec cycle de vie des statuts (`PROPOSE`, `MODIFIE`, `VALIDE`).
+- **Endpoints API REST (`/api/`)** :
+  - `POST /api/projets/` & `GET /api/projets/` : Gestion des projets.
+  - `POST /api/elements/` & `GET /api/elements/?projet={id}` : Saisie et filtrage des éléments structurels.
+- **Actions Métier & Verrou Logiciel** :
+  - `POST /api/elements/{id}/calculer/` : Gestion contrôlée via `services.py` (retourne HTTP 503 tant que les formules BTP ne sont pas injectées).
+  - `POST /api/elements/{id}/valider/` : Vérification des résultats et passage au statut `VALIDE`.
+  - **Sécurité Verrou** : Toute modification post-validation bascule automatiquement l'élément au statut `MODIFIE`.
+- **Tests Unitaires** : Validation à 100% de la suite `projets.tests_projets.test_api` (9/9 OK).
