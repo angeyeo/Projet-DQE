@@ -1,5 +1,12 @@
 from decimal import Decimal, ROUND_HALF_UP
-from projets.models import Projet, ElementStructurel, PosteMainDoeuvre
+
+from projets.models import Projet, ElementStructurel
+
+from moteur_calcul.constantes import (
+    RATIO_ACIER_POTEAUX_KG_M3,
+    RATIO_ACIER_POUTRES_KG_M3,
+    RATIO_ACIER_SEMELLES_KG_M3,
+)
 
 # Prix unitaires par défaut en FCFA
 PRIX_UNITAIRES_DEFAUT = {
@@ -8,12 +15,15 @@ PRIX_UNITAIRES_DEFAUT = {
     "coffrage_m2": Decimal("12000"),
 }
 
-# Ratios d'acier par défaut en kg/m3 (solution de secours en attente de la norme définitive)
+# Ratios d'acier utilisés en solution de secours (poids moteur non disponible).
+# Alignés sur moteur_calcul.constantes (document technicien BTP) : on prend
+# le milieu de chaque fourchette plutôt qu'une valeur inventée localement.
 RATIOS_ACIER_KG_M3 = {
-    "POTEAU": Decimal("100"),
-    "POUTRE": Decimal("120"),
-    "SEMELLE": Decimal("80"),
+    "POTEAU": Decimal(str(sum(RATIO_ACIER_POTEAUX_KG_M3) / 2)),    # (100+150)/2 = 125
+    "POUTRE": Decimal(str(sum(RATIO_ACIER_POUTRES_KG_M3) / 2)),    # (120+180)/2 = 150
+    "SEMELLE": Decimal(str(sum(RATIO_ACIER_SEMELLES_KG_M3) / 2)),  # (40+60)/2 = 50
 }
+
 
 def cm_vers_m(valeur_cm) -> float:
     """Convertit une dimension en centimètres vers des mètres."""
@@ -21,11 +31,12 @@ def cm_vers_m(valeur_cm) -> float:
         return 0.0
     return float(valeur_cm) / 100.0
 
+
 def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> list:
     """
     Calcule les quantités et montants (Béton, Coffrage, Acier) pour un élément
     structurel validé.
-    
+
     Retourne une liste de lignes de devis structurées.
     """
     res = element.resultat_valide
@@ -35,36 +46,42 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> li
     lignes = []
 
     # 1. Poteau
+    #
+    # MODIFIÉ (Ange) : dimensionner_poteau() retourne "cote_cm" (poteau
+    # carré), jamais "largeur_cm"/"profondeur_cm" -- ces clés n'existent
+    # pas dans le résultat réel du moteur. L'ancienne version cherchait
+    # les mauvaises clés, ce qui faisait échouer silencieusement la
+    # condition `all(...)` et retournait [] pour TOUT poteau réel
+    # (aucune ligne béton/coffrage/acier générée, sans erreur visible).
     if element.type_element == ElementStructurel.TypeElement.POTEAU:
-        largeur_cm = res.get("largeur_cm")
-        profondeur_cm = res.get("profondeur_cm")
-        hauteur_poteau = element.hauteur_poteau  # En mètres sur le modèle
+        cote_cm = res.get("cote_cm")
+        hauteur_poteau = element.hauteur_poteau  # en mètres sur le modèle
 
-        if not all(v is not None for v in [largeur_cm, profondeur_cm, hauteur_poteau]):
+        if not all(v is not None for v in [cote_cm, hauteur_poteau]):
             return []
 
-        largeur_m = cm_vers_m(largeur_cm)
-        profondeur_m = cm_vers_m(profondeur_cm)
+        cote_m = cm_vers_m(cote_cm)
 
-        # Béton (m3) = l * p * h
-        volume_beton = Decimal(str(largeur_m * profondeur_m * hauteur_poteau))
-        # Coffrage (m2) = 2 * (l + p) * h
-        surf_coffrage = Decimal(str(2 * (largeur_m + profondeur_m) * hauteur_poteau))
+        # Béton (m3) = côté * côté * hauteur (poteau carré)
+        volume_beton = Decimal(str(cote_m * cote_m * hauteur_poteau))
+        # Coffrage (m2) = 4 côtés * hauteur (poteau carré, pas 2*(l+p))
+        surf_coffrage = Decimal(str(4 * cote_m * hauteur_poteau))
 
         # Acier (kg)
-        # Priorité 1 : Poids total fourni par le moteur (si présent)
+        # Priorité 1 : poids total fourni par le moteur (si présent)
         poids_moteur = res.get("poids_acier_total_kg")
         if poids_moteur is not None:
             poids_acier = Decimal(str(poids_moteur))
         else:
-            # Priorité 2 : Utilisation du ratio par défaut
+            # Priorité 2 : ratio par défaut (milieu de la fourchette du
+            # document technicien, voir RATIOS_ACIER_KG_M3 ci-dessus)
             poids_acier = volume_beton * RATIOS_ACIER_KG_M3["POTEAU"]
 
     # 2. Poutre
     elif element.type_element == ElementStructurel.TypeElement.POUTRE:
         largeur_cm = res.get("largeur_cm")
         hauteur_cm = res.get("hauteur_cm")
-        portee = element.portee  # En mètres sur le modèle
+        portee = element.portee  # en mètres sur le modèle
 
         if not all(v is not None for v in [largeur_cm, hauteur_cm, portee]):
             return []
@@ -74,7 +91,7 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> li
 
         # Béton (m3) = l * h * L
         volume_beton = Decimal(str(largeur_m * hauteur_m * portee))
-        # Coffrage (m2) = (l + 2 * h) * L (face supérieure non coffrée)
+        # Coffrage (m2) = (l + 2*h) * L (face supérieure non coffrée)
         surf_coffrage = Decimal(str((largeur_m + 2 * hauteur_m) * portee))
 
         # Acier (kg)
@@ -95,9 +112,9 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> li
         cote_m = cm_vers_m(cote_cm)
         hauteur_m = cm_vers_m(hauteur_cm)
 
-        # Béton (m3) = cote_m * cote_m * hauteur_m
+        # Béton (m3) = côté * côté * hauteur
         volume_beton = Decimal(str(cote_m * cote_m * hauteur_m))
-        # Coffrage latéral (m2) = 4 * cote_m * hauteur_m
+        # Coffrage latéral (m2) = 4 * côté * hauteur
         surf_coffrage = Decimal(str(4 * cote_m * hauteur_m))
 
         # Acier (kg)
@@ -105,6 +122,9 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> li
         if poids_moteur is not None:
             poids_acier = Decimal(str(poids_moteur))
         else:
+            # MODIFIÉ (Ange) : 50 kg/m³ (milieu 40-60 du document
+            # technicien) au lieu de 80 kg/m³ dans la version précédente,
+            # qui dépassait la fourchette fournie sans justification connue.
             poids_acier = volume_beton * RATIOS_ACIER_KG_M3["SEMELLE"]
 
     else:
@@ -126,7 +146,7 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> li
         "unite": "m³",
         "quantite": float(volume_beton.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)),
         "prix_unitaire": int(pu_beton),
-        "montant": int((volume_beton * pu_beton).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        "montant": int((volume_beton * pu_beton).quantize(Decimal("1"), rounding=ROUND_HALF_UP)),
     })
 
     # Coffrage
@@ -140,7 +160,7 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> li
         "unite": "m²",
         "quantite": float(surf_coffrage.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)),
         "prix_unitaire": int(pu_coffrage),
-        "montant": int((surf_coffrage * pu_coffrage).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        "montant": int((surf_coffrage * pu_coffrage).quantize(Decimal("1"), rounding=ROUND_HALF_UP)),
     })
 
     # Acier
@@ -154,10 +174,11 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> li
         "unite": "kg",
         "quantite": float(poids_acier.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)),
         "prix_unitaire": int(pu_acier),
-        "montant": int((poids_acier * pu_acier).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        "montant": int((poids_acier * pu_acier).quantize(Decimal("1"), rounding=ROUND_HALF_UP)),
     })
 
     return lignes
+
 
 def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None) -> dict:
     """
@@ -204,7 +225,7 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None) -> dict:
             "unite": poste.unite,
             "quantite": float(q_dec.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)),
             "prix_unitaire": int(pu_dec),
-            "montant": int(montant_dec)
+            "montant": int(montant_dec),
         })
         sous_totaux["main_doeuvre"] += montant_dec
 
@@ -223,5 +244,5 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None) -> dict:
             "main_doeuvre": int(sous_totaux["main_doeuvre"]),
         },
         "total_general": int(total_general),
-        "devise": "FCFA"
+        "devise": "FCFA",
     }
