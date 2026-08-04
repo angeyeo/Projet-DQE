@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>Test backend — Projet DQE</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  body { font-family: sans-serif; max-width: 800px; margin: 30px auto; padding: 0 20px; }
+  h1 { font-size: 1.3rem; }
+  section { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin-bottom: 20px; }
+  label { display: block; margin-top: 8px; font-size: 0.9rem; }
+  input, select { width: 100%; padding: 6px; margin-top: 2px; box-sizing: border-box; }
+  button { margin-top: 12px; padding: 8px 14px; cursor: pointer; }
+  pre { background: #f4f4f4; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
+  .erreur { color: #b00020; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState } = React;
+
+// Changez ce port si votre backend tourne ailleurs
+const API_BASE = "http://127.0.0.1:4040/api";
+
+function Bloc({ titre, children }) {
+  return (
+    <section>
+      <h1>{titre}</h1>
+      {children}
+    </section>
+  );
+}
+
+function App() {
+  const [projetId, setProjetId] = useState("");
+  const [nomProjet, setNomProjet] = useState("Test frontend");
+  const [usage, setUsage] = useState("habitation");
+  const [nbNiveaux, setNbNiveaux] = useState(2);
+  const [reponseProjet, setReponseProjet] = useState(null);
+
+  const [typeElement, setTypeElement] = useState("poteau");
+  const [identifiant, setIdentifiant] = useState("P1");
+  const [chargeCalculee, setChargeCalculee] = useState(450);
+  const [hauteurPoteau, setHauteurPoteau] = useState(3);
+  const [portee, setPortee] = useState(6);
+  const [chargeLineaire, setChargeLineaire] = useState(15);
+  const [tauxSol, setTauxSol] = useState(180);
+  const [elementId, setElementId] = useState("");
+  const [reponseElement, setReponseElement] = useState(null);
+
+  const [erreur, setErreur] = useState(null);
+
+  async function appelerApi(url, options) {
+    setErreur(null);
+    try {
+      const res = await fetch(url, options);
+      const data = await res.json();
+      if (!res.ok) {
+        setErreur(`HTTP ${res.status} : ${JSON.stringify(data)}`);
+      }
+      return data;
+    } catch (e) {
+      setErreur(`Erreur réseau : ${e.message} (le backend tourne-t-il bien sur ${API_BASE} ? CORS activé ?)`);
+      return null;
+    }
+  }
+
+  async function creerProjet() {
+    const data = await appelerApi(`${API_BASE}/projets/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nom: nomProjet, usage_batiment: usage, nb_niveaux: Number(nbNiveaux) }),
+    });
+    if (data) {
+      setReponseProjet(data);
+      setProjetId(data.id);
+    }
+  }
+
+  async function creerElement() {
+    const payload = {
+      projet: Number(projetId),
+      type_element: typeElement,
+      identifiant,
+    };
+    if (typeElement === "poteau") {
+      payload.charge_calculee = Number(chargeCalculee);
+      payload.hauteur_poteau = Number(hauteurPoteau);
+    } else if (typeElement === "poutre") {
+      payload.portee = Number(portee);
+      payload.charge_lineaire = Number(chargeLineaire);
+    } else if (typeElement === "semelle") {
+      payload.charge_calculee = Number(chargeCalculee);
+      payload.taux_travail_sol = Number(tauxSol);
+    }
+    const data = await appelerApi(`${API_BASE}/elements/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (data) {
+      setReponseElement(data);
+      setElementId(data.id);
+    }
+  }
+
+  async function calculerElement() {
+    const data = await appelerApi(`${API_BASE}/elements/${elementId}/calculer/`, { method: "POST" });
+    if (data) setReponseElement(data);
+  }
+
+  async function validerElement() {
+    const data = await appelerApi(`${API_BASE}/elements/${elementId}/valider/`, { method: "POST" });
+    if (data) setReponseElement(data);
+  }
+
+  return (
+    <div>
+      <h1 style={{fontSize: "1.6rem"}}>Test backend — Projet DQE</h1>
+      <p>Page de test indépendante, ne touche pas au frontend du Dev 3. Vise <code>{API_BASE}</code>.</p>
+
+      {erreur && <p className="erreur">{erreur}</p>}
+
+      <Bloc titre="1. Créer un projet">
+        <label>Nom du projet</label>
+        <input value={nomProjet} onChange={e => setNomProjet(e.target.value)} />
+        <label>Usage</label>
+        <select value={usage} onChange={e => setUsage(e.target.value)}>
+          <option value="habitation">Habitation</option>
+          <option value="commerce">Commerce</option>
+          <option value="bureau">Bureau</option>
+          <option value="industriel">Industriel</option>
+        </select>
+        <label>Nombre de niveaux</label>
+        <input type="number" value={nbNiveaux} onChange={e => setNbNiveaux(e.target.value)} />
+        <button onClick={creerProjet}>Créer le projet</button>
+        {reponseProjet && <pre>{JSON.stringify(reponseProjet, null, 2)}</pre>}
+      </Bloc>
+
+      <Bloc titre="2. Créer un élément">
+        <label>ID du projet</label>
+        <input value={projetId} onChange={e => setProjetId(e.target.value)} placeholder="ex: 1" />
+        <label>Type d'élément</label>
+        <select value={typeElement} onChange={e => setTypeElement(e.target.value)}>
+          <option value="poteau">Poteau</option>
+          <option value="poutre">Poutre</option>
+          <option value="semelle">Semelle</option>
+        </select>
+        <label>Identifiant</label>
+        <input value={identifiant} onChange={e => setIdentifiant(e.target.value)} />
+
+        {typeElement === "poteau" && (
+          <>
+            <label>Charge calculée (kN)</label>
+            <input type="number" value={chargeCalculee} onChange={e => setChargeCalculee(e.target.value)} />
+            <label>Hauteur poteau (m)</label>
+            <input type="number" value={hauteurPoteau} onChange={e => setHauteurPoteau(e.target.value)} />
+          </>
+        )}
+        {typeElement === "poutre" && (
+          <>
+            <label>Portée (m)</label>
+            <input type="number" value={portee} onChange={e => setPortee(e.target.value)} />
+            <label>Charge linéaire (kN/m)</label>
+            <input type="number" value={chargeLineaire} onChange={e => setChargeLineaire(e.target.value)} />
+          </>
+        )}
+        {typeElement === "semelle" && (
+          <>
+            <label>Charge calculée (kN)</label>
+            <input type="number" value={chargeCalculee} onChange={e => setChargeCalculee(e.target.value)} />
+            <label>Taux de travail du sol (kN/m²)</label>
+            <input type="number" value={tauxSol} onChange={e => setTauxSol(e.target.value)} />
+          </>
+        )}
+
+        <button onClick={creerElement}>Créer l'élément</button>
+        {reponseElement && <pre>{JSON.stringify(reponseElement, null, 2)}</pre>}
+      </Bloc>
+
+      <Bloc titre="3. Calculer / Valider un élément">
+        <label>ID de l'élément</label>
+        <input value={elementId} onChange={e => setElementId(e.target.value)} placeholder="ex: 4" />
+        <button onClick={calculerElement}>Calculer</button>{" "}
+        <button onClick={validerElement}>Valider</button>
+      </Bloc>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
