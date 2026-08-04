@@ -1,18 +1,9 @@
-"""
-Couche service : fait le pont entre l'API DRF et le module moteur_calcul.
-
-Objectif : les vues ne doivent jamais appeler directement les fonctions
-de moteur_calcul -- elles passent par ici. Ça centralise la gestion des
-erreurs (NotImplementedError tant que les formules ne sont pas injectées)
-et évite de dupliquer cette logique dans plusieurs vues.
-"""
-
 from moteur_calcul.formules.dimensionnement_poteaux import dimensionner_poteau
 from moteur_calcul.formules.dimensionnement_poutres import dimensionner_poutre
 from moteur_calcul.formules.dimensionnement_semelles import dimensionner_semelle
 from moteur_calcul.validators import EntreeInvalide
 
-from .models import ElementStructurel
+from ..models import ElementStructurel
 
 
 class CalculNonDisponible(Exception):
