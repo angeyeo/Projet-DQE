@@ -14,15 +14,25 @@ Points clés :
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.http import HttpResponse
+from django.utils import timezone
+from django.utils.text import slugify
+import logging
 
-from .models import Projet, ElementStructurel
+from .models import Projet, ElementStructurel, PosteMainDoeuvre
 from .serializers import (
     ProjetSerializer,
     ElementStructurelSerializer,
     ElementValidationSerializer,
+    PosteMainDoeuvreSerializer,
 )
 from .services import calculer_element, recalculer_projet, CalculNonDisponible
 from moteur_calcul.validators import EntreeInvalide
+
+from .services.dqe_calculator import calculer_projet_dqe
+from .services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
+
+logger = logging.getLogger(__name__)
 
 
 class ProjetViewSet(viewsets.ModelViewSet):
@@ -36,14 +46,15 @@ class ProjetViewSet(viewsets.ModelViewSet):
         resultats = recalculer_projet(projet)
         return Response(resultats, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["post"])
+    @action(detail=True, methods=["get", "post"])
     def generer_dqe(self, request, pk=None):
         """
-        Squelette en attente du module DQE (Dev 4).
-        Vérifie d'abord que tous les éléments sont validés -- c'est la
-        condition obligatoire avant de générer un devis.
+        Génère le devis quantitatif estimatif (DQE) du projet au format PDF ou Excel.
+        Vérifie que tous les éléments structurels du projet sont validés avant l'export.
         """
         projet = self.get_object()
+
+        # 1. Vérification que tous les éléments du projet sont validés
         elements_non_valides = projet.elements.exclude(
             statut=ElementStructurel.Statut.VALIDE
         )
@@ -57,12 +68,64 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # TODO (Dev 4 - DQE+IA) : appeler ici le module de génération du DQE
-        # une fois prêt, ex. : dqe.generer(projet)
-        return Response(
-            {"info": "Tous les éléments sont validés. Génération du DQE à brancher (Dev 4)."},
-            status=status.HTTP_501_NOT_IMPLEMENTED,
-        )
+
+        # 2. Vérification qu'il y a au moins un élément validé ou un poste de main d'oeuvre
+        has_elements = projet.elements.filter(statut=ElementStructurel.Statut.VALIDE).exists()
+        has_postes = projet.postes_main_doeuvre.exists()
+        if not (has_elements or has_postes):
+            return Response(
+                {"detail": "Aucun élément validé n'est disponible pour générer le DQE."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 3. Récupération et validation du format d'export
+        export_format = request.query_params.get("export") or request.data.get("export")
+        if not export_format or export_format.lower() not in ["pdf", "excel"]:
+            return Response(
+                {"erreur": "Le format d'export est requis et doit être 'pdf' ou 'excel'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        export_format = export_format.lower()
+
+        # 4. Calcul du DQE structuré
+        try:
+            dqe_data = calculer_projet_dqe(projet)
+        except Exception as exc:
+            logger.exception("Erreur lors du calcul du DQE pour le projet %s", projet.id)
+            return Response(
+                {"erreur": f"Erreur lors du calcul du DQE : {str(exc)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # 5. Exportation et envoi du fichier
+        try:
+            date_str = timezone.now().strftime("%Y-%m-%d")
+            nom_projet_slug = slugify(projet.nom).replace("-", "_") or str(projet.id)
+
+            if export_format == "pdf":
+                buffer = exporter_dqe_pdf(dqe_data)
+                filename = f"DQE_{nom_projet_slug}_{date_str}.pdf"
+                response = HttpResponse(buffer.read(), content_type="application/pdf")
+                response["Content-Disposition"] = f'attachment; filename="{filename}"'
+                return response
+
+            elif export_format == "excel":
+                buffer = exporter_dqe_excel(dqe_data)
+                filename = f"DQE_{nom_projet_slug}_{date_str}.xlsx"
+                response = HttpResponse(
+                    buffer.read(),
+                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                response["Content-Disposition"] = f'attachment; filename="{filename}"'
+                return response
+
+        except Exception as exc:
+            logger.exception("Erreur lors de la génération du fichier DQE %s pour le projet %s", export_format, projet.id)
+            return Response(
+                {"erreur": f"Erreur lors de la génération du fichier d'export : {str(exc)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class ElementStructurelViewSet(viewsets.ModelViewSet):
@@ -130,3 +193,21 @@ class ElementStructurelViewSet(viewsets.ModelViewSet):
             serializer.save(statut=ElementStructurel.Statut.MODIFIE)
         else:
             serializer.save()
+
+
+class PosteMainDoeuvreViewSet(viewsets.ModelViewSet):
+    """
+    Postes de main d'œuvre : toujours saisis manuellement par
+    l'ingénieur, jamais calculés automatiquement (voir docstring du
+    modèle PosteMainDoeuvre).
+    """
+
+    queryset = PosteMainDoeuvre.objects.all()
+    serializer_class = PosteMainDoeuvreSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        projet_id = self.request.query_params.get("projet")
+        if projet_id:
+            queryset = queryset.filter(projet_id=projet_id)
+        return queryset

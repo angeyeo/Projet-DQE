@@ -74,3 +74,33 @@ class ElementStructurel(models.Model):
 
     def __str__(self):
         return f"{self.get_type_element_display()} {self.identifiant} ({self.projet.nom})"
+
+
+class PosteMainDoeuvre(models.Model):
+    """
+    Poste de main d'œuvre saisi manuellement par l'ingénieur -- distinct
+    des éléments structurels calculés automatiquement. Le montant n'est
+    jamais stocké : il est toujours recalculé à partir de la quantité et
+    du prix unitaire actuels (propriété `montant`), pour éviter toute
+    désynchronisation si l'un des deux est modifié après coup.
+    """
+
+    projet = models.ForeignKey(
+        Projet, on_delete=models.CASCADE, related_name="postes_main_doeuvre"
+    )
+    designation = models.CharField(
+        max_length=255, help_text="Ex. 'Main d'œuvre coffrage', 'Terrassement/fouilles'"
+    )
+    unite = models.CharField(max_length=20, help_text="Ex. 'm²', 'kg', 'forfait', 'm³'")
+    quantite = models.FloatField()
+    prix_unitaire = models.FloatField(help_text="FCFA")
+
+    date_creation = models.DateTimeField(auto_now_add=True)
+    date_modification = models.DateTimeField(auto_now=True)
+
+    @property
+    def montant(self):
+        return self.quantite * self.prix_unitaire
+
+    def __str__(self):
+        return f"{self.designation} ({self.projet.nom})"

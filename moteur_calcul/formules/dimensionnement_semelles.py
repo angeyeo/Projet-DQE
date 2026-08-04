@@ -1,48 +1,59 @@
 """
-Dimensionnement des semelles (fondations superficielles).
-Signature figée -- corps à remplir avec la formule du technicien BTP.
+Dimensionnement des semelles (fondations superficielles) -- BAEL 91 mod.99.
+
+Formules du document technicien, section 3.4.
 """
 
+from ..constantes import CONTRAINTE_SOL_DEFAUT
 from ..validators import EntreeInvalide
 
 
 def dimensionner_semelle(charge_poteau, taux_travail_sol=None):
     """
-    Propose des dimensions de semelle à partir de la charge du poteau
-    qu'elle supporte et de la portance du sol.
+    Dimensionnement d'une semelle isolée carrée (document technicien,
+    section 3.4).
+
+    Surface (m²) = Charge poteau (kN) / Contrainte admissible du sol (kN/m²)
+    Hauteur (méthode des bielles) : h >= (A - a) / 4
+        A = côté de la semelle, a = côté du poteau
 
     Paramètres
     ----------
     charge_poteau : float
-        Charge transmise par le poteau à la semelle, en kN.
+        Charge ELU transmise par le poteau, en kN.
     taux_travail_sol : float, optionnel
-        Contrainte admissible du sol, en bars ou kN/m² (à préciser avec
-        le technicien BTP -- dépend d'une étude de sol, potentiellement
-        variable par projet plutôt qu'une constante globale).
+        Contrainte admissible du sol, en kN/m². Si non fourni, utilise
+        la valeur par défaut du projet (180 kN/m² -- HYPOTHÈSE, à
+        remplacer par une étude géotechnique réelle).
 
     Retour
     ------
-    dict
-        {
-            "longueur_m": float,
-            "largeur_m": float,
-            "hauteur_cm": float,
-        }
-
-    TODO (technicien BTP) :
-    - confirmer si le taux de travail du sol est une donnée d'entrée
-      par projet (probable, dépend de l'étude géotechnique) plutôt
-      qu'une constante fixe dans constantes.py
-    - confirmer la formule de dimensionnement (semelle isolée carrée
-      par défaut, ou rectangulaire selon le cas ?)
+    dict : {
+        "cote_cm": float,           # côté de la semelle carrée, en cm
+        "surface_m2": float,
+        "hauteur_cm": float,
+        "hypothese_sol": bool,      # True si le taux de travail par défaut a été utilisé
+    }
     """
     if charge_poteau is None or charge_poteau <= 0:
         raise EntreeInvalide("La charge du poteau doit être positive.")
-    if taux_travail_sol is None:
-        raise NotImplementedError(
-            "Le taux de travail du sol doit être fourni (donnée projet, "
-            "pas une constante globale -- à confirmer avec le technicien BTP)"
-        )
 
-    # TODO : formule réelle à injecter
-    raise NotImplementedError("Formule à injecter -- en attente du technicien BTP")
+    hypothese_sol = taux_travail_sol is None
+    contrainte_sol = taux_travail_sol or CONTRAINTE_SOL_DEFAUT
+
+    surface_m2 = charge_poteau / contrainte_sol
+    cote_m = surface_m2 ** 0.5
+
+    # On suppose ici un côté de poteau de 25 cm par défaut pour la
+    # méthode des bielles -- à affiner : idéalement, cette fonction
+    # devrait recevoir le côté réel du poteau (issu de dimensionner_poteau)
+    # plutôt qu'une valeur supposée.
+    cote_poteau_m = 0.25
+    hauteur_m = max((cote_m - cote_poteau_m) / 4, 0.20)  # 20 cm mini constructif
+
+    return {
+        "cote_cm": round(cote_m * 100, 1),
+        "surface_m2": round(surface_m2, 2),
+        "hauteur_cm": round(hauteur_m * 100, 1),
+        "hypothese_sol": hypothese_sol,
+    }
