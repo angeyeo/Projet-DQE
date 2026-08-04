@@ -6,14 +6,22 @@ Points clés :
 - POST /elements/{id}/valider/   -> verrou logiciel : c'est la SEULE
   façon de passer un élément au statut 'valide'. Une fois validé, il
   n'est plus recalculé automatiquement (voir services.recalculer_projet).
-- POST /projets/{id}/generer_dqe/ -> squelette en attente du Dev DQE+IA,
-  vérifie juste que tous les éléments sont validés avant d'appeler
-  (plus tard) le module de génération du DQE.
+- GET  /projets/{id}/generer_dqe/?export=pdf|excel -> génère et
+  retourne le DQE (méthode GET, pas POST : c'est un téléchargement de
+  fichier, cohérent avec la convention utilisée par le Dev 4 dans son
+  walkthrough -- un lien/URL de téléchargement est plus naturel en GET
+  qu'en POST pour ce cas d'usage).
+
+MODIFIÉ (Ange) : generer_dqe appelait encore l'ancien TODO/squelette
+("Génération du DQE à brancher (Dev 4)") -- le travail réel du Dev 4
+(services/dqe_calculator.py, services/dqe_exporters.py) existait dans
+le repo mais n'était jamais appelé depuis cette vue. Branché ici.
 """
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.http import HttpResponse
 
 from .models import Projet, ElementStructurel, PosteMainDoeuvre
 from .serializers import (
@@ -22,7 +30,9 @@ from .serializers import (
     ElementValidationSerializer,
     PosteMainDoeuvreSerializer,
 )
-from .services import calculer_element, recalculer_projet, CalculNonDisponible
+from .services.calculations import calculer_element, recalculer_projet, CalculNonDisponible
+from .services.dqe_calculator import calculer_projet_dqe
+from .services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
 from moteur_calcul.validators import EntreeInvalide
 
 
@@ -37,12 +47,11 @@ class ProjetViewSet(viewsets.ModelViewSet):
         resultats = recalculer_projet(projet)
         return Response(resultats, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["post"])
+    @action(detail=True, methods=["get"])
     def generer_dqe(self, request, pk=None):
         """
-        Squelette en attente du module DQE (Dev 4).
-        Vérifie d'abord que tous les éléments sont validés -- c'est la
-        condition obligatoire avant de générer un devis.
+        Génère le DQE (JSON par défaut, ou fichier PDF/Excel via
+        ?export=pdf | ?export=excel) une fois tous les éléments validés.
         """
         projet = self.get_object()
         elements_non_valides = projet.elements.exclude(
@@ -58,12 +67,55 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # TODO (Dev 4 - DQE+IA) : appeler ici le module de génération du DQE
-        # une fois prêt, ex. : dqe.generer(projet)
-        return Response(
-            {"info": "Tous les éléments sont validés. Génération du DQE à brancher (Dev 4)."},
-            status=status.HTTP_501_NOT_IMPLEMENTED,
-        )
+
+        if not projet.elements.exists():
+            return Response(
+                {"erreur": "Le projet ne contient aucun élément structurel."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        export_format = request.query_params.get("export")
+
+        try:
+            dqe_data = calculer_projet_dqe(projet)
+        except Exception as exc:
+            return Response(
+                {"erreur": "Erreur inattendue lors du calcul du DQE.", "detail": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Pas de paramètre export -> retourne la structure JSON brute
+        # (utile pour debug/tests, comme on vient de le faire).
+        if export_format is None:
+            return Response(dqe_data, status=status.HTTP_200_OK)
+
+        if export_format not in ("pdf", "excel"):
+            return Response(
+                {"erreur": f"Format d'export non pris en charge : '{export_format}'. Utilisez 'pdf' ou 'excel'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        nom_fichier_base = f"DQE_{projet.nom.replace(' ', '_')}_{projet.id}"
+
+        try:
+            if export_format == "pdf":
+                buffer = exporter_dqe_pdf(dqe_data)
+                response = HttpResponse(buffer.getvalue(), content_type="application/pdf")
+                response["Content-Disposition"] = f'attachment; filename="{nom_fichier_base}.pdf"'
+            else:  # excel
+                buffer = exporter_dqe_excel(dqe_data)
+                response = HttpResponse(
+                    buffer.getvalue(),
+                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+                response["Content-Disposition"] = f'attachment; filename="{nom_fichier_base}.xlsx"'
+        except Exception as exc:
+            return Response(
+                {"erreur": "Erreur lors de la génération du fichier.", "detail": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return response
 
 
 class ElementStructurelViewSet(viewsets.ModelViewSet):
