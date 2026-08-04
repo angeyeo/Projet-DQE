@@ -17,7 +17,7 @@ export default function Sidebar({ activeView, setActiveView, isCollapsed, setIsC
         <div className="sidebar-header">
           <div className="brand-wrapper">
             <div className="brand-icon-box">
-              <Building2 size={22} />
+              <Building2 size={26} />
             </div>
             {!isCollapsed && (
               <div className="brand-text">
@@ -28,7 +28,7 @@ export default function Sidebar({ activeView, setActiveView, isCollapsed, setIsC
           </div>
 
           <button className="collapse-btn" onClick={() => setIsCollapsed(!isCollapsed)}>
-            {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+            {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
           </button>
         </div>
 
@@ -44,7 +44,7 @@ export default function Sidebar({ activeView, setActiveView, isCollapsed, setIsC
                 className={`nav-item ${isActive ? 'active' : ''}`}
                 onClick={() => setActiveView(item.id)}
               >
-                <Icon size={19} />
+                <Icon size={25} style={{ flexShrink: 0 }} />
                 {!isCollapsed && (
                   <>
                     <span>{item.label}</span>
