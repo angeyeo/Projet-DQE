@@ -35,7 +35,6 @@ from .services.dqe_calculator import calculer_projet_dqe
 from .services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
 from moteur_calcul.validators import EntreeInvalide
 
-
 class ProjetViewSet(viewsets.ModelViewSet):
     queryset = Projet.objects.all()
     serializer_class = ProjetSerializer
