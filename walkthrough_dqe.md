@@ -1,123 +1,3 @@
-# Projet DQE — Pré-dimensionnement structurel assisté
-
-Outil d'aide à la conception structurelle : pré-dimensionnement des sections (poteaux/poutres/semelles) à partir des formules BAEL/Eurocode, validation humaine obligatoire, et génération automatique du DQE (devis quantitatif estimatif).
-
----
-
-## Stack
-
-- **Backend** : Python + Django REST Framework
-- **Frontend** : React + Bootstrap
-- **Base de données** : PostgreSQL (SQLite en local pour le dev)
-- **Export DQE** : ReportLab (PDF) / openpyxl (Excel)
-
----
-
-## Structure du projet
-
-```
-projet-dqe/
-├── backend/
-│   ├── moteur_calcul/   # logique métier BAEL/Eurocode
-│   ├── projets/         # modèles projet, éléments structurels, statuts
-│   ├── api/             # serializers, vues DRF
-│   └── manage.py
-├── frontend/            # React + Bootstrap
-└── docs/                 # documentation du projet
-```
-
----
-
-## Installation en local
-
-### Prérequis
-- Python 3.11+
-- Node.js 18+
-- PostgreSQL (ou SQLite pour démarrer rapidement, déjà configuré par défaut en dev)
-
-### 1. Cloner le projet
-
-```bash
-git clone https://github.com/votre-compte/projet-dqe.git
-cd projet-dqe
-```
-
-### 2. Backend (Django)
-
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate        # Windows : venv\Scripts\activate
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py runserver
-```
-
-Le backend tourne sur `http://localhost:8000`.
-
-### 3. Frontend (React)
-
-Dans un autre terminal :
-
-```bash
-cd frontend
-npm install
-npm start
-```
-
-Le frontend tourne sur `http://localhost:3000`.
-
----
-
-## Workflow Git
-
-- `main` → toujours stable, sert pour la démo
-- `dev` → intégration du travail de l'équipe
-- `feature/xxx` → une branche par tâche
-
-### Pour contribuer
-
-```bash
-git checkout dev
-git pull origin dev
-git checkout -b feature/nom-de-ta-tache
-# ... travail ...
-git add .
-git commit -m "Description claire du changement"
-git push -u origin feature/nom-de-ta-tache
-```
-
-Puis ouvrir une **Pull Request** vers `dev` sur GitHub.
-
----
-
-## Répartition de l'équipe (4 développeurs)
-
-| Rôle | Responsabilité |
-|---|---|
-| Moteur de calcul | Fonctions Python à partir des formules BAEL/Eurocode fournies par le technicien BTP + tests unitaires |
-| Backend DRF | Modèles, serializers, endpoints API |
-| Frontend React + Bootstrap | Formulaire de saisie, tableau de validation |
-| DQE + IA | Génération PDF/Excel, intégration de la couche IA d'interface |
-
----
-
-## Jalons
-
-| Semaine | Objectif |
-|---|---|
-| 1 | Moteur de calcul fonctionnel et testé |
-| 2 | Interface de saisie + tableau de validation |
-| 3 | Génération DQE + mise à jour automatique + couche IA + démo |
-
----
-
-## Contact
-
-Pour toute question sur l'installation ou le projet, contactez le chef de projet.
-
----
-
 # Walkthrough — Module de génération automatique du DQE
 
 Ce document présente les changements réalisés pour l’implémentation du module de génération du Devis Quantitatif Estimatif, les corrections appliquées après la revue technique et les résultats des différents tests.
@@ -290,7 +170,7 @@ Le document est généré en mémoire et retourné directement par l’API.
 
 Le fichier Excel est généré avec openpyxl.
 
-Il comprend :
+It comprend :
 
 * un titre ;
 * les informations du projet ;
@@ -459,19 +339,3 @@ Le module DQE est désormais :
 * cohérent entre les formats PDF et Excel.
 
 La branche `feature/export-dqe` peut maintenant être soumise en Pull Request vers `dev`.
-
-
----
-
-## État d'avancement Backend DRF (Samuel YEO)
-
-### Module `projets` & API REST (100% Fonctionnel)
-- **Modèles de données** : Gestion complète des entités `Projet` et `ElementStructurel` avec cycle de vie des statuts (`PROPOSE`, `MODIFIE`, `VALIDE`).
-- **Endpoints API REST (`/api/`)** :
-  - `POST /api/projets/` & `GET /api/projets/` : Gestion des projets.
-  - `POST /api/elements/` & `GET /api/elements/?projet={id}` : Saisie et filtrage des éléments structurels.
-- **Actions Métier & Verrou Logiciel** :
-  - `POST /api/elements/{id}/calculer/` : Gestion contrôlée via `services.py` (retourne HTTP 503 tant que les formules BTP ne sont pas injectées).
-  - `POST /api/elements/{id}/valider/` : Vérification des résultats et passage au statut `VALIDE`.
-  - **Sécurité Verrou** : Toute modification post-validation bascule automatiquement l'élément au statut `MODIFIE`.
-- **Tests Unitaires** : Validation à 100% de la suite `projets.tests_projets.test_api` (9/9 OK).

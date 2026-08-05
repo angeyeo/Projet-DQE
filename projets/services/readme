@@ -1,0 +1,124 @@
+# Module `projets/services/`
+
+Ce package regroupe toute la logique métier de calcul, séparée des
+vues DRF : appel au moteur de calcul, calcul du DQE, et exports
+PDF/Excel.
+
+```
+projets/services/
+├── __init__.py
+├── calculations.py     # pont avec moteur_calcul (Dev 1)
+├── dqe_calculator.py    # calcul des métrés et montants du DQE (Dev 4)
+└── dqe_exporters.py     # génération PDF/Excel en mémoire (Dev 4)
+```
+
+## `calculations.py`
+
+Fait le pont entre les vues DRF et `moteur_calcul/` :
+
+- `calculer_element(element)` — appelle la bonne fonction du moteur
+  (`dimensionner_poteau`/`poutre`/`semelle`) selon le type d'élément,
+  retourne le résultat sous forme de dict prêt à stocker dans
+  `resultat_calcul`
+- `recalculer_projet(projet)` — relance le calcul pour tous les
+  éléments non-validés d'un projet (jamais pour un élément déjà
+  `valide` — c'est le verrou logiciel)
+- `CalculNonDisponible` — exception levée quand le moteur de calcul
+  n'a pas encore ses formules réelles (traduite en HTTP 503 par la vue)
+
+## `dqe_calculator.py`
+
+Calcule les métrés (béton, coffrage, acier) et les montants (FCFA) à
+partir des éléments **validés** d'un projet, plus les postes de main
+d'œuvre saisis manuellement.
+
+- `calculer_element_dqe(element, prix_unitaires)` — génère les 3
+  lignes (béton/coffrage/acier) d'un élément structurel, à partir de
+  `element.resultat_valide`
+- `calculer_projet_dqe(projet, prix_unitaires=None)` — agrège toutes
+  les lignes du projet + main d'œuvre, retourne la structure DQE
+  commune (utilisée à la fois par le JSON, le PDF et l'Excel)
+
+**Précision financière** : tous les montants utilisent `Decimal` +
+`ROUND_HALF_UP` pour éviter les erreurs d'arrondi en float. Les
+quantités sont conservées jusqu'à 4 décimales, sans zéros inutiles.
+
+**Ratios acier par défaut** (utilisés seulement si le moteur ne
+fournit pas encore de poids d'acier réel — `poids_acier_total_kg`) :
+alignés sur `moteur_calcul.constantes` (milieu des fourchettes du
+document technicien BTP) :
+- Poteau : 125 kg/m³ (fourchette 100-150)
+- Poutre : 150 kg/m³ (fourchette 120-180)
+- Semelle : 50 kg/m³ (fourchette 40-60)
+
+**Correction appliquée (Ange, revue de code)** : la version initiale
+cherchait `largeur_cm`/`profondeur_cm` pour les poteaux, des clés qui
+n'existent pas dans le résultat de `dimensionner_poteau` (qui retourne
+`cote_cm`, poteau carré). Ce bug faisait échouer silencieusement le
+calcul du poteau (aucune ligne générée, sans erreur visible). Corrigé
+pour utiliser `cote_cm`, avec les formules adaptées à un poteau carré
+(volume = côté², coffrage = 4 côtés).
+
+## `dqe_exporters.py`
+
+Génère les fichiers PDF (ReportLab) et Excel (openpyxl) **en mémoire**
+(`BytesIO`, aucun fichier temporaire sur le serveur), à partir de la
+structure DQE produite par `calculer_projet_dqe()`. Les deux formats
+consomment la même source de vérité — aucun recalcul financier n'est
+refait dans les exports.
+
+- `exporter_dqe_pdf(dqe_data)` — PDF avec tableau, sous-totaux, total
+  général, bloc de signature pour l'ingénieur structure
+- `exporter_dqe_excel(dqe_data)` — Excel stylé (polices, bordures,
+  couleurs), valeurs numériques brutes (pas de formules Excel, pour
+  garantir la cohérence avec le PDF)
+
+## Endpoint API
+
+```
+GET /api/projets/{id}/generer_dqe/                 -> JSON brut (debug)
+GET /api/projets/{id}/generer_dqe/?export=pdf      -> téléchargement PDF
+GET /api/projets/{id}/generer_dqe/?export=excel    -> téléchargement Excel
+```
+
+**Note** : cette action est en **GET**, pas POST — cohérent avec la
+convention "téléchargement de fichier" (un lien direct, pas une
+soumission de formulaire).
+
+Conditions vérifiées avant génération :
+- le projet doit contenir au moins un élément structurel
+- tous les éléments doivent être au statut `valide` (sinon 400, avec
+  la liste des éléments en attente)
+- le format demandé doit être `pdf` ou `excel` (sinon 400)
+
+## Vérification manuelle de référence
+
+Projet test (poteau P1, poutre PT1, semelle S1 + 1 poste de main
+d'œuvre) :
+
+| Ligne | Quantité | Montant (FCFA) |
+|---|---|---|
+| Béton poteau P1 | 0,12 m³ | 12 000 |
+| Coffrage poteau P1 | 2,4 m² | 28 800 |
+| Acier poteau P1 | 15 kg | 12 000 |
+| Béton poutre PT1 | 0,9 m³ | 90 000 |
+| Coffrage poutre PT1 | 10,2 m² | 122 400 |
+| Acier poutre PT1 | 135 kg | 108 000 |
+| Béton semelle S1 | 0,8324 m³ | 83 235 |
+| Coffrage semelle S1 | 2,1059 m² | 25 271 |
+| Acier semelle S1 | 41,6177 kg | 33 294 |
+| Main d'œuvre coffrage | 20 m² | 50 000 |
+| **Total général** | | **565 000** |
+
+Montants identiques et vérifiés à la main entre le JSON, le PDF et
+l'Excel.
+
+## À faire / points ouverts
+
+- Confirmer avec le technicien BTP si le ratio acier semelle (40-60
+  kg/m³) est bien celui à utiliser, ou si une valeur différente est
+  attendue pour certains cas de sol
+- Ajouter des tests couvrant explicitement le cas poteau (le bug
+  corrigé ici n'était pas détecté par la suite de tests existante,
+  qui testait apparemment avec un `resultat_valide` injecté à la main
+  plutôt qu'un vrai appel `/calculer/` sur un poteau)

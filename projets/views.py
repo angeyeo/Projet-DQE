@@ -53,6 +53,8 @@ class ProjetViewSet(viewsets.ModelViewSet):
         ?export=pdf | ?export=excel) une fois tous les éléments validés.
         """
         projet = self.get_object()
+
+        # 1. Vérification que tous les éléments du projet sont validés
         elements_non_valides = projet.elements.exclude(
             statut=ElementStructurel.Statut.VALIDE
         )
