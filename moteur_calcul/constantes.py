@@ -60,6 +60,18 @@ ALPHA_POTEAU_ELANCEMENT_FAIBLE = 0.85
 # des poteaux (fourchette 1.2 à 1.5 selon le document -- milieu par défaut)
 COEFFICIENT_SECURITE_POTEAU_RAPIDE = 1.3
 
+# Longueur de flambement (lf) rapportée à la hauteur libre (l0).
+# Hypothèse par défaut : lf = l0 (poteau considéré articulé aux deux
+# extrémités) -- la plus prudente sans information sur le degré
+# d'encastrement réel. Si le technicien confirme un encastrement
+# efficace par les planchers (cas courant en bâtiment courant
+# multi-niveaux), 0.7 est une valeur usuelle à utiliser à la place.
+LF_SUR_L0_DEFAUT = 1.0
+
+# Élancement au-delà duquel ce pré-dimensionnement simplifié ne
+# s'applique plus (BAEL : méthode forfaitaire valable jusqu'à lambda=70)
+ELANCEMENT_MAX_METHODE_SIMPLIFIEE = 70
+
 # Ratios de pré-dimensionnement rapide (poutres, dalles) -- section 3.2/3.3
 RATIO_HAUTEUR_POUTRE_CONTINUE = (10, 12)     # portée / 10 à 12
 RATIO_HAUTEUR_POUTRE_ISOSTATIQUE = (8, 10)   # portée / 8 à 10
@@ -80,6 +92,9 @@ RATIO_ACIER_SEMELLES_KG_M3 = (40, 60)
 RATIO_ACIER_POTEAUX_KG_M3 = (100, 150)
 RATIO_ACIER_POUTRES_KG_M3 = (120, 180)
 RATIO_ACIER_DALLES_KG_M3 = (70, 100)
+
+# Densité de l'acier (pour convertir une section théorique en poids réel)
+DENSITE_ACIER_KG_M3 = 7850.0
 
 # Bornes réalistes pour la validation des entrées
 PORTEE_MIN_M = 1.0
