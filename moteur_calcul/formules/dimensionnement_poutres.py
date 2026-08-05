@@ -16,6 +16,7 @@ from ..constantes import (
     GAMMA_ACIER,
     MU_LIMITE_PIVOT_AB,
     RATIO_HAUTEUR_POUTRE_ISOSTATIQUE,
+    DENSITE_ACIER_KG_M3,
 )
 from ..validators import valider_portee, EntreeInvalide
 
@@ -118,10 +119,20 @@ def dimensionner_poutre(portee, charge_lineaire, largeur=0.20, resistance_beton=
     section_acier_m2 = moment_flechissant_mn / (bras_de_levier * fsu)
     section_acier_cm2 = section_acier_m2 * 10_000
 
+    # ATTENTION : ceci ne représente QUE les armatures longitudinales
+    # tendues (calcul simplifié de flexion simple) -- ça n'inclut ni les
+    # cadres/étriers, ni un éventuel acier comprimé, ni les recouvrements.
+    # Nommé volontairement différemment de "poids_acier_total_kg" pour
+    # que le DQE (dqe_calculator.py) NE le prenne PAS comme poids réel
+    # total -- il continuera à utiliser le ratio kg/m3, plus réaliste
+    # pour représenter le ferraillage complet d'un élément.
+    poids_acier_longitudinal_theorique_kg = section_acier_m2 * portee * DENSITE_ACIER_KG_M3
+
     return {
         "hauteur_cm": round(hauteur * 100, 1),
         "largeur_cm": round(largeur * 100, 1),
         "moment_flechissant_knm": round(moment_flechissant, 2),
         "moment_reduit": round(moment_reduit, 4),
         "section_acier_theorique_cm2": round(section_acier_cm2, 2),
+        "poids_acier_longitudinal_theorique_kg": round(poids_acier_longitudinal_theorique_kg, 2),
     }

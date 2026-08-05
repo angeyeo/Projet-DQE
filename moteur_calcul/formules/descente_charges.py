@@ -39,15 +39,6 @@ def calculer_charge_permanente(surface, epaisseur_dalle, poids_volumique_beton=N
 
     G = surface x epaisseur_dalle x poids_volumique_beton
 
-    Paramètres
-    ----------
-    surface : float
-        Surface d'influence en m².
-    epaisseur_dalle : float
-        Épaisseur de la dalle en mètres.
-    poids_volumique_beton : float, optionnel
-        kN/m³. Si non fourni, utilise la constante par défaut (25 kN/m³).
-
     Retour : charge permanente en kN.
 
     Note : ne couvre pas encore les cloisons/revêtements/étanchéité
@@ -67,9 +58,6 @@ def calculer_charge_exploitation(surface, usage_batiment):
     Charge d'exploitation Q, ramenée à la surface d'influence.
 
     Q = surface x charge_unitaire(usage)
-
-    Valeurs de charge_unitaire : voir constantes.CHARGES_EXPLOITATION
-    (document technicien, section 2.2).
     """
     valider_surface(surface)
     valider_usage_batiment(usage_batiment)
@@ -83,20 +71,14 @@ def calculer_charge_exploitation(surface, usage_batiment):
 
 
 def calculer_charge_ponderee_elu(charge_permanente, charge_exploitation):
-    """
-    Combinaison ELU (document technicien, section 2.3) :
-        Nu = 1,35 G + 1,5 Q
-    """
+    """Combinaison ELU : Nu = 1,35 G + 1,5 Q"""
     if charge_permanente is None or charge_exploitation is None:
         raise ValueError("Charges permanente et exploitation requises.")
     return COEFFICIENT_G_ELU * charge_permanente + COEFFICIENT_Q_ELU * charge_exploitation
 
 
 def calculer_charge_ponderee_els(charge_permanente, charge_exploitation):
-    """
-    Combinaison ELS (document technicien, section 2.3) :
-        Ns = G + Q
-    """
+    """Combinaison ELS : Ns = G + Q"""
     if charge_permanente is None or charge_exploitation is None:
         raise ValueError("Charges permanente et exploitation requises.")
     return charge_permanente + charge_exploitation
@@ -104,28 +86,82 @@ def calculer_charge_ponderee_els(charge_permanente, charge_exploitation):
 
 def calculer_charge_totale_niveau(charges_par_niveau_elu):
     """
-    Cumule la charge ELU descendant sur un appui, niveau par niveau,
-    du plus haut (toiture) vers la fondation -- principe de l'algorithme
-    de descente de charges (document technicien, section 2.4, étapes 1-4).
+    Cumule la charge ELU descendant sur un appui, niveau par niveau.
 
     Paramètres
     ----------
     charges_par_niveau_elu : list[float]
-        Liste des charges ELU (kN) de chaque niveau au-dessus de l'appui
-        considéré, dans l'ordre (du niveau le plus haut au plus bas),
-        déjà calculées via calculer_charge_ponderee_elu pour chaque
-        niveau.
+        Charges ELU (kN) de chaque niveau au-dessus de l'appui, déjà
+        calculées via calculer_charge_ponderee_elu.
 
-    Retour : charge ELU cumulée totale en kN, à la base de l'appui.
+    Retour : charge ELU cumulée totale en kN.
 
-    Note : version simple = somme directe (pas de dégression des
-    charges d'exploitation pour les niveaux élevés -- le document ne
-    mentionne pas explicitement de coefficient de dégression ; à
-    confirmer avec le technicien si le bâtiment dépasse quelques
-    niveaux et qu'une dégression réglementaire s'applique).
+    Note : somme directe, pas de dégression des charges d'exploitation
+    pour les niveaux élevés -- à confirmer avec le technicien si le
+    bâtiment dépasse quelques niveaux.
     """
     if not charges_par_niveau_elu:
         raise ValueError("La liste des charges par niveau ne peut pas être vide.")
     if any(c is None or c < 0 for c in charges_par_niveau_elu):
         raise ValueError("Toutes les charges par niveau doivent être positives.")
     return sum(charges_par_niveau_elu)
+
+
+def calculer_descente_charges_complete(
+    portee_gauche,
+    portee_droite,
+    portee_avant,
+    portee_arriere,
+    epaisseur_dalle,
+    usage_batiment,
+    nb_niveaux,
+):
+    """
+    Chaîne complète de descente de charges, du plan jusqu'à la charge
+    ELU cumulée sur un poteau -- automatise ce que l'exercice de
+    vérification faisait à la main (surface d'influence -> G -> Q ->
+    ELU par niveau -> cumul sur nb_niveaux).
+
+    Hypothèse simplificatrice : tous les niveaux sont identiques (même
+    trame, même épaisseur de dalle, même usage) -- pas de dégression
+    des charges d'exploitation (voir note de calculer_charge_totale_niveau).
+
+    Paramètres
+    ----------
+    portee_gauche, portee_droite, portee_avant, portee_arriere : float
+        Portées des travées autour du poteau, en mètres.
+    epaisseur_dalle : float
+        Épaisseur de la dalle, en mètres (identique à chaque niveau).
+    usage_batiment : str
+        Usage du bâtiment (voir constantes.CHARGES_EXPLOITATION).
+    nb_niveaux : int
+        Nombre de niveaux dont la charge descend sur ce poteau.
+
+    Retour
+    ------
+    dict : {
+        "surface_influence_m2": float,
+        "charge_permanente_par_niveau_kn": float,
+        "charge_exploitation_par_niveau_kn": float,
+        "charge_elu_par_niveau_kn": float,
+        "charge_elu_cumulee_kn": float,   # à passer à dimensionner_poteau/semelle
+    }
+    """
+    if nb_niveaux is None or nb_niveaux <= 0:
+        raise ValueError("Le nombre de niveaux doit être positif.")
+
+    surface = calculer_surface_influence(
+        portee_gauche, portee_droite, portee_avant, portee_arriere
+    )
+    charge_g = calculer_charge_permanente(surface, epaisseur_dalle)
+    charge_q = calculer_charge_exploitation(surface, usage_batiment)
+    charge_elu_niveau = calculer_charge_ponderee_elu(charge_g, charge_q)
+    charge_cumulee = calculer_charge_totale_niveau([charge_elu_niveau] * nb_niveaux)
+
+    return {
+        "surface_influence_m2": round(surface, 2),
+        "charge_permanente_par_niveau_kn": round(charge_g, 2),
+        "charge_exploitation_par_niveau_kn": round(charge_q, 2),
+        "charge_elu_par_niveau_kn": round(charge_elu_niveau, 2),
+        "charge_elu_cumulee_kn": round(charge_cumulee, 2),
+    }
