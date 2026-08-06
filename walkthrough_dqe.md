@@ -307,15 +307,15 @@ Le PDF et l’Excel ont été téléchargés et ouverts manuellement.
 Le montant obtenu est identique dans le calculateur, le PDF et l’Excel :
 
 ```text
-Sous-total Béton : 77 950 FCFA
-Sous-total Coffrage : 107 520 FCFA
-Sous-total Acier : 65 688 FCFA
-Sous-total Main-d’œuvre : 250 000 FCFA
+Sous-total Béton : 185 235 FCFA
+Sous-total Coffrage : 176 471 FCFA
+Sous-total Acier : 153 294 FCFA
+Sous-total Main-d’œuvre : 50 000 FCFA
 
-TOTAL GÉNÉRAL : 501 158 FCFA
+TOTAL GÉNÉRAL : 565 000 FCFA
 ```
 
-La précision de `0,1875 m³` pour le béton du poteau est correctement affichée dans les deux fichiers.
+La précision de `0,12 m³` pour le béton du poteau est correctement affichée dans les deux fichiers.
 
 ## 12. Point connu hors périmètre
 
