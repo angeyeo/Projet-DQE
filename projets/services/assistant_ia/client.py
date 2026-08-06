@@ -109,8 +109,8 @@ class MockAIClient(BaseAIClient):
 
             return (
                 f"Le {type_elem} {repere} a été pré-dimensionné pour répondre aux contraintes du projet. "
-                "Les dimensions calculées sont optimisées selon les règles BAEL. "
-                "Cette proposition doit être vérifiée et validée par l’ingénieur structure avant son utilisation dans le DQE."
+                "Les dimensions calculées sont calculées selon les règles BAEL. "
+                "Cette proposition doit être vérifiée et validée par l’ingénieur structure."
             )
 
 

@@ -194,7 +194,33 @@ class AssistantIAAPITestCase(APITestCase):
             self.assertEqual(resp.data["code"], "LLM_QUOTA_EXCEEDED")
 
     def test_api_throttling_assistant_structurer(self):
+        from django.core.cache import cache
+        cache.clear()
         url = "/api/assistant/structurer-projet/"
         payload = {"description": "Bâtiment test throttling"}
         status_codes = [self.client.post(url, payload, format="json").status_code for _ in range(12)]
         self.assertIn(status.HTTP_429_TOO_MANY_REQUESTS, status_codes)
+
+    def test_api_throttling_assistant_expliquer(self):
+        from django.core.cache import cache
+        cache.clear()
+        url = "/api/assistant/expliquer-element/"
+        payload = {"element_id": self.poteau.id}
+        status_codes = [self.client.post(url, payload, format="json").status_code for _ in range(22)]
+        self.assertIn(status.HTTP_429_TOO_MANY_REQUESTS, status_codes)
+
+    def test_explication_post_validation_termes_interdits(self):
+        from projets.services.assistant_ia.explanations import expliquer_resultat_element
+        elem = {
+            "repere": "P1",
+            "type_element": "POTEAU",
+            "parametres": {"hauteur_poteau": 3.0},
+            "resultats": {"cote_cm": 30.0}
+        }
+        with mock.patch("projets.services.assistant_ia.explanations.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = "La section est conforme et validée par le calcul."
+            mock_get.return_value = mock_client
+            exp = expliquer_resultat_element(elem)
+            self.assertEqual(exp["source"], "FALLBACK_LOCAL")
+            self.assertFalse(exp["explication_technique_disponible"])

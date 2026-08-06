@@ -8,12 +8,18 @@ FALLBACK_MESSAGE = (
     "pour cet élément."
 )
 
+TERMES_INTERDITS = [
+    "conforme",
+    "validé",
+    "sûr",
+    "optimal",
+    "respecte toutes les normes",
+]
+
 
 def extraire_nombres(texte: str) -> set[str]:
     """Extrait et normalise tous les nombres (entiers, décimaux, négatifs) présents dans une chaîne de texte."""
-    # Supprimer les espaces séparateurs de milliers (ex: 1 000 -> 1000)
     cleaned = re.sub(r"(\d)\s+(\d)", r"\1\2", texte)
-    # Remplacer les virgules décimales par des points
     cleaned = cleaned.replace(",", ".")
     matches = re.findall(r"(?<!\w)-?\d+(?:\.\d+)?", cleaned)
     normalized = set()
@@ -27,6 +33,11 @@ def extraire_nombres(texte: str) -> set[str]:
         except ValueError:
             pass
     return normalized
+
+
+def json_compact(obj: dict) -> str:
+    """Retourne une chaîne JSON sans espaces inutiles pour le prompt."""
+    return json.dumps(obj, ensure_ascii=False)
 
 
 def expliquer_resultat_element(element_data: dict) -> dict:
@@ -79,7 +90,19 @@ def expliquer_resultat_element(element_data: dict) -> dict:
     # 3. Appel du LLM
     raw_explanation = client.appeler_llm(prompt, forcer_json=False)
 
-    # 4. Post-validation des valeurs numériques : vérification anti-hallucination
+    # 4. Post-validation runtime : vérification des termes interdits
+    explanation_lower = raw_explanation.lower()
+    mandatory_phrase = "cette proposition doit être vérifiée et validée par l’ingénieur structure."
+    text_to_check = explanation_lower.replace(mandatory_phrase, "")
+    if any(terme in text_to_check for terme in TERMES_INTERDITS):
+        return {
+            "explication": "L’explication générée contient une affirmation de validation non autorisée.",
+            "source": "FALLBACK_LOCAL",
+            "explication_technique_disponible": False,
+            "validation_humaine_requise": True,
+        }
+
+    # 5. Post-validation des valeurs numériques : vérification anti-hallucination
     payload_autorise = {
         "repere": str(repere),
         "type_element": str(type_element),
@@ -98,8 +121,9 @@ def expliquer_resultat_element(element_data: dict) -> dict:
             "validation_humaine_requise": True,
         }
 
-    # 5. Détermination de la source réelle
-    source = "MOCK" if isinstance(client, MockAIClient) else "GEMINI"
+    # 6. Détermination de la source et format de retour
+    is_mock = isinstance(client, MockAIClient)
+    source = "MOCK" if is_mock else "GEMINI"
 
     return {
         "explication": raw_explanation.strip(),
@@ -107,12 +131,3 @@ def expliquer_resultat_element(element_data: dict) -> dict:
         "explication_technique_disponible": True,
         "validation_humaine_requise": True,
     }
-
-
-def json_compact(data) -> str:
-    """Helper pour sérialiser en JSON compact pour les prompts."""
-    try:
-        import json
-        return json.dumps(data, ensure_ascii=False)
-    except Exception:
-        return str(data)
