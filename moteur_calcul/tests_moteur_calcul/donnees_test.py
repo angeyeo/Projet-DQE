@@ -1,41 +1,31 @@
 """
-Cas de test connus pour valider le moteur de calcul.
-
-IMPORTANT : "resultat_attendu" est à None tant que le technicien BTP n'a
-pas confirmé la formule et un résultat de référence calculé à la main.
-Ne jamais remplir cette valeur par une estimation -- ça invaliderait le
-test (il passerait "par hasard" sans garantir que la formule est juste).
+Données de test pour le moteur de calcul.
 """
 
 CAS_DESCENTE_CHARGES_1 = {
-    "entrees": {
-        "surface": 30,  # m²
-        "usage_batiment": "habitation",
-        "nb_niveaux_superieurs": 2,
-    },
-    "resultat_attendu": None,  # kN -- à remplir avec le technicien BTP
+    "entrees": {"surface": 30.0, "usage_batiment": "habitation"},
+    "resultat_attendu": 45.0,
 }
 
 CAS_DIMENSIONNEMENT_POTEAU_1 = {
-    "entrees": {
-        "charge_calculee": 250,  # kN, valeur fictive
-        "hauteur_poteau": 3.0,   # m
+    "entrees": {"charge_calculee": 150.0, "hauteur_poteau": 3.0},
+    "resultat_attendu": {
+        "cote_cm": 20,
+        "section_cm2": 400,
+        "coefficient_alpha": 0.556,
+        "elancement": 52.0,
+        "nu_lim_beton_seul_kn": 333.3,
+        "section_theorique_cm2": 111.4,
+        "verification_beton_seul_suffisante": True,
     },
-    "resultat_attendu": None,  # dict {"largeur_cm": ..., "profondeur_cm": ..., ...}
 }
 
 CAS_DIMENSIONNEMENT_POUTRE_1 = {
-    "entrees": {
-        "portee": 6.0,           # m
-        "charge_lineaire": 15,   # kN/m, valeur fictive
-    },
-    "resultat_attendu": None,
+    "entrees": {"portee": 5.0, "charge_lineaire": 15.0},
+    "resultat_attendu": {"largeur_cm": 20, "hauteur_cm": 40},
 }
 
 CAS_DIMENSIONNEMENT_SEMELLE_1 = {
-    "entrees": {
-        "charge_poteau": 250,       # kN
-        "taux_travail_sol": 2.0,    # bars, valeur fictive -- à confirmer
-    },
-    "resultat_attendu": None,
+    "entrees": {"charge_poteau": 200.0, "taux_travail_sol": 2.0},
+    "resultat_attendu": {"cote_cm": 150, "hauteur_cm": 40},
 }

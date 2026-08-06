@@ -12,10 +12,8 @@ Points clés :
   walkthrough -- un lien/URL de téléchargement est plus naturel en GET
   qu'en POST pour ce cas d'usage).
 
-MODIFIÉ (Ange) : generer_dqe appelait encore l'ancien TODO/squelette
-("Génération du DQE à brancher (Dev 4)") -- le travail réel du Dev 4
-(services/dqe_calculator.py, services/dqe_exporters.py) existait dans
-le repo mais n'était jamais appelé depuis cette vue. Branché ici.
+MODIFIÉ : generer_dqe accepte désormais les méthodes GET et POST pour
+assurer la compatibilité ascendante avec la suite de tests REST API.
 """
 
 from rest_framework import viewsets, status
@@ -46,7 +44,7 @@ class ProjetViewSet(viewsets.ModelViewSet):
         resultats = recalculer_projet(projet)
         return Response(resultats, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["get"])
+    @action(detail=True, methods=["get", "post"])
     def generer_dqe(self, request, pk=None):
         """
         Génère le DQE (JSON par défaut, ou fichier PDF/Excel via
@@ -75,7 +73,9 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        export_format = request.query_params.get("export")
+        export_format = request.query_params.get("export") or (
+            request.data.get("export") if isinstance(request.data, dict) else None
+        )
 
         try:
             dqe_data = calculer_projet_dqe(projet)
