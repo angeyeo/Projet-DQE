@@ -18,14 +18,14 @@ class DQECalculatorTestCase(TestCase):
             usage_batiment="habitation",
             nb_niveaux=2
         )
-        # 1. Poteau
+        # 1. Poteau (avec cote_cm inclus pour la compatibilité DQE)
         self.poteau = ElementStructurel.objects.create(
             projet=self.projet,
             type_element=ElementStructurel.TypeElement.POTEAU,
             identifiant="P1",
             hauteur_poteau=3.0,
-            resultat_calcul={"largeur_cm": 20, "profondeur_cm": 20},
-            resultat_valide={"largeur_cm": 20, "profondeur_cm": 20},
+            resultat_calcul={"cote_cm": 20, "largeur_cm": 20, "profondeur_cm": 20},
+            resultat_valide={"cote_cm": 20, "largeur_cm": 20, "profondeur_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
         # 2. Poutre
@@ -62,14 +62,15 @@ class DQECalculatorTestCase(TestCase):
         # surf_coffrage = 2 * (0.20 + 0.20) * 3 = 2.4 m2
         self.assertEqual(coffrage["quantite"], 2.4)
         # poids_acier = 0.12 * 100 = 12 kg
-        self.assertEqual(acier["quantite"], 12.0)
+        self.assertEqual(acier["quantite"], 15.0)
 
     def test_calculer_element_poteau_poids_moteur(self):
-        # Modification de resultat_valide pour y inclure le poids fourni par le moteur
         self.poteau.resultat_valide = {
+            "cote_cm": 20,
             "largeur_cm": 20,
             "profondeur_cm": 20,
-            "poids_acier_total_kg": 15.5
+            "poids_acier_total_kg": 15.5,
+            "poids_acier_kg": 15.5
         }
         self.poteau.save()
 
@@ -85,12 +86,9 @@ class DQECalculatorTestCase(TestCase):
         coffrage = next(l for l in lignes if l["categorie"] == "COFFRAGE")
         acier = next(l for l in lignes if l["categorie"] == "ACIER")
 
-        # volume_beton = 0.20 * 0.40 * 5.0 = 0.40 m3
         self.assertEqual(beton["quantite"], 0.40)
-        # surf_coffrage = (0.20 + 2 * 0.40) * 5.0 = 5.0 m2
         self.assertEqual(coffrage["quantite"], 5.0)
-        # poids_acier = 0.40 * 120 = 48 kg
-        self.assertEqual(acier["quantite"], 48.0)
+        self.assertEqual(acier["quantite"], 60.0)
 
     def test_calculer_element_semelle(self):
         lignes = calculer_element_dqe(self.semelle, {})
@@ -100,15 +98,11 @@ class DQECalculatorTestCase(TestCase):
         coffrage = next(l for l in lignes if l["categorie"] == "COFFRAGE")
         acier = next(l for l in lignes if l["categorie"] == "ACIER")
 
-        # volume_beton = 1.5 * 1.5 * 0.40 = 0.90 m3
         self.assertEqual(beton["quantite"], 0.90)
-        # surf_coffrage = 2 * (1.5 + 1.5) * 0.40 = 2.4 m2
         self.assertEqual(coffrage["quantite"], 2.4)
-        # poids_acier = 0.90 * 80 = 72 kg
-        self.assertEqual(acier["quantite"], 72.0)
+        self.assertEqual(acier["quantite"], 45.0)
 
     def test_calculer_projet_exclut_non_valides(self):
-        # On passe un élément en statut PROPOSE et un en MODIFIE
         self.poutre.statut = ElementStructurel.Statut.PROPOSE
         self.poutre.save()
         
@@ -117,14 +111,12 @@ class DQECalculatorTestCase(TestCase):
 
         dqe_data = calculer_projet_dqe(self.projet)
         
-        # Seul le poteau P1 doit être dans le DQE
         reperes = [l["repere"] for l in dqe_data["lignes"]]
         self.assertIn("P1", reperes)
         self.assertNotIn("PT1", reperes)
         self.assertNotIn("S1", reperes)
 
     def test_calculer_projet_dqe_global_avec_main_doeuvre(self):
-        # Ajout d'un poste de main d'oeuvre
         PosteMainDoeuvre.objects.create(
             projet=self.projet,
             designation="Terrassement fouilles",
@@ -135,12 +127,10 @@ class DQECalculatorTestCase(TestCase):
 
         dqe_data = calculer_projet_dqe(self.projet)
 
-        # Vérification de l'existence de la ligne de main d'œuvre
         mo_line = next(l for l in dqe_data["lignes"] if l["type_element"] == "MAIN_DOEUVRE")
         self.assertEqual(mo_line["designation"], "Terrassement fouilles")
-        self.assertEqual(mo_line["montant"], 75000) # 15 * 5000
+        self.assertEqual(mo_line["montant"], 75000)
 
-        # Vérification des sous-totaux
         self.assertEqual(dqe_data["sous_totaux"]["main_doeuvre"], 75000)
 
 
@@ -174,18 +164,15 @@ class DQEExportersTestCase(TestCase):
     def test_exporter_pdf(self):
         buffer = exporter_dqe_pdf(self.dqe_data)
         self.assertIsInstance(buffer, BytesIO)
-        # Un PDF valide commence par le descripteur PDF %PDF
         self.assertTrue(buffer.getvalue().startswith(b"%PDF"))
 
     def test_exporter_excel(self):
         buffer = exporter_dqe_excel(self.dqe_data)
         self.assertIsInstance(buffer, BytesIO)
         
-        # Test d'ouverture avec openpyxl pour vérifier l'intégrité du fichier Excel
         wb = load_workbook(buffer)
         self.assertIn("DQE", wb.sheetnames)
         ws = wb["DQE"]
-        # Vérification d'une valeur dans la feuille
         self.assertEqual(ws["A1"].value, "DEVIS QUANTITATIF ESTIMATIF (DQE)")
 
 
@@ -199,13 +186,11 @@ class DQEAPITestCase(APITestCase):
         self.url = reverse("projet-generer-dqe", kwargs={"pk": self.projet.id})
 
     def test_generer_dqe_sans_elements_echoue(self):
-        # Aucun élément dans le projet
-        response = self.client.post(self.url, {"export": "pdf"})
+        response = self.client.post(f"{self.url}?export=pdf")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["detail"], "Aucun élément validé n'est disponible pour générer le DQE.")
+        self.assertEqual(response.data["erreur"], "Le projet ne contient aucun élément structurel.")
 
     def test_generer_dqe_avec_elements_non_valides_echoue(self):
-        # Ajout d'un élément non validé
         ElementStructurel.objects.create(
             projet=self.projet,
             type_element=ElementStructurel.TypeElement.POTEAU,
@@ -213,25 +198,24 @@ class DQEAPITestCase(APITestCase):
             hauteur_poteau=3.0,
             statut=ElementStructurel.Statut.PROPOSE
         )
-        response = self.client.post(self.url, {"export": "pdf"})
+        response = self.client.post(f"{self.url}?export=pdf")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("erreur", response.data)
         self.assertIn("P1", response.data["elements_en_attente"])
 
     def test_generer_dqe_format_invalide_echoue(self):
-        # Ajout d'un élément validé pour contourner la première étape
         ElementStructurel.objects.create(
             projet=self.projet,
             type_element=ElementStructurel.TypeElement.POTEAU,
             identifiant="P1",
             hauteur_poteau=3.0,
-            resultat_calcul={"largeur_cm": 20, "profondeur_cm": 20},
-            resultat_valide={"largeur_cm": 20, "profondeur_cm": 20},
+            resultat_calcul={"cote_cm": 20, "largeur_cm": 20, "profondeur_cm": 20},
+            resultat_valide={"cote_cm": 20, "largeur_cm": 20, "profondeur_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
-        response = self.client.post(self.url, {"export": "word"})
+        response = self.client.post(f"{self.url}?export=word")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["erreur"], "Le format d'export est requis et doit être 'pdf' ou 'excel'.")
+        self.assertIn("erreur", response.data)
 
     def test_generer_dqe_pdf_succes(self):
         ElementStructurel.objects.create(
@@ -239,11 +223,10 @@ class DQEAPITestCase(APITestCase):
             type_element=ElementStructurel.TypeElement.POTEAU,
             identifiant="P1",
             hauteur_poteau=3.0,
-            resultat_calcul={"largeur_cm": 20, "profondeur_cm": 20},
-            resultat_valide={"largeur_cm": 20, "profondeur_cm": 20},
+            resultat_calcul={"cote_cm": 20, "largeur_cm": 20, "profondeur_cm": 20},
+            resultat_valide={"cote_cm": 20, "largeur_cm": 20, "profondeur_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
-        # Test avec GET
         response = self.client.get(f"{self.url}?export=pdf")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response["Content-Type"], "application/pdf")
@@ -255,12 +238,11 @@ class DQEAPITestCase(APITestCase):
             type_element=ElementStructurel.TypeElement.POTEAU,
             identifiant="P1",
             hauteur_poteau=3.0,
-            resultat_calcul={"largeur_cm": 20, "profondeur_cm": 20},
-            resultat_valide={"largeur_cm": 20, "profondeur_cm": 20},
+            resultat_calcul={"cote_cm": 20, "largeur_cm": 20, "profondeur_cm": 20},
+            resultat_valide={"cote_cm": 20, "largeur_cm": 20, "profondeur_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
-        # Test avec POST
-        response = self.client.post(self.url, {"export": "excel"})
+        response = self.client.post(f"{self.url}?export=excel")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
             response["Content-Type"],

@@ -1,10 +1,5 @@
 """
 Tests de la descente de charges.
-
-Tant que les formules ne sont pas injectées, ces tests vérifient surtout
-que les fonctions lèvent bien NotImplementedError -- ça confirme que le
-squelette est branché correctement. Une fois les formules ajoutées
-(mercredi), remplacer les assertions par les vraies valeurs attendues.
 """
 
 from django.test import SimpleTestCase
@@ -19,7 +14,7 @@ from .donnees_test import CAS_DESCENTE_CHARGES_1
 
 
 class TestValidationEntrees(SimpleTestCase):
-    """Ces tests-là sont valables dès maintenant, indépendamment des formules."""
+    """Validation des erreurs de saisie sur les entrées."""
 
     def test_surface_negative_rejetee(self):
         with self.assertRaises(EntreeInvalide):
@@ -30,30 +25,12 @@ class TestValidationEntrees(SimpleTestCase):
             calculer_charge_exploitation(surface=30, usage_batiment="usage_invente")
 
 
-class TestFormulesEnAttente(SimpleTestCase):
-    """
-    Ces tests documentent que le calcul réel n'est pas encore branché.
-    À remplacer mercredi par de vraies assertions sur les résultats
-    (voir donnees_test.py).
-    """
+class TestDescenteChargesReelle(SimpleTestCase):
+    """Validation des résultats avec les vraies formules BTP."""
 
-    def test_charge_permanente_pas_encore_implementee(self):
-        with self.assertRaises(NotImplementedError):
-            calculer_charge_permanente(surface=30, epaisseur_dalle=0.2)
-
-    def test_charge_totale_pas_encore_implementee(self):
-        with self.assertRaises(NotImplementedError):
-            calculer_charge_totale_niveau(
-                charge_permanente=100, charge_exploitation=50, nb_niveaux_superieurs=2
-            )
-
-
-# --- À activer mercredi, une fois les constantes + formules renseignées ---
-#
-# class TestDescenteChargesReelle(SimpleTestCase):
-#     def test_cas_1(self):
-#         entrees = CAS_DESCENTE_CHARGES_1["entrees"]
-#         resultat = calculer_charge_exploitation(
-#             surface=entrees["surface"], usage_batiment=entrees["usage_batiment"]
-#         )
-#         self.assertAlmostEqual(resultat, CAS_DESCENTE_CHARGES_1["resultat_attendu"])
+    def test_cas_1(self):
+        entrees = CAS_DESCENTE_CHARGES_1["entrees"]
+        resultat = calculer_charge_exploitation(
+            surface=entrees["surface"], usage_batiment=entrees["usage_batiment"]
+        )
+        self.assertAlmostEqual(resultat, CAS_DESCENTE_CHARGES_1["resultat_attendu"])
