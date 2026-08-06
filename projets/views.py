@@ -289,8 +289,8 @@ class AssistantExpliquerView(APIView):
         }
 
         try:
-            explanation = expliquer_resultat_element(elem_data)
-            return Response({"explication": explanation}, status=status.HTTP_200_OK)
+            result = expliquer_resultat_element(elem_data)
+            return Response(result, status=status.HTTP_200_OK)
         except ValueError as exc:
             return Response(
                 {"detail": str(exc), "code": "LLM_INVALID_INPUT"},

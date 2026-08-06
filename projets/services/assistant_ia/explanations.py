@@ -1,10 +1,19 @@
-from .client import get_ai_client
+from .client import get_ai_client, MockAIClient
 from .prompts import PROMPT_EXPLICATION
 
-def expliquer_resultat_element(element_data: dict) -> str:
+FALLBACK_MESSAGE = (
+    "Aucun résultat technique exploitable n'est disponible "
+    "pour cet élément."
+)
+
+
+def expliquer_resultat_element(element_data: dict) -> dict:
     """
     Prend les données structurées d'un élément (entrées et résultats de calcul),
     filtre les valeurs None, et appelle le LLM.
+
+    Retourne un dictionnaire structuré contenant l'explication, sa source,
+    et des indicateurs de fiabilité pour le frontend.
 
     Lève ValueError si des champs requis de base sont absents.
     """
@@ -24,10 +33,15 @@ def expliquer_resultat_element(element_data: dict) -> str:
     parametres_filtres = {k: v for k, v in parametres.items() if v is not None}
     resultats_filtres = {k: v for k, v in resultats.items() if v is not None}
 
-    # Sécurité supplémentaire : si aucune donnée technique calculée n'est présente,
-    # on renvoie une explication par défaut locale sans appeler le LLM.
+    # Sécurité : si aucune donnée technique calculée n'est présente,
+    # on renvoie un fallback local sans appeler le LLM.
     if not resultats_filtres:
-        return "Le résultat détaillé de cet élément n’est pas disponible. Aucune explication technique ne peut être générée pour le moment."
+        return {
+            "explication": FALLBACK_MESSAGE,
+            "source": "FALLBACK_LOCAL",
+            "explication_technique_disponible": False,
+            "validation_humaine_requise": True,
+        }
 
     # 1. Récupération du client LLM
     client = get_ai_client()
@@ -43,7 +57,15 @@ def expliquer_resultat_element(element_data: dict) -> str:
     # 3. Appel du LLM
     raw_explanation = client.appeler_llm(prompt, forcer_json=False)
 
-    return raw_explanation.strip()
+    # 4. Détermination de la source réelle
+    source = "MOCK" if isinstance(client, MockAIClient) else "GEMINI"
+
+    return {
+        "explication": raw_explanation.strip(),
+        "source": source,
+        "explication_technique_disponible": True,
+        "validation_humaine_requise": True,
+    }
 
 
 def json_compact(data) -> str:
