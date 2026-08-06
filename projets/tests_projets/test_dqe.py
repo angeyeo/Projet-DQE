@@ -199,9 +199,9 @@ class DQEAPITestCase(APITestCase):
 
     def test_generer_dqe_sans_elements_echoue(self):
         # Aucun élément dans le projet
-        response = self.client.post(self.url, {"export": "pdf"})
+        response = self.client.get(f"{self.url}?export=pdf")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["detail"], "Aucun élément validé n'est disponible pour générer le DQE.")
+        self.assertEqual(response.data["erreur"], "Le projet ne contient aucun élément structurel.")
 
     def test_generer_dqe_avec_elements_non_valides_echoue(self):
         # Ajout d'un élément non validé
@@ -212,7 +212,7 @@ class DQEAPITestCase(APITestCase):
             hauteur_poteau=3.0,
             statut=ElementStructurel.Statut.PROPOSE
         )
-        response = self.client.post(self.url, {"export": "pdf"})
+        response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("erreur", response.data)
         self.assertIn("P1", response.data["elements_en_attente"])
@@ -228,9 +228,9 @@ class DQEAPITestCase(APITestCase):
             resultat_valide={"cote_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
-        response = self.client.post(self.url, {"export": "word"})
+        response = self.client.get(f"{self.url}?export=word")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["erreur"], "Le format d'export est requis et doit être 'pdf' ou 'excel'.")
+        self.assertIn("Format d'export non pris en charge", response.data["erreur"])
 
     def test_generer_dqe_pdf_succes(self):
         ElementStructurel.objects.create(
@@ -258,8 +258,8 @@ class DQEAPITestCase(APITestCase):
             resultat_valide={"cote_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
-        # Test avec POST
-        response = self.client.post(self.url, {"export": "excel"})
+        # Test avec GET
+        response = self.client.get(f"{self.url}?export=excel")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
             response["Content-Type"],
