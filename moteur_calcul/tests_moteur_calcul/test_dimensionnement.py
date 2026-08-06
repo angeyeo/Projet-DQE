@@ -34,18 +34,18 @@ class TestValidationEntreesDimensionnement(SimpleTestCase):
 class TestFormulesEnAttente(SimpleTestCase):
     def test_dimensionnement_poteau_pas_encore_implemente(self):
         entrees = CAS_DIMENSIONNEMENT_POTEAU_1["entrees"]
-        resultat = dimensionner_poteau(**entrees)
-        self.assertIsNotNone(resultat)
+        with self.assertRaises(NotImplementedError):
+            dimensionner_poteau(**entrees)
 
     def test_dimensionnement_poutre_pas_encore_implemente(self):
         entrees = CAS_DIMENSIONNEMENT_POUTRE_1["entrees"]
-        resultat = dimensionner_poutre(**entrees)
-        self.assertIsNotNone(resultat)
+        with self.assertRaises(NotImplementedError):
+            dimensionner_poutre(**entrees)
 
     def test_dimensionnement_semelle_pas_encore_implemente(self):
         entrees = CAS_DIMENSIONNEMENT_SEMELLE_1["entrees"]
-        resultat = dimensionner_semelle(**entrees)
-        self.assertIsNotNone(resultat)
+        with self.assertRaises(NotImplementedError):
+            dimensionner_semelle(**entrees)
 
 
 # --- À activer mercredi, une fois les formules renseignées ---

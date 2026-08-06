@@ -65,13 +65,45 @@ class AssistantIAUnitTestCase(TestCase):
         }
         with self.assertRaises(ValueError):
             valider_donnees_extraites(invalid_data)
-        
+
         invalid_data_trop_haut = {
             "nombre_niveaux": 105,
             "usage": "BUREAU"
         }
         with self.assertRaises(ValueError):
             valider_donnees_extraites(invalid_data_trop_haut)
+
+    def test_validation_nombre_niveaux_bool_rejet(self):
+        data = {"nombre_niveaux": True, "usage": "BUREAU"}
+        with self.assertRaises(ValueError):
+            valider_donnees_extraites(data)
+
+    def test_validation_portee_bool_rejet(self):
+        data = {"nombre_niveaux": 3, "portee_m": False}
+        with self.assertRaises(ValueError):
+            valider_donnees_extraites(data)
+
+    def test_validation_portee_nan_rejet(self):
+        data = {"nombre_niveaux": 3, "portee_m": float("nan")}
+        with self.assertRaises(ValueError):
+            valider_donnees_extraites(data)
+
+    def test_validation_portee_inf_rejet(self):
+        data = {"nombre_niveaux": 3, "portee_m": float("inf")}
+        with self.assertRaises(ValueError):
+            valider_donnees_extraites(data)
+
+    def test_validation_cles_inconnues_ignorees(self):
+        data = {
+            "nombre_niveaux": 3,
+            "usage": "BUREAU",
+            "cle_inconnue": "hack",
+            "autre_cle": 42
+        }
+        res = valider_donnees_extraites(data)
+        self.assertNotIn("cle_inconnue", res)
+        self.assertNotIn("autre_cle", res)
+        self.assertEqual(res["nombre_niveaux"], 3)
 
     def test_saisie_refuse_json_invalide(self):
         # On mock l'appel LLM pour renvoyer du texte brut non JSON
@@ -145,6 +177,19 @@ class AssistantIAAPITestCase(APITestCase):
         response = self.client.post(url, payload, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_api_structurer_description_trop_longue_echoue(self):
+        url = "/api/assistant/structurer-projet/"
+        payload = {"description": "a" * 1005}
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("ne doit pas dépasser 1000", response.data["detail"])
+
+    def test_api_structurer_description_espaces_seuls_echoue(self):
+        url = "/api/assistant/structurer-projet/"
+        payload = {"description": "     "}
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_api_expliquer_element_success(self):
         url = "/api/assistant/expliquer-element/"
         payload = {"element_id": self.poteau.id}
@@ -153,6 +198,25 @@ class AssistantIAAPITestCase(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("explication", response.data)
         self.assertIn("poteau", response.data["explication"].lower())
+
+    def test_api_expliquer_element_sans_charge_ne_decoule_pas_sur_invention(self):
+        # Création d'un élément ayant un résultat mais aucune charge
+        poteau_sans_charge = ElementStructurel.objects.create(
+            projet=self.projet,
+            type_element=ElementStructurel.TypeElement.POTEAU,
+            identifiant="P3",
+            hauteur_poteau=3.0,
+            resultat_calcul={}, # Dictionnaire de résultats vide
+            statut=ElementStructurel.Statut.PROPOSE
+        )
+        url = "/api/assistant/expliquer-element/"
+        payload = {"element_id": poteau_sans_charge.id}
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["explication"],
+            "Le résultat détaillé de cet élément n’est pas disponible. Aucune explication technique ne peut être générée pour le moment."
+        )
 
     def test_api_expliquer_element_inexistant_echoue(self):
         url = "/api/assistant/expliquer-element/"

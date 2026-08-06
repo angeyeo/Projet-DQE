@@ -37,13 +37,15 @@ class TestFormulesEnAttente(SimpleTestCase):
     (voir donnees_test.py).
     """
 
-    def test_charge_permanente_calcul(self):
-        val = calculer_charge_permanente(surface=30, epaisseur_dalle=0.2)
-        self.assertAlmostEqual(val, 150.0)
+    def test_charge_permanente_pas_encore_implementee(self):
+        with self.assertRaises(NotImplementedError):
+            calculer_charge_permanente(surface=30, epaisseur_dalle=0.2)
 
-    def test_charge_totale_calcul(self):
-        val = calculer_charge_totale_niveau([100.0, 50.0])
-        self.assertAlmostEqual(val, 150.0)
+    def test_charge_totale_pas_encore_implementee(self):
+        with self.assertRaises(NotImplementedError):
+            calculer_charge_totale_niveau(
+                charge_permanente=100, charge_exploitation=50, nb_niveaux_superieurs=2
+            )
 
 
 # --- À activer mercredi, une fois les constantes + formules renseignées ---

@@ -218,11 +218,19 @@ class PosteMainDoeuvreViewSet(viewsets.ModelViewSet):
 class AssistantStructurerView(APIView):
     def post(self, request):
         description = request.data.get("description")
-        if not description:
+        if not isinstance(description, str) or not description.strip():
             return Response(
                 {"detail": "La description du projet est requise."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        description = description.strip()
+        if len(description) > 1000:
+            return Response(
+                {"detail": "La description ne doit pas dépasser 1000 caractères."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             res = structurer_description_projet(description)
             return Response(res, status=status.HTTP_200_OK)
@@ -249,7 +257,7 @@ class AssistantExpliquerView(APIView):
         element = get_object_or_404(ElementStructurel, id=element_id)
 
         # Vérification qu'il y a un résultat de calcul
-        if not element.resultat_calcul:
+        if element.resultat_calcul is None:
             return Response(
                 {"detail": "Cet élément n'a aucun calcul de pré-dimensionnement disponible à expliquer."},
                 status=status.HTTP_400_BAD_REQUEST,

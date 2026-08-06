@@ -1,4 +1,30 @@
+import math
+
 USAGES_VALIDES = ["HABITATION", "BUREAU", "COMMERCE", "INDUSTRIEL", "AUTRE"]
+
+
+def valider_entier(value, nom_champ):
+    """Rejette explicitement les booléens et valide que la valeur est un entier."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{nom_champ} doit être un entier.")
+    return value
+
+
+def valider_nombre(value, nom_champ):
+    """Rejette explicitement les booléens et valide que la valeur est un float fini."""
+    if isinstance(value, bool):
+        raise ValueError(f"{nom_champ} doit être un nombre.")
+
+    try:
+        nombre = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{nom_champ} doit être un nombre.") from exc
+
+    if not math.isfinite(nombre):
+        raise ValueError(f"{nom_champ} doit être un nombre fini.")
+
+    return nombre
+
 
 def valider_donnees_extraites(data: dict) -> dict:
     """
@@ -22,15 +48,10 @@ def valider_donnees_extraites(data: dict) -> dict:
     # 1. Validation de nombre_niveaux
     nombre_niveaux = data.get("nombre_niveaux")
     if nombre_niveaux is not None:
-        try:
-            val_int = int(nombre_niveaux)
-            if val_int < 1 or val_int > 100:
-                raise ValueError("Le nombre de niveaux doit être compris entre 1 et 100.")
-            res["nombre_niveaux"] = val_int
-        except (TypeError, ValueError) as exc:
-            if "compris entre" in str(exc):
-                raise
-            raise ValueError("nombre_niveaux doit être un entier valide.")
+        val_int = valider_entier(nombre_niveaux, "nombre_niveaux")
+        if val_int < 1 or val_int > 100:
+            raise ValueError("Le nombre de niveaux doit être compris entre 1 et 100.")
+        res["nombre_niveaux"] = val_int
 
     # 2. Validation de la configuration (ex: "R+2")
     config = data.get("configuration")
@@ -50,41 +71,26 @@ def valider_donnees_extraites(data: dict) -> dict:
     # 4. Validation de portee_m
     portee_m = data.get("portee_m")
     if portee_m is not None:
-        try:
-            val_float = float(portee_m)
-            if val_float <= 0:
-                raise ValueError("La portée doit être strictement positive.")
-            res["portee_m"] = val_float
-        except (TypeError, ValueError) as exc:
-            if "strictement positive" in str(exc):
-                raise
-            raise ValueError("portee_m doit être un nombre décimal valide.")
+        val_float = valider_nombre(portee_m, "portee_m")
+        if val_float <= 0:
+            raise ValueError("La portée doit être strictement positive.")
+        res["portee_m"] = val_float
 
     # 5. Validation de hauteur_niveau_m
     hauteur_niveau_m = data.get("hauteur_niveau_m")
     if hauteur_niveau_m is not None:
-        try:
-            val_float = float(hauteur_niveau_m)
-            if val_float <= 0:
-                raise ValueError("La hauteur de niveau doit être strictement positive.")
-            res["hauteur_niveau_m"] = val_float
-        except (TypeError, ValueError) as exc:
-            if "strictement positive" in str(exc):
-                raise
-            raise ValueError("hauteur_niveau_m doit être un nombre décimal valide.")
+        val_float = valider_nombre(hauteur_niveau_m, "hauteur_niveau_m")
+        if val_float <= 0:
+            raise ValueError("La hauteur de niveau doit être strictement positive.")
+        res["hauteur_niveau_m"] = val_float
 
     # 6. Validation de contrainte_sol_kn_m2
     contrainte_sol = data.get("contrainte_sol_kn_m2")
     if contrainte_sol is not None:
-        try:
-            val_float = float(contrainte_sol)
-            if val_float <= 0:
-                raise ValueError("La contrainte de sol doit être strictement positive.")
-            res["contrainte_sol_kn_m2"] = val_float
-        except (TypeError, ValueError) as exc:
-            if "strictement positive" in str(exc):
-                raise
-            raise ValueError("contrainte_sol_kn_m2 doit être un nombre décimal valide.")
+        val_float = valider_nombre(contrainte_sol, "contrainte_sol_kn_m2")
+        if val_float <= 0:
+            raise ValueError("La contrainte de sol doit être strictement positive.")
+        res["contrainte_sol_kn_m2"] = val_float
 
     # 7. Données manquantes
     donnees_manquantes = data.get("donnees_manquantes")

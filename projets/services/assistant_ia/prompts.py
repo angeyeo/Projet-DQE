@@ -12,8 +12,9 @@ Tu dois impérativement extraire ou déduire les champs suivants :
 
 Règles de sécurité :
 1. Ne fais aucune hypothèse sur les dimensions de structure.
-2. Si une information est absente, renvoie null pour ce champ et ajoute-le à "donnees_manquantes".
-3. Réponds uniquement avec le JSON. Pas de texte explicatif avant ou après.
+2. Si une description est ambiguë (ex: "R+2 ou R+3"), ne choisis pas arbitrairement. Laisse la valeur à null, ajoute-la aux "donnees_manquantes" et mets un avertissement explicite.
+3. Si une information est absente, renvoie null pour ce champ et ajoute-le à "donnees_manquantes".
+4. Réponds uniquement avec le JSON. Pas de texte explicatif avant ou après.
 
 Description du projet :
 "{description}"
@@ -27,9 +28,9 @@ Voici les caractéristiques de l'élément :
 - Paramètres d'entrée : {parametres}
 - Dimensions et résultats calculés par le moteur : {resultats}
 
-Consignes pour la rédaction :
+Consignes strictes pour la rédaction :
 1. Rédige un texte court (2-3 phrases maximum) et professionnel.
 2. Explique comment les dimensions calculées (section, acier, coffrage) répondent aux charges et contraintes d'entrée.
-3. Termine impérativement par une phrase rappelant que cette proposition doit être validée manuellement par l'ingénieur de structure avant d'être intégrée dans le DQE.
-4. N'invente aucun calcul additionnel ou charge non présente dans les données fournies.
+3. N'utilise QUE les valeurs présentes dans les données JSON fournies. Ne déduis, ne complète et n'invente aucune valeur absente (comme une charge ou une dimension non fournie). Si une donnée nécessaire manque, indique explicitement qu'elle n'est pas disponible.
+4. Termine impérativement par la phrase exacte suivante : "Cette proposition doit être vérifiée et validée par l’ingénieur structure."
 """

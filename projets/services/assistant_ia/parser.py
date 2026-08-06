@@ -8,7 +8,7 @@ def structurer_description_projet(description: str) -> dict:
     Prend une description en langage naturel d'un projet de bâtiment,
     la transmet au LLM configuré, et valide les paramètres structurés
     extraits.
-    
+
     Lève ValueError en cas d'erreur de saisie, de parsing JSON ou de validation.
     """
     if not description or not isinstance(description, str) or not description.strip():
@@ -29,11 +29,11 @@ def structurer_description_projet(description: str) -> dict:
 
     # 4. Validation des types et bornes
     validated_data = valider_donnees_extraites(data)
-    
+
     # 5. Ajout d'une clé de décision pour l'ingénieur
     # On demande une confirmation si des données de base sont manquantes ou s'il y a des avertissements
     confirmation_requise = bool(validated_data["donnees_manquantes"]) or bool(validated_data["avertissements"])
-    
+
     return {
         "donnees": {
             "nombre_niveaux": validated_data["nombre_niveaux"],

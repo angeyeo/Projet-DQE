@@ -5,9 +5,6 @@ import urllib.request
 import urllib.error
 from abc import ABC, abstractmethod
 
-from .prompts import PROMPT_STRUCTURATION, PROMPT_EXPLICATION
-from .schemas import valider_donnees_extraites
-
 class BaseAIClient(ABC):
     @abstractmethod
     def appeler_llm(self, prompt: str, forcer_json: bool = False) -> str:
@@ -27,9 +24,8 @@ class MockAIClient(BaseAIClient):
             parts = prompt.split("Description du projet :")
             if len(parts) > 1:
                 description = parts[-1].strip().strip('"')
-            
+
             description = description.lower()
-            
             # Détection du nombre de niveaux (R+2, R+3, R+0, etc.)
             nb_niveaux = 1
             config = "R+0"
@@ -93,7 +89,6 @@ class MockAIClient(BaseAIClient):
 
         else:
             # Simulation d'explication
-            # On extrait les données de l'élément à partir du prompt explicatif pour faire un retour cohérent
             repere = "E1"
             match_rep = re.search(r"Repère : (\w+)", prompt)
             if match_rep:
@@ -145,85 +140,12 @@ class GeminiAIClient(BaseAIClient):
             raise RuntimeError(f"Erreur inattendue Gemini : {str(exc)}") from exc
 
 
-class OpenAIAIClient(BaseAIClient):
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini", timeout: int = 20):
-        self.api_key = api_key
-        self.model = model
-        self.timeout = timeout
-
-    def appeler_llm(self, prompt: str, forcer_json: bool = False) -> str:
-        url = "https://api.openai.com/v1/chat/completions"
-        payload = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-        if forcer_json:
-            payload["response_format"] = {"type": "json_object"}
-
-        req_data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=req_data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                res_data = json.loads(response.read().decode("utf-8"))
-                text = res_data["choices"][0]["message"]["content"]
-                return text
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Erreur réseau OpenAI : {str(exc)}") from exc
-        except Exception as exc:
-            raise RuntimeError(f"Erreur inattendue OpenAI : {str(exc)}") from exc
-
-
-class ClaudeAIClient(BaseAIClient):
-    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022", timeout: int = 20):
-        self.api_key = api_key
-        self.model = model
-        self.timeout = timeout
-
-    def appeler_llm(self, prompt: str, forcer_json: bool = False) -> str:
-        url = "https://api.anthropic.com/v1/messages"
-        payload = {
-            "model": self.model,
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-        # Note: Anthropic force le JSON via le prompt systeme plutôt que le format_response de l'API
-
-        req_data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=req_data,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01"
-            }
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                res_data = json.loads(response.read().decode("utf-8"))
-                text = res_data["content"][0]["text"]
-                return text
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Erreur réseau Claude : {str(exc)}") from exc
-        except Exception as exc:
-            raise RuntimeError(f"Erreur inattendue Claude : {str(exc)}") from exc
-
-
 def get_ai_client() -> BaseAIClient:
     """Instancie le client LLM selon les variables d'environnement."""
     provider = os.getenv("LLM_PROVIDER", "mock").strip().lower()
     api_key = os.getenv("LLM_API_KEY", "").strip()
     model = os.getenv("LLM_MODEL", "").strip()
-    
+
     try:
         timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
     except ValueError:
@@ -238,11 +160,5 @@ def get_ai_client() -> BaseAIClient:
     if provider == "gemini":
         model_name = model if model else "gemini-1.5-flash"
         return GeminiAIClient(api_key, model=model_name, timeout=timeout)
-    elif provider == "openai":
-        model_name = model if model else "gpt-4o-mini"
-        return OpenAIAIClient(api_key, model=model_name, timeout=timeout)
-    elif provider == "claude":
-        model_name = model if model else "claude-3-5-sonnet-20241022"
-        return ClaudeAIClient(api_key, model=model_name, timeout=timeout)
     else:
-        raise ValueError(f"Fournisseur d'IA '{provider}' non supporté. Choisissez parmi: mock, gemini, openai, claude.")
+        raise ValueError(f"Fournisseur d'IA '{provider}' non supporté. Choisissez parmi: mock, gemini.")
