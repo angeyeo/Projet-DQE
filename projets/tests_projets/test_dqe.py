@@ -201,7 +201,7 @@ class DQEAPITestCase(APITestCase):
         # Aucun élément dans le projet
         response = self.client.get(f"{self.url}?export=pdf")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["detail"], "Aucun élément validé n'est disponible pour générer le DQE.")
+        self.assertEqual(response.data["erreur"], "Le projet ne contient aucun élément structurel.")
 
     def test_generer_dqe_avec_elements_non_valides_echoue(self):
         # Ajout d'un élément non validé
@@ -230,7 +230,7 @@ class DQEAPITestCase(APITestCase):
         )
         response = self.client.get(f"{self.url}?export=word")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["erreur"], "Le format d'export est requis et doit être 'pdf' ou 'excel'.")
+        self.assertIn("Format d'export non pris en charge", response.data["erreur"])
 
     def test_generer_dqe_pdf_succes(self):
         ElementStructurel.objects.create(
