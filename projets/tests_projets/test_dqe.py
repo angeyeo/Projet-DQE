@@ -24,8 +24,8 @@ class DQECalculatorTestCase(TestCase):
             type_element=ElementStructurel.TypeElement.POTEAU,
             identifiant="P1",
             hauteur_poteau=3.0,
-            resultat_calcul={"largeur_cm": 20, "profondeur_cm": 20},
-            resultat_valide={"largeur_cm": 20, "profondeur_cm": 20},
+            resultat_calcul={"cote_cm": 20},
+            resultat_valide={"cote_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
         # 2. Poutre
@@ -59,16 +59,15 @@ class DQECalculatorTestCase(TestCase):
 
         # volume_beton = 0.20 * 0.20 * 3.0 = 0.12 m3
         self.assertEqual(beton["quantite"], 0.12)
-        # surf_coffrage = 2 * (0.20 + 0.20) * 3 = 2.4 m2
+        # surf_coffrage = 4 * 0.20 * 3.0 = 2.4 m2
         self.assertEqual(coffrage["quantite"], 2.4)
-        # poids_acier = 0.12 * 100 = 12 kg
-        self.assertEqual(acier["quantite"], 12.0)
+        # poids_acier = 0.12 * 125 = 15.0 kg
+        self.assertEqual(acier["quantite"], 15.0)
 
     def test_calculer_element_poteau_poids_moteur(self):
         # Modification de resultat_valide pour y inclure le poids fourni par le moteur
         self.poteau.resultat_valide = {
-            "largeur_cm": 20,
-            "profondeur_cm": 20,
+            "cote_cm": 20,
             "poids_acier_total_kg": 15.5
         }
         self.poteau.save()
@@ -89,8 +88,8 @@ class DQECalculatorTestCase(TestCase):
         self.assertEqual(beton["quantite"], 0.40)
         # surf_coffrage = (0.20 + 2 * 0.40) * 5.0 = 5.0 m2
         self.assertEqual(coffrage["quantite"], 5.0)
-        # poids_acier = 0.40 * 120 = 48 kg
-        self.assertEqual(acier["quantite"], 48.0)
+        # poids_acier = 0.40 * 150 = 60 kg
+        self.assertEqual(acier["quantite"], 60.0)
 
     def test_calculer_element_semelle(self):
         lignes = calculer_element_dqe(self.semelle, {})
@@ -104,8 +103,8 @@ class DQECalculatorTestCase(TestCase):
         self.assertEqual(beton["quantite"], 0.90)
         # surf_coffrage = 2 * (1.5 + 1.5) * 0.40 = 2.4 m2
         self.assertEqual(coffrage["quantite"], 2.4)
-        # poids_acier = 0.90 * 80 = 72 kg
-        self.assertEqual(acier["quantite"], 72.0)
+        # poids_acier = 0.90 * 50 = 45 kg
+        self.assertEqual(acier["quantite"], 45.0)
 
     def test_calculer_projet_exclut_non_valides(self):
         # On passe un élément en statut PROPOSE et un en MODIFIE
@@ -225,8 +224,8 @@ class DQEAPITestCase(APITestCase):
             type_element=ElementStructurel.TypeElement.POTEAU,
             identifiant="P1",
             hauteur_poteau=3.0,
-            resultat_calcul={"largeur_cm": 20, "profondeur_cm": 20},
-            resultat_valide={"largeur_cm": 20, "profondeur_cm": 20},
+            resultat_calcul={"cote_cm": 20},
+            resultat_valide={"cote_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
         response = self.client.post(self.url, {"export": "word"})
@@ -239,8 +238,8 @@ class DQEAPITestCase(APITestCase):
             type_element=ElementStructurel.TypeElement.POTEAU,
             identifiant="P1",
             hauteur_poteau=3.0,
-            resultat_calcul={"largeur_cm": 20, "profondeur_cm": 20},
-            resultat_valide={"largeur_cm": 20, "profondeur_cm": 20},
+            resultat_calcul={"cote_cm": 20},
+            resultat_valide={"cote_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
         # Test avec GET
@@ -255,8 +254,8 @@ class DQEAPITestCase(APITestCase):
             type_element=ElementStructurel.TypeElement.POTEAU,
             identifiant="P1",
             hauteur_poteau=3.0,
-            resultat_calcul={"largeur_cm": 20, "profondeur_cm": 20},
-            resultat_valide={"largeur_cm": 20, "profondeur_cm": 20},
+            resultat_calcul={"cote_cm": 20},
+            resultat_valide={"cote_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
         # Test avec POST
