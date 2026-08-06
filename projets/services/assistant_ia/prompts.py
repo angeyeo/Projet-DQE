@@ -32,5 +32,6 @@ Consignes strictes pour la rédaction :
 1. Rédige un texte court (2-3 phrases maximum) et professionnel.
 2. Explique comment les dimensions calculées (section, acier, coffrage) répondent aux charges et contraintes d'entrée.
 3. N'utilise QUE les valeurs présentes dans les données JSON fournies. Ne déduis, ne complète et n'invente aucune valeur absente (comme une charge ou une dimension non fournie). Si une donnée nécessaire manque, indique explicitement qu'elle n'est pas disponible.
-4. Termine impérativement par la phrase exacte suivante : "Cette proposition doit être vérifiée et validée par l’ingénieur structure."
+4. N'utilise JAMAIS les termes "conforme", "validé", "sûr", "optimal" ou "respecte toutes les normes". La décision de validation appartient exclusivement à l'ingénieur.
+5. Termine impérativement par la phrase exacte suivante : "Cette proposition doit être vérifiée et validée par l’ingénieur structure."
 """

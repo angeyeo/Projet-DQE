@@ -5,6 +5,14 @@ import urllib.request
 import urllib.error
 from abc import ABC, abstractmethod
 
+class LLMServiceError(Exception):
+    """Exception levée en cas de défaillance contrôlée du service LLM externe."""
+    def __init__(self, message: str, code: str = "LLM_PROVIDER_ERROR", status_code: int = 502):
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+
+
 class BaseAIClient(ABC):
     @abstractmethod
     def appeler_llm(self, prompt: str, forcer_json: bool = False) -> str:
@@ -113,7 +121,8 @@ class GeminiAIClient(BaseAIClient):
         self.timeout = timeout
 
     def appeler_llm(self, prompt: str, forcer_json: bool = False) -> str:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+        # Sécurité : la clé d'API est transmise uniquement via l'en-tête HTTP x-goog-api-key (jamais dans l'URL)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
         payload = {
             "contents": [{
                 "parts": [{"text": prompt}]
@@ -126,18 +135,66 @@ class GeminiAIClient(BaseAIClient):
         req = urllib.request.Request(
             url,
             data=req_data,
-            headers={"Content-Type": "application/json"}
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.api_key
+            },
+            method="POST"
         )
+
+        max_bytes = int(os.getenv("LLM_MAX_RESPONSE_BYTES", "65536"))
 
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                res_data = json.loads(response.read().decode("utf-8"))
+                raw_bytes = response.read(max_bytes + 1)
+                if len(raw_bytes) > max_bytes:
+                    raise LLMServiceError(
+                        "La réponse du service LLM dépasse la taille maximale autorisée.",
+                        code="LLM_RESPONSE_TOO_LARGE",
+                        status_code=502
+                    )
+                res_data = json.loads(raw_bytes.decode("utf-8"))
                 text = res_data["candidates"][0]["content"]["parts"][0]["text"]
                 return text
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Erreur réseau Gemini : {str(exc)}") from exc
+        except LLMServiceError:
+            raise
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                raise LLMServiceError(
+                    "Le quota du service LLM est temporairement épuisé.",
+                    code="LLM_QUOTA_EXCEEDED",
+                    status_code=503
+                ) from None
+            elif exc.code in (401, 403):
+                raise LLMServiceError(
+                    "Le service d'assistance IA est temporairement indisponible (erreur de configuration serveur).",
+                    code="LLM_PROVIDER_AUTH_ERROR",
+                    status_code=502
+                ) from None
+            raise LLMServiceError(
+                f"Le fournisseur LLM a retourné une erreur HTTP {exc.code}.",
+                code="LLM_PROVIDER_ERROR",
+                status_code=502
+            ) from None
+        except (urllib.error.URLError, TimeoutError) as exc:
+            err_str = str(exc).lower()
+            if "timed out" in err_str:
+                raise LLMServiceError(
+                    "Le délai d'attente de réponse du service LLM a expiré.",
+                    code="LLM_TIMEOUT",
+                    status_code=504
+                ) from None
+            raise LLMServiceError(
+                "Le service LLM est temporairement indisponible.",
+                code="LLM_UNAVAILABLE",
+                status_code=503
+            ) from None
         except Exception as exc:
-            raise RuntimeError(f"Erreur inattendue Gemini : {str(exc)}") from exc
+            raise LLMServiceError(
+                "Une erreur inattendue est survenue lors de l'accès au service LLM.",
+                code="LLM_UNEXPECTED_ERROR",
+                status_code=502
+            ) from None
 
 
 def get_ai_client() -> BaseAIClient:

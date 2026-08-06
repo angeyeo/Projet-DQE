@@ -14,7 +14,9 @@ Points clés :
 import logging
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -28,6 +30,9 @@ from .serializers import (
     ElementValidationSerializer,
     PosteMainDoeuvreSerializer,
 )
+from .services.assistant_ia.parser import structurer_description_projet
+from .services.assistant_ia.explanations import expliquer_resultat_element
+from .services.assistant_ia.client import LLMServiceError
 from .services import calculer_element, recalculer_projet, CalculNonDisponible
 from moteur_calcul.validators import EntreeInvalide
 
@@ -216,6 +221,10 @@ class PosteMainDoeuvreViewSet(viewsets.ModelViewSet):
 
 
 class AssistantStructurerView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "assistant_structurer"
+
     def post(self, request):
         description = request.data.get("description")
         if not isinstance(description, str) or not description.strip():
@@ -239,14 +248,23 @@ class AssistantStructurerView(APIView):
                 {"detail": str(exc), "code": "LLM_INVALID_INPUT"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        except LLMServiceError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code},
+                status=exc.status_code,
+            )
         except Exception as exc:
             return Response(
-                {"detail": "La réponse de l'assistant n'a pas pu être validée.", "code": "LLM_INVALID_RESPONSE", "erreur": str(exc)},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"detail": "Une erreur inattendue est survenue.", "code": "LLM_INVALID_RESPONSE", "erreur": str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
             )
 
 
 class AssistantExpliquerView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "assistant_expliquer"
+
     def post(self, request):
         element_id = request.data.get("element_id")
         if not element_id:
@@ -296,8 +314,13 @@ class AssistantExpliquerView(APIView):
                 {"detail": str(exc), "code": "LLM_INVALID_INPUT"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        except LLMServiceError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code},
+                status=exc.status_code,
+            )
         except Exception as exc:
             return Response(
-                {"detail": "La réponse de l'assistant n'a pas pu être validée.", "code": "LLM_INVALID_RESPONSE", "erreur": str(exc)},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"detail": "Une erreur inattendue est survenue.", "code": "LLM_INVALID_RESPONSE", "erreur": str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
             )

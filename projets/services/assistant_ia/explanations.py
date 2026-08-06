@@ -1,3 +1,5 @@
+import re
+import json
 from .client import get_ai_client, MockAIClient
 from .prompts import PROMPT_EXPLICATION
 
@@ -5,6 +7,26 @@ FALLBACK_MESSAGE = (
     "Aucun résultat technique exploitable n'est disponible "
     "pour cet élément."
 )
+
+
+def extraire_nombres(texte: str) -> set[str]:
+    """Extrait et normalise tous les nombres (entiers, décimaux, négatifs) présents dans une chaîne de texte."""
+    # Supprimer les espaces séparateurs de milliers (ex: 1 000 -> 1000)
+    cleaned = re.sub(r"(\d)\s+(\d)", r"\1\2", texte)
+    # Remplacer les virgules décimales par des points
+    cleaned = cleaned.replace(",", ".")
+    matches = re.findall(r"(?<!\w)-?\d+(?:\.\d+)?", cleaned)
+    normalized = set()
+    for m in matches:
+        normalized.add(m)
+        try:
+            val = float(m)
+            if val.is_integer():
+                normalized.add(str(int(val)))
+            normalized.add(str(val))
+        except ValueError:
+            pass
+    return normalized
 
 
 def expliquer_resultat_element(element_data: dict) -> dict:
@@ -57,7 +79,26 @@ def expliquer_resultat_element(element_data: dict) -> dict:
     # 3. Appel du LLM
     raw_explanation = client.appeler_llm(prompt, forcer_json=False)
 
-    # 4. Détermination de la source réelle
+    # 4. Post-validation des valeurs numériques : vérification anti-hallucination
+    payload_autorise = {
+        "repere": str(repere),
+        "type_element": str(type_element),
+        "parametres": parametres_filtres,
+        "resultats": resultats_filtres,
+    }
+    nombres_autorises = extraire_nombres(json_compact(payload_autorise))
+    nombres_produits = extraire_nombres(raw_explanation)
+
+    nombres_inventes = nombres_produits - nombres_autorises
+    if nombres_inventes:
+        return {
+            "explication": "L’explication générée n’a pas pu être validée (présence de données non vérifiées).",
+            "source": "FALLBACK_LOCAL",
+            "explication_technique_disponible": False,
+            "validation_humaine_requise": True,
+        }
+
+    # 5. Détermination de la source réelle
     source = "MOCK" if isinstance(client, MockAIClient) else "GEMINI"
 
     return {

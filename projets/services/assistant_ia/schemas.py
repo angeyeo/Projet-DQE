@@ -26,6 +26,25 @@ def valider_nombre(value, nom_champ):
     return nombre
 
 
+import re
+
+def niveaux_depuis_configuration(configuration: str | None) -> int | None:
+    """Déduit le nombre de niveaux théoriques depuis la chaîne de configuration (ex: 'R+2' -> 3, 'RDC' -> 1)."""
+    if configuration is None:
+        return None
+
+    valeur = str(configuration).strip().upper()
+
+    if valeur in {"RDC", "R+0"}:
+        return 1
+
+    match = re.fullmatch(r"R\+(\d+)", valeur)
+    if not match:
+        return None
+
+    return int(match.group(1)) + 1
+
+
 def valider_donnees_extraites(data: dict) -> dict:
     """
     Valide de manière rigoureuse les données extraites par le LLM
@@ -45,7 +64,12 @@ def valider_donnees_extraites(data: dict) -> dict:
         "avertissements": [],
     }
 
-    # 1. Validation de nombre_niveaux
+    # 1. Validation de la configuration (ex: "R+2")
+    config = data.get("configuration")
+    if config is not None:
+        res["configuration"] = str(config).strip()
+
+    # 2. Validation de nombre_niveaux
     nombre_niveaux = data.get("nombre_niveaux")
     if nombre_niveaux is not None:
         val_int = valider_entier(nombre_niveaux, "nombre_niveaux")
@@ -53,10 +77,14 @@ def valider_donnees_extraites(data: dict) -> dict:
             raise ValueError("Le nombre de niveaux doit être compris entre 1 et 100.")
         res["nombre_niveaux"] = val_int
 
-    # 2. Validation de la configuration (ex: "R+2")
-    config = data.get("configuration")
-    if config is not None:
-        res["configuration"] = str(config).strip()
+    # 3. Validation croisée entre configuration et nombre_niveaux
+    niveaux_config = niveaux_depuis_configuration(res["configuration"])
+    if (
+        niveaux_config is not None
+        and res["nombre_niveaux"] is not None
+        and niveaux_config != res["nombre_niveaux"]
+    ):
+        raise ValueError("La configuration et le nombre de niveaux sont incohérents.")
 
     # 3. Validation de l'usage
     usage = data.get("usage")
