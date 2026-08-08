@@ -16,10 +16,17 @@ MODIFIÉ : generer_dqe accepte désormais les méthodes GET et POST pour
 assurer la compatibilité ascendante avec la suite de tests REST API.
 """
 
+import logging
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.views import APIView
 from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.utils.text import slugify
 
 from .models import Projet, ElementStructurel, PosteMainDoeuvre
 from .serializers import (
@@ -28,10 +35,15 @@ from .serializers import (
     ElementValidationSerializer,
     PosteMainDoeuvreSerializer,
 )
+
 from .services.calculations import calculer_element, recalculer_projet, CalculNonDisponible
 from .services.dqe_calculator import calculer_projet_dqe
 from .services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
+from .services.assistant_ia import structurer_description_projet, expliquer_resultat_element
+from .services.assistant_ia.client import LLMServiceError
 from moteur_calcul.validators import EntreeInvalide
+
+logger = logging.getLogger(__name__)
 
 class ProjetViewSet(viewsets.ModelViewSet):
     queryset = Projet.objects.all()
@@ -202,3 +214,109 @@ class PosteMainDoeuvreViewSet(viewsets.ModelViewSet):
         if projet_id:
             queryset = queryset.filter(projet_id=projet_id)
         return queryset
+
+
+class AssistantStructurerView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "assistant_structurer"
+
+    def post(self, request):
+        description = request.data.get("description")
+        if not isinstance(description, str) or not description.strip():
+            return Response(
+                {"detail": "La description du projet est requise."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        description = description.strip()
+        if len(description) > 1000:
+            return Response(
+                {"detail": "La description ne doit pas dépasser 1000 caractères."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            res = structurer_description_projet(description)
+            return Response(res, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc), "code": "LLM_INVALID_INPUT"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except LLMServiceError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code},
+                status=exc.status_code,
+            )
+        except Exception as exc:
+            return Response(
+                {"detail": "Une erreur inattendue est survenue.", "code": "LLM_INVALID_RESPONSE", "erreur": str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+
+class AssistantExpliquerView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "assistant_expliquer"
+
+    def post(self, request):
+        element_id = request.data.get("element_id")
+        if not element_id:
+            return Response(
+                {"detail": "Le champ element_id est requis."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        element = get_object_or_404(ElementStructurel, id=element_id)
+
+        # Vérification qu'il y a un résultat de calcul
+        if element.resultat_calcul is None:
+            return Response(
+                {"detail": "Cet élément n'a aucun calcul de pré-dimensionnement disponible à expliquer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Extraction des paramètres d'entrée et de sortie selon le type d'élément
+        parametres = {}
+        if element.type_element == ElementStructurel.TypeElement.POTEAU:
+            parametres = {
+                "hauteur_poteau": element.hauteur_poteau,
+                "charge_calculee": element.charge_calculee
+            }
+        elif element.type_element == ElementStructurel.TypeElement.POUTRE:
+            parametres = {
+                "portee": element.portee,
+                "charge_lineaire": element.charge_lineaire
+            }
+        elif element.type_element == ElementStructurel.TypeElement.SEMELLE:
+            parametres = {
+                "charge_calculee": element.charge_calculee,
+                "taux_travail_sol": element.taux_travail_sol
+            }
+
+        elem_data = {
+            "repere": element.identifiant,
+            "type_element": element.type_element,
+            "parametres": parametres,
+            "resultats": element.resultat_calcul
+        }
+
+        try:
+            result = expliquer_resultat_element(elem_data)
+            return Response(result, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc), "code": "LLM_INVALID_INPUT"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except LLMServiceError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code},
+                status=exc.status_code,
+            )
+        except Exception as exc:
+            return Response(
+                {"detail": "Une erreur inattendue est survenue.", "code": "LLM_INVALID_RESPONSE", "erreur": str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
