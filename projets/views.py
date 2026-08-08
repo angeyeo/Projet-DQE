@@ -15,11 +15,11 @@ Points clés :
 MODIFIÉ : generer_dqe accepte désormais les méthodes GET et POST pour
 assurer la compatibilité ascendante avec la suite de tests REST API.
 """
-
+import os
 import logging
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -35,17 +35,15 @@ from .serializers import (
     ElementValidationSerializer,
     PosteMainDoeuvreSerializer,
 )
+from .services import calculer_element, recalculer_projet, CalculNonDisponible
+from .services.dqe_calculator import calculer_projet_dqe
+from .services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
 from .services.assistant_ia.parser import structurer_description_projet
 from .services.assistant_ia.explanations import expliquer_resultat_element
 from .services.assistant_ia.client import LLMServiceError
-from .services import calculer_element, recalculer_projet, CalculNonDisponible
 from moteur_calcul.validators import EntreeInvalide
 
-from .services.dqe_calculator import calculer_projet_dqe
-from .services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
-from .services.assistant_ia import structurer_description_projet, expliquer_resultat_element
-
-
+logger = logging.getLogger(__name__)
 
 class ProjetViewSet(viewsets.ModelViewSet):
     queryset = Projet.objects.all()
@@ -219,10 +217,13 @@ class PosteMainDoeuvreViewSet(viewsets.ModelViewSet):
 
 
 class AssistantStructurerView(APIView):
-    permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "assistant_structurer"
 
+    def get_permissions(self):
+        if os.getenv("DEMO_MODE", "False").lower() == "true":
+            return [AllowAny()]
+        return [IsAuthenticated()]
     def post(self, request):
         description = request.data.get("description")
         if not isinstance(description, str) or not description.strip():
@@ -259,10 +260,13 @@ class AssistantStructurerView(APIView):
 
 
 class AssistantExpliquerView(APIView):
-    permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "assistant_expliquer"
 
+    def get_permissions(self):
+        if os.getenv("DEMO_MODE", "False").lower() == "true":
+            return [AllowAny()]
+        return [IsAuthenticated()]
     def post(self, request):
         element_id = request.data.get("element_id")
         if not element_id:

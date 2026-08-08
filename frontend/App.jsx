@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import Header from './components/Header';
-import Stepper from './components/Stepper';
-import Step1_Parametres from './components/Step1_Parametres';
-import Step2_Calculs from './components/Step2_Calculs';
-import Step3_ValidationLock from './components/Step3_ValidationLock';
-import Step4_DQEExport from './components/Step4_DQEExport';
-import { dqeService } from './api/dqeService';
+import Header from './Header';
+import Stepper from './Stepper';
+import Step1_Parametres from './Step1_Parametres';
+import Step2_Calculs from './Step2_Calculs';
+import Step3_ValidationLock from './Step3_ValidationLock';
+import Step4_DQEExport from './Step4_DQEExport';
+import { dqeService } from './dqeService';
 
 export default function App() {
   const [currentStep, setCurrentStep] = useState(1);

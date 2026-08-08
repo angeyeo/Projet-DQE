@@ -114,5 +114,5 @@ class TestElementStructurelAPI(APITestCase):
         ElementStructurel.objects.create(
             projet=self.projet, type_element="poteau", identifiant="P1"
         )
-        response = self.client.post(f"/api/projets/{self.projet.id}/generer_dqe/")
+        response = self.client.get(f"/api/projets/{self.projet.id}/generer_dqe/")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

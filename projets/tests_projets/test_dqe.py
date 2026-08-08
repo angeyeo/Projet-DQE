@@ -59,9 +59,9 @@ class DQECalculatorTestCase(TestCase):
 
         # volume_beton = 0.20 * 0.20 * 3.0 = 0.12 m3
         self.assertEqual(beton["quantite"], 0.12)
-        # surf_coffrage = 2 * (0.20 + 0.20) * 3 = 2.4 m2
+        # surf_coffrage = 4 * 0.20 * 3.0 = 2.4 m2
         self.assertEqual(coffrage["quantite"], 2.4)
-        # poids_acier = 0.12 * 100 = 12 kg
+        # poids_acier = 0.12 * 125 = 15.0 kg
         self.assertEqual(acier["quantite"], 15.0)
 
     def test_calculer_element_poteau_poids_moteur(self):
@@ -88,6 +88,7 @@ class DQECalculatorTestCase(TestCase):
 
         self.assertEqual(beton["quantite"], 0.40)
         self.assertEqual(coffrage["quantite"], 5.0)
+        # poids_acier = 0.40 * 150 = 60 kg
         self.assertEqual(acier["quantite"], 60.0)
 
     def test_calculer_element_semelle(self):
@@ -100,6 +101,7 @@ class DQECalculatorTestCase(TestCase):
 
         self.assertEqual(beton["quantite"], 0.90)
         self.assertEqual(coffrage["quantite"], 2.4)
+        # poids_acier = 0.90 * 50 = 45 kg
         self.assertEqual(acier["quantite"], 45.0)
 
     def test_calculer_projet_exclut_non_valides(self):
@@ -186,7 +188,8 @@ class DQEAPITestCase(APITestCase):
         self.url = reverse("projet-generer-dqe", kwargs={"pk": self.projet.id})
 
     def test_generer_dqe_sans_elements_echoue(self):
-        response = self.client.post(f"{self.url}?export=pdf")
+        # Aucun élément dans le projet
+        response = self.client.get(f"{self.url}?export=pdf")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["erreur"], "Le projet ne contient aucun élément structurel.")
 
@@ -198,7 +201,7 @@ class DQEAPITestCase(APITestCase):
             hauteur_poteau=3.0,
             statut=ElementStructurel.Statut.PROPOSE
         )
-        response = self.client.post(f"{self.url}?export=pdf")
+        response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("erreur", response.data)
         self.assertIn("P1", response.data["elements_en_attente"])
@@ -213,7 +216,7 @@ class DQEAPITestCase(APITestCase):
             resultat_valide={"cote_cm": 20, "largeur_cm": 20, "profondeur_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
-        response = self.client.post(f"{self.url}?export=word")
+        response = self.client.get(f"{self.url}?export=word")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("erreur", response.data)
 
@@ -242,7 +245,8 @@ class DQEAPITestCase(APITestCase):
             resultat_valide={"cote_cm": 20, "largeur_cm": 20, "profondeur_cm": 20},
             statut=ElementStructurel.Statut.VALIDE
         )
-        response = self.client.post(f"{self.url}?export=excel")
+        # Test avec GET
+        response = self.client.get(f"{self.url}?export=excel")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
             response["Content-Type"],
