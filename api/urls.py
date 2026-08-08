@@ -14,12 +14,15 @@ Endpoints exposés :
 - /api/postes-main-doeuvre/{id}/     GET, PUT, PATCH, DELETE
 """
 
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from projets.views import (
     ProjetViewSet,
     ElementStructurelViewSet,
     PosteMainDoeuvreViewSet,
+    AssistantStructurerView,
+    AssistantExpliquerView,
 )
 
 router = DefaultRouter()
@@ -27,4 +30,7 @@ router.register(r"projets", ProjetViewSet, basename="projet")
 router.register(r"elements", ElementStructurelViewSet, basename="element")
 router.register(r"postes-main-doeuvre", PosteMainDoeuvreViewSet, basename="poste-main-doeuvre")
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    path("assistant/structurer-projet/", AssistantStructurerView.as_view(), name="assistant-structurer"),
+    path("assistant/expliquer-element/", AssistantExpliquerView.as_view(), name="assistant-expliquer"),
+]

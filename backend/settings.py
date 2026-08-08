@@ -43,6 +43,13 @@ INSTALLED_APPS = [
     'projets',
 ]
 
+REST_FRAMEWORK = {
+    'DEFAULT_THROTTLE_RATES': {
+        'assistant_structurer': '10/min',
+        'assistant_expliquer': '20/min',
+    },
+}
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
