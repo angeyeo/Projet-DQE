@@ -125,6 +125,7 @@ class AssistantIAUnitTestCase(TestCase):
 class AssistantIAAPITestCase(APITestCase):
     def setUp(self):
         os.environ["LLM_PROVIDER"] = "mock"
+        os.environ["DEMO_MODE"] = "False"
         self.user = User.objects.create_user(username="testuser", password="password123")
         self.client.force_authenticate(user=self.user)
 
