@@ -121,7 +121,6 @@ class AssistantIAUnitTestCase(TestCase):
             self.assertFalse(res["explication_technique_disponible"])
             self.assertIn("pas pu être validée", res["explication"])
 
-
 class AssistantIAAPITestCase(APITestCase):
     def setUp(self):
         os.environ["LLM_PROVIDER"] = "mock"

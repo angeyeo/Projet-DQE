@@ -35,11 +35,11 @@ from .serializers import (
     ElementValidationSerializer,
     PosteMainDoeuvreSerializer,
 )
-
-from .services.calculations import calculer_element, recalculer_projet, CalculNonDisponible
+from .services import calculer_element, recalculer_projet, CalculNonDisponible
 from .services.dqe_calculator import calculer_projet_dqe
 from .services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
-from .services.assistant_ia import structurer_description_projet, expliquer_resultat_element
+from .services.assistant_ia.parser import structurer_description_projet
+from .services.assistant_ia.explanations import expliquer_resultat_element
 from .services.assistant_ia.client import LLMServiceError
 from moteur_calcul.validators import EntreeInvalide
 
@@ -224,7 +224,6 @@ class AssistantStructurerView(APIView):
         if os.getenv("DEMO_MODE", "False").lower() == "true":
             return [AllowAny()]
         return [IsAuthenticated()]
-
     def post(self, request):
         description = request.data.get("description")
         if not isinstance(description, str) or not description.strip():
@@ -268,7 +267,6 @@ class AssistantExpliquerView(APIView):
         if os.getenv("DEMO_MODE", "False").lower() == "true":
             return [AllowAny()]
         return [IsAuthenticated()]
-
     def post(self, request):
         element_id = request.data.get("element_id")
         if not element_id:
