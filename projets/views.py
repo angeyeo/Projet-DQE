@@ -221,7 +221,7 @@ class AssistantStructurerView(APIView):
     throttle_scope = "assistant_structurer"
 
     def get_permissions(self):
-        if os.getenv("DEMO_MODE", "True") == "True":
+        if os.getenv("DEMO_MODE", "False").lower() == "true":
             return [AllowAny()]
         return [IsAuthenticated()]
 
@@ -265,7 +265,7 @@ class AssistantExpliquerView(APIView):
     throttle_scope = "assistant_expliquer"
 
     def get_permissions(self):
-        if os.getenv("DEMO_MODE", "True") == "True":
+        if os.getenv("DEMO_MODE", "False").lower() == "true":
             return [AllowAny()]
         return [IsAuthenticated()]
 
