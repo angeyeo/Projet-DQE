@@ -72,6 +72,15 @@ LF_SUR_L0_DEFAUT = 1.0
 # s'applique plus (BAEL : méthode forfaitaire valable jusqu'à lambda=70)
 ELANCEMENT_MAX_METHODE_SIMPLIFIEE = 70
 
+# Hypothèse sur le délai d'application de la majorité des charges,
+# pour le coefficient de réduction alpha2 (méthode forfaitaire BAEL).
+# Le document technicien (fichier Excel "Mon Métreur") prévoit 3 cas
+# selon ce délai (>90j, 28-90j, <28j) -- on suppose ici le cas le plus
+# courant en bâtiment (>90 jours, structure achevée avant mise en
+# charge complète), donc alpha2 = alpha1 (pas de division supplémentaire).
+# À ajuster si le technicien précise un cas différent pour un projet donné.
+DELAI_APPLICATION_CHARGES_SUPPOSE = "superieur_90_jours"
+
 # Ratios de pré-dimensionnement rapide (poutres, dalles) -- section 3.2/3.3
 RATIO_HAUTEUR_POUTRE_CONTINUE = (10, 12)     # portée / 10 à 12
 RATIO_HAUTEUR_POUTRE_ISOSTATIQUE = (8, 10)   # portée / 8 à 10
@@ -95,6 +104,14 @@ RATIO_ACIER_DALLES_KG_M3 = (70, 100)
 
 # Densité de l'acier (pour convertir une section théorique en poids réel)
 DENSITE_ACIER_KG_M3 = 7850.0
+
+# Coefficient gamma (Mu/Mser) supposé quand le moment de service n'est
+# pas fourni séparément (notre moteur ne prend actuellement qu'une
+# charge linéaire déjà pondérée ELU, pas G et Q séparés). 1,45 est une
+# valeur médiane raisonnable entre 1,35 (G seul) et 1,5 (Q dominant) --
+# à remplacer par un vrai calcul si G et Q sont un jour fournis
+# séparément à dimensionner_poutre().
+GAMMA_ELU_ELS_SUPPOSE = 1.45
 
 # Bornes réalistes pour la validation des entrées
 PORTEE_MIN_M = 1.0
