@@ -31,6 +31,34 @@ CHARGES_EXPLOITATION = {
 # Poids volumique du béton armé, en kN/m³
 POIDS_VOLUMIQUE_BETON = 25.0
 
+# --- Charges permanentes composées (Phase 2, module 2) ---
+#
+# Un plancher réel n'est pas "une dalle béton" : il empile plusieurs
+# couches (forme de pente, isolation, étanchéité, chape, revêtement,
+# enduit sous face, cloisons...). Ce catalogue sert de valeurs par
+# défaut pour l'interface de saisie et pour les tests.
+#
+# Deux façons de décrire une couche :
+#   - "poids_volumique_kn_m3" : le poids dépend de l'épaisseur saisie
+#   - "poids_surfacique_kn_m2" : poids déjà ramené au m² (épaisseur fixe
+#     ou élément non homogène : étanchéité, faux plafond, cloisons)
+#
+# ATTENTION -- VALEURS COURANTES DE LA PRATIQUE, PAS ENCORE VALIDÉES
+# par le technicien BTP (le document reçu ne donne que le béton armé).
+# À faire confirmer avant utilisation en production.
+POIDS_COUCHES_COURANTES = {
+    "dalle_beton_arme":     {"poids_volumique_kn_m3": 25.0},
+    "beton_maigre":         {"poids_volumique_kn_m3": 22.0},
+    "forme_de_pente":       {"poids_volumique_kn_m3": 22.0},
+    "chape_mortier":        {"poids_volumique_kn_m3": 20.0},
+    "carrelage_colle":      {"poids_surfacique_kn_m2": 0.50},
+    "etancheite_multicouche": {"poids_surfacique_kn_m2": 0.12},
+    "isolation_polystyrene": {"poids_surfacique_kn_m2": 0.05},
+    "enduit_sous_face":     {"poids_surfacique_kn_m2": 0.30},
+    "faux_plafond":         {"poids_surfacique_kn_m2": 0.20},
+    "cloisons_legeres":     {"poids_surfacique_kn_m2": 1.00},
+}
+
 # Résistance caractéristique du béton par défaut, en MPa (fc28 usage courant)
 RESISTANCE_BETON_DEFAUT = 25.0
 
@@ -81,6 +109,35 @@ ELANCEMENT_MAX_METHODE_SIMPLIFIEE = 70
 # À ajuster si le technicien précise un cas différent pour un projet donné.
 DELAI_APPLICATION_CHARGES_SUPPOSE = "superieur_90_jours"
 
+# --- Dégression des charges d'exploitation (Phase 2, module 1) ---
+#
+# Loi de dégression NF P06-001 : sur un bâtiment à plusieurs niveaux,
+# tous les étages ne sont pas à pleine charge d'exploitation en même
+# temps ; la charge cumulée qui descend sur un appui est donc réduite
+# au fur et à mesure qu'on descend.
+#
+#   Sous le niveau n (n = nombre d'étages chargés au-dessus, toiture
+#   exclue) :   Q_cumulé = Q_toiture + coef(n) x (Q1 + ... + Qn)
+#
+#   coef(n) = valeur du tableau ci-dessous pour n <= 4
+#   coef(n) = (3 + n) / (2 x n) pour n >= 5   (les deux se rejoignent
+#             à n=5 : (3+5)/10 = 0,80)
+#
+# ATTENTION -- HYPOTHÈSE À CONFIRMER : ce sont les coefficients de la
+# règle française. La feuille de route évoque une suite légèrement
+# différente (1 / 0,9 / 0,8 / 0,7) pour la Côte d'Ivoire. Tant que le
+# technicien BTP n'a pas tranché, on applique la règle française
+# (documentée et plus prudente que 0,9/0,8/0,7). Pour basculer, il
+# suffit de remplacer cette liste et la formule dans
+# descente_charges.coefficient_degression().
+COEFFICIENTS_DEGRESSION = [1.00, 0.95, 0.90, 0.85]  # n = 1, 2, 3, 4
+
+# La dégression suppose des occupations indépendantes d'un niveau à
+# l'autre. Elle ne s'applique PAS aux usages où tous les niveaux
+# peuvent être chargés à fond simultanément (commerce, industrie), ni
+# aux charges de toiture (jamais dégressées).
+USAGES_AVEC_DEGRESSION = ("habitation", "bureau")
+
 # Ratios de pré-dimensionnement rapide (poutres, dalles) -- section 3.2/3.3
 RATIO_HAUTEUR_POUTRE_CONTINUE = (10, 12)     # portée / 10 à 12
 RATIO_HAUTEUR_POUTRE_ISOSTATIQUE = (8, 10)   # portée / 8 à 10
@@ -94,6 +151,18 @@ EPAISSEUR_DALLE_MAX_COURANTE_CM = 16
 CONTRAINTE_SOL_DEFAUT_MIN = 150.0
 CONTRAINTE_SOL_DEFAUT_MAX = 200.0
 CONTRAINTE_SOL_DEFAUT = 180.0  # valeur milieu utilisée si non renseignée
+
+# Minima constructifs des semelles (pratique courante, pas une exigence
+# de calcul : une semelle plus étroite/plate que ça n'est pas réalisable
+# proprement sur chantier).
+LARGEUR_MIN_SEMELLE_FILANTE_CM = 40
+HAUTEUR_MIN_SEMELLE_CM = 20
+ENROBAGE_SEMELLE_CM = 5  # aciers coulés contre le sol / béton de propreté
+
+# Largeur au-delà de laquelle une semelle filante n'a plus de sens
+# constructif : à ce stade les semelles se rejoignent et c'est un
+# radier général qu'il faut étudier, pas une semelle continue.
+LARGEUR_MAX_SEMELLE_FILANTE_CM = 300
 
 # Ratios d'acier par volume de béton (kg/m³), estimation simplifiée
 # pour le MVP avant calcul détaillé du ferraillage -- section 5.2
