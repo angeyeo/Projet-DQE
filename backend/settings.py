@@ -37,10 +37,18 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'backend/api',
-    'backend/moteur_calcul',
-    'backend/projets',
+    'rest_framework',
+    'api',
+    'moteur_calcul',
+    'projets',
 ]
+
+REST_FRAMEWORK = {
+    'DEFAULT_THROTTLE_RATES': {
+        'assistant_structurer': '10/min',
+        'assistant_expliquer': '20/min',
+    },
+}
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
