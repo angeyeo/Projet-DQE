@@ -39,6 +39,16 @@ class ElementStructurel(models.Model):
         MODIFIE = "modifie", "Modifié"
         VALIDE = "valide", "Validé"
 
+    poteau_associe = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='semelles_associees',
+        limit_choices_to={'type_element': 'poteau'},
+        help_text="Poteau supporté par cette semelle (uniquement si type_element == 'semelle')"
+    )
+
     projet = models.ForeignKey(Projet, on_delete=models.CASCADE, related_name="elements")
     type_element = models.CharField(max_length=20, choices=TypeElement.choices)
     identifiant = models.CharField(
@@ -104,3 +114,33 @@ class PosteMainDoeuvre(models.Model):
 
     def __str__(self):
         return f"{self.designation} ({self.projet.nom})"
+
+class CoucheCharge(models.Model):
+    """
+    Représente une couche composant une charge permanente complexe (ex: carrelage, chape, isolant).
+    """
+    projet = models.ForeignKey(
+        Projet, 
+        on_delete=models.CASCADE, 
+        related_name='couches_charges',
+        null=True, 
+        blank=True
+    )
+    element = models.ForeignKey(
+        ElementStructurel,
+        on_delete=models.CASCADE,
+        related_name='couches_charges',
+        null=True,
+        blank=True
+    )
+    designation = models.CharField(max_length=150, help_text="Ex: Carrelage + mortier de pose")
+    epaisseur_cm = models.FloatField(help_text="Épaisseur en cm")
+    poids_volumique_kn_m3 = models.FloatField(help_text="Poids volumique en kN/m³")
+    
+    @property
+    def poids_surfacique_kn_m2(self):
+        """Calcul automatique : (Epaisseur / 100) * Poids Volumique"""
+        return (self.epaisseur_cm / 100.0) * self.poids_volumique_kn_m3
+
+    def __str__(self):
+        return f"{self.designation} ({self.epaisseur_cm} cm)"
