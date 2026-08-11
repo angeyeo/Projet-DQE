@@ -33,6 +33,8 @@ class ElementStructurel(models.Model):
         POTEAU = "poteau", "Poteau"
         POUTRE = "poutre", "Poutre"
         SEMELLE = "semelle", "Semelle"
+        DALLE = "dalle", "Dalle Pleine"                  # Module 7
+        SEMELLE_FILANTE = "semelle_filante", "Semelle Filante"  # Module 4
 
     class Statut(models.TextChoices):
         PROPOSE = "propose", "Proposé"
