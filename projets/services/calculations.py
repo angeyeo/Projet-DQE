@@ -53,14 +53,21 @@ def calculer_element(element: ElementStructurel) -> dict:
                 charge_calculee=element.charge_calculee,
             )
         elif element.type_element == getattr(ElementStructurel.TypeElement, "SEMELLE_FILANTE", "semelle_filante"):
-            # Module 4 : Import dynamique sécurisé si la formule Dev 1 n'est pas encore poussée
+            # MODIFIÉ (Ange) : le module dimensionner_semelle_filante() vit dans
+            # dimensionnement_semelles.py (pas un fichier séparé
+            # dimensionnement_semelles_filantes.py qui n'existe pas) -- l'import
+            # précédent échouait toujours, silencieusement transformé en
+            # CalculNonDisponible, donc jamais détecté par les tests unitaires
+            # du moteur (qui appellent la fonction directement, pas via l'API).
             try:
-                from moteur_calcul.formules.dimensionnement_semelles_filantes import dimensionner_semelle_filante
+                from moteur_calcul.formules.dimensionnement_semelles import dimensionner_semelle_filante
             except (ImportError, ModuleNotFoundError) as err:
                 raise CalculNonDisponible("Module de calcul des semelles filantes pas encore disponible.") from err
 
+            # MODIFIÉ (Ange) : le paramètre réel s'appelle charge_lineaire_kn_m,
+            # pas charge_lineaire -- l'appel précédent levait un TypeError.
             return dimensionner_semelle_filante(
-                charge_lineaire=element.charge_lineaire,
+                charge_lineaire_kn_m=element.charge_lineaire,
                 taux_travail_sol=element.taux_travail_sol,
             )
         else:

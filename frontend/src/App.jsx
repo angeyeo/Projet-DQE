@@ -34,12 +34,16 @@ export default function App() {
   // Données du Devis DQE
   const [dqeData, setDqeData] = useState(null);
 
+  // Id du projet côté backend (null tant qu'on est en mode local/fallback)
+  const [projetId, setProjetId] = useState(null);
+
   const updateProjectData = (newFields) => {
     setProjectData((prev) => ({ ...prev, ...newFields }));
   };
 
   const handleCalculate = async () => {
-    const results = await dqeService.calculateSections(projectData);
+    const { projetId: id, ...results } = await dqeService.calculateSections(projectData);
+    setProjetId(id);
     setSections(results);
     setActiveView('step2');
   };
@@ -49,17 +53,35 @@ export default function App() {
   };
 
   const handleGenerateDQE = async () => {
-    const dqeResults = await dqeService.calculateDQE(sections, projectData);
+    const dqeResults = await dqeService.calculateDQE(projetId, sections);
     setDqeData(dqeResults);
     setActiveView('step4');
   };
 
-  const toggleLock = (id, category) => {
+  // Verrouille/déverrouille un élément. Si un elementId réel existe
+  // (mode API), on appelle /elements/{id}/valider/ côté backend --
+  // c'est la seule façon officielle de faire passer un élément à
+  // 'valide' (voir projets/views.py). En mode local (elementId absent),
+  // on se contente de basculer l'état en mémoire.
+  const toggleLock = async (id, category) => {
     const key = category.toLowerCase() + 's';
+    const item = (sections[key] || []).find((i) => i.id === id);
+    if (!item) return;
+
+    const nextLocked = !item.locked;
+
+    if (nextLocked && item.elementId) {
+      try {
+        await dqeService.validerElementDRF(item.elementId, item.resultat);
+      } catch (e) {
+        console.warn('Validation backend impossible, verrou local uniquement :', e.message);
+      }
+    }
+
     setSections((prev) => ({
       ...prev,
-      [key]: prev[key].map((item) =>
-        item.id === id ? { ...item, locked: !item.locked } : item
+      [key]: prev[key].map((i) =>
+        i.id === id ? { ...i, locked: nextLocked, statut: nextLocked ? 'valide' : 'modifie' } : i
       ),
     }));
   };
