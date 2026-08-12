@@ -67,6 +67,18 @@ class ElementStructurel(models.Model):
     hauteur_poteau = models.FloatField(null=True, blank=True, help_text="mètres")
     taux_travail_sol = models.FloatField(null=True, blank=True, help_text="bars, pour une semelle")
 
+    # MODIFIÉ (Ange) : nécessaires pour calculer une quantité TOTALE au
+    # DQE -- le moteur ne renvoie qu'une épaisseur (dalle) ou des
+    # quantités "par mètre linéaire" (semelle filante), sans surface ni
+    # longueur totale, donc dqe_calculator.py ne pouvait rien chiffrer
+    # pour ces deux types sans ces champs.
+    surface_m2 = models.FloatField(
+        null=True, blank=True, help_text="m², pour une dalle -- surface totale à couler"
+    )
+    longueur_m = models.FloatField(
+        null=True, blank=True, help_text="mètres, pour une semelle filante -- longueur totale du mur porté"
+    )
+
     # Résultat proposé par le moteur de calcul (rempli automatiquement)
     resultat_calcul = models.JSONField(
         null=True, blank=True, help_text="Dict retourné par le moteur de calcul"

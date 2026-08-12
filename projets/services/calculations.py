@@ -48,10 +48,11 @@ def calculer_element(element: ElementStructurel) -> dict:
             except (ImportError, ModuleNotFoundError) as err:
                 raise CalculNonDisponible("Module de calcul des dalles pas encore disponible.") from err
 
-            return predimensionner_dalle(
-                portee=element.portee,
-                charge_calculee=element.charge_calculee,
-            )
+            # MODIFIÉ (Ange) : predimensionner_dalle() n'accepte que
+            # (portee, portant_deux_sens) -- "charge_calculee" n'existe
+            # pas dans sa signature, l'appel précédent levait un TypeError
+            # à chaque tentative de calcul d'une dalle.
+            return predimensionner_dalle(portee=element.portee)
         elif element.type_element == getattr(ElementStructurel.TypeElement, "SEMELLE_FILANTE", "semelle_filante"):
             # MODIFIÉ (Ange) : le module dimensionner_semelle_filante() vit dans
             # dimensionnement_semelles.py (pas un fichier séparé
