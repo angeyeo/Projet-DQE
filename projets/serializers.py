@@ -8,7 +8,8 @@ par le moteur de calcul (voir services.py).
 
 from rest_framework import serializers
 
-from .models import Projet, ElementStructurel, PosteMainDoeuvre
+# 1. Importer CoucheCharge une fois le modèle créé dans models.py
+from .models import Projet, ElementStructurel, PosteMainDoeuvre, CoucheCharge
 
 
 class ElementStructurelSerializer(serializers.ModelSerializer):
@@ -19,6 +20,7 @@ class ElementStructurelSerializer(serializers.ModelSerializer):
             "projet",
             "type_element",
             "identifiant",
+            "poteau_associe",  # <-- AJOUT MODULE 6 : Lien vers le poteau lié
             "portee",
             "charge_lineaire",
             "charge_calculee",
@@ -48,6 +50,23 @@ class ElementValidationSerializer(serializers.Serializer):
         return data
 
 
+# 2. AJOUT MODULE 2 : Serializer pour les couches de charges[cite: 1]
+class CoucheChargeSerializer(serializers.ModelSerializer):
+    poids_surfacique_kn_m2 = serializers.ReadOnlyField()
+
+    class Meta:
+        model = CoucheCharge
+        fields = [
+            "id",
+            "projet",
+            "element",
+            "designation",
+            "epaisseur_cm",
+            "poids_volumique_kn_m3",
+            "poids_surfacique_kn_m2",
+        ]
+
+
 class PosteMainDoeuvreSerializer(serializers.ModelSerializer):
     montant = serializers.SerializerMethodField()
 
@@ -73,6 +92,7 @@ class PosteMainDoeuvreSerializer(serializers.ModelSerializer):
 class ProjetSerializer(serializers.ModelSerializer):
     elements = ElementStructurelSerializer(many=True, read_only=True)
     postes_main_doeuvre = PosteMainDoeuvreSerializer(many=True, read_only=True)
+    couches_charges = CoucheChargeSerializer(many=True, read_only=True)  # <-- AJOUT MODULE 2[cite: 1]
     nb_elements_valides = serializers.SerializerMethodField()
     nb_elements_total = serializers.SerializerMethodField()
     total_main_doeuvre = serializers.SerializerMethodField()
@@ -86,6 +106,7 @@ class ProjetSerializer(serializers.ModelSerializer):
             "nb_niveaux",
             "elements",
             "postes_main_doeuvre",
+            "couches_charges",  # <-- AJOUT MODULE 2[cite: 1]
             "nb_elements_valides",
             "nb_elements_total",
             "total_main_doeuvre",

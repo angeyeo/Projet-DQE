@@ -12,8 +12,11 @@ Points clés :
   walkthrough -- un lien/URL de téléchargement est plus naturel en GET
   qu'en POST pour ce cas d'usage).
 
-MODIFIÉ : generer_dqe accepte désormais les méthodes GET et POST pour
-assurer la compatibilité ascendante avec la suite de tests REST API.
+MODIFIÉ :
+- generer_dqe accepte désormais les méthodes GET et POST pour
+  assurer la compatibilité ascendante avec la suite de tests REST API.
+- Ajout de CoucheChargeViewSet pour la gestion des charges permanentes multi-couches (Module 2).
+- Support des types DALLE et SEMELLE_FILANTE dans l'Assistant IA.
 """
 import os
 import logging
@@ -28,12 +31,13 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
 
-from .models import Projet, ElementStructurel, PosteMainDoeuvre
+from .models import Projet, ElementStructurel, PosteMainDoeuvre, CoucheCharge
 from .serializers import (
     ProjetSerializer,
     ElementStructurelSerializer,
     ElementValidationSerializer,
     PosteMainDoeuvreSerializer,
+    CoucheChargeSerializer,
 )
 from .services import calculer_element, recalculer_projet, CalculNonDisponible
 from .services.dqe_calculator import calculer_projet_dqe
@@ -44,6 +48,7 @@ from .services.assistant_ia.client import LLMServiceError
 from moteur_calcul.validators import EntreeInvalide
 
 logger = logging.getLogger(__name__)
+
 
 class ProjetViewSet(viewsets.ModelViewSet):
     queryset = Projet.objects.all()
@@ -98,7 +103,6 @@ class ProjetViewSet(viewsets.ModelViewSet):
             )
 
         # Pas de paramètre export -> retourne la structure JSON brute
-        # (utile pour debug/tests, comme on vient de le faire).
         if export_format is None:
             return Response(dqe_data, status=status.HTTP_200_OK)
 
@@ -189,7 +193,7 @@ class ElementStructurelViewSet(viewsets.ModelViewSet):
         """
         Si un élément déjà VALIDE est modifié via l'update standard,
         on le repasse automatiquement à MODIFIE -- il devra être
-        revalidé explicitement (verrou logiciel, voir docstring plus haut).
+        revalidé explicitement (verrou logiciel).
         """
         instance = serializer.instance
         if instance.statut == ElementStructurel.Statut.VALIDE:
@@ -198,11 +202,29 @@ class ElementStructurelViewSet(viewsets.ModelViewSet):
             serializer.save()
 
 
+class CoucheChargeViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet pour la gestion des couches de charges permanentes composées (Module 2).
+    """
+
+    queryset = CoucheCharge.objects.all()
+    serializer_class = CoucheChargeSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        projet_id = self.request.query_params.get("projet")
+        element_id = self.request.query_params.get("element")
+        if projet_id:
+            queryset = queryset.filter(projet_id=projet_id)
+        if element_id:
+            queryset = queryset.filter(element_id=element_id)
+        return queryset
+
+
 class PosteMainDoeuvreViewSet(viewsets.ModelViewSet):
     """
     Postes de main d'œuvre : toujours saisis manuellement par
-    l'ingénieur, jamais calculés automatiquement (voir docstring du
-    modèle PosteMainDoeuvre).
+    l'ingénieur, jamais calculés automatiquement.
     """
 
     queryset = PosteMainDoeuvre.objects.all()
@@ -224,6 +246,7 @@ class AssistantStructurerView(APIView):
         if os.getenv("DEMO_MODE", "False").lower() == "true":
             return [AllowAny()]
         return [IsAuthenticated()]
+
     def post(self, request):
         description = request.data.get("description")
         if not isinstance(description, str) or not description.strip():
@@ -267,6 +290,7 @@ class AssistantExpliquerView(APIView):
         if os.getenv("DEMO_MODE", "False").lower() == "true":
             return [AllowAny()]
         return [IsAuthenticated()]
+
     def post(self, request):
         element_id = request.data.get("element_id")
         if not element_id:
@@ -283,29 +307,39 @@ class AssistantExpliquerView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Extraction des paramètres d'entrée et de sortie selon le type d'élément
+        # Extraction des paramètres d'entrée selon le type d'élément
         parametres = {}
         if element.type_element == ElementStructurel.TypeElement.POTEAU:
             parametres = {
                 "hauteur_poteau": element.hauteur_poteau,
-                "charge_calculee": element.charge_calculee
+                "charge_calculee": element.charge_calculee,
             }
         elif element.type_element == ElementStructurel.TypeElement.POUTRE:
             parametres = {
                 "portee": element.portee,
-                "charge_lineaire": element.charge_lineaire
+                "charge_lineaire": element.charge_lineaire,
             }
         elif element.type_element == ElementStructurel.TypeElement.SEMELLE:
             parametres = {
                 "charge_calculee": element.charge_calculee,
-                "taux_travail_sol": element.taux_travail_sol
+                "taux_travail_sol": element.taux_travail_sol,
+            }
+        elif element.type_element == getattr(ElementStructurel.TypeElement, "DALLE", "dalle"):
+            parametres = {
+                "portee": element.portee,
+                "charge_calculee": element.charge_calculee,
+            }
+        elif element.type_element == getattr(ElementStructurel.TypeElement, "SEMELLE_FILANTE", "semelle_filante"):
+            parametres = {
+                "charge_lineaire": element.charge_lineaire,
+                "taux_travail_sol": element.taux_travail_sol,
             }
 
         elem_data = {
             "repere": element.identifiant,
             "type_element": element.type_element,
             "parametres": parametres,
-            "resultats": element.resultat_calcul
+            "resultats": element.resultat_calcul,
         }
 
         try:
