@@ -31,3 +31,59 @@ Cette mise à jour intègre l'ensemble des fonctionnalités backend requises pou
 ## 🧪 Validation & Suite de Tests
 - **Périmètre couvert** : Endpoints REST API, verrous logiciels de validation, génération DQE, Assistant IA et intégration du Moteur BTP.
 - **Résultat** : **100 % de réussite (59 tests sur 59 validés au vert — `OK`)**.
+---
+
+## ⚙️ Configuration de l'environnement (`.env`)
+
+Le projet utilise `python-dotenv` pour charger automatiquement les variables d'environnement depuis un fichier `.env` à la racine du projet.
+
+### Première installation (tous les développeurs)
+
+```bash
+# 1. Copier le template
+cp .env.example .env
+
+# 2. Installer les dépendances
+pip install -r requirements.txt
+```
+
+Le fichier `.env` n'est **jamais commité** (il est dans `.gitignore`). Il reste local à chaque machine.
+
+### Configuration pour la démo devant le jury
+
+Ouvrir le fichier `.env` et vérifier que ces deux lignes sont présentes :
+
+```env
+DEMO_MODE=True
+LLM_PROVIDER=mock
+```
+
+| Variable | Valeur démo | Explication |
+|---|---|---|
+| `DEMO_MODE` | `True` | Désactive l'authentification sur les endpoints IA |
+| `LLM_PROVIDER` | `mock` | Utilise le client IA local (pas besoin de clé API) |
+
+> ⚠️ **Si `DEMO_MODE` n'est pas à `True`, les endpoints IA renverront 401 Unauthorized.**
+
+### Configuration pour le smoke test Gemini réel
+
+Pour tester avec la vraie API Google Gemini :
+
+```env
+DEMO_MODE=True
+LLM_PROVIDER=gemini
+LLM_API_KEY=VOTRE_CLE_API_GOOGLE
+```
+
+> ⚠️ **Ne jamais commiter la clé API. Vérifier avec `git diff` avant tout commit.**
+
+### Résumé des variables disponibles
+
+| Variable | Défaut | Description |
+|---|---|---|
+| `DEMO_MODE` | `False` | `True` pour désactiver l'auth sur les endpoints IA |
+| `LLM_PROVIDER` | `mock` | `mock` (simulation locale) ou `gemini` (API réelle) |
+| `LLM_API_KEY` | _(vide)_ | Clé API Google Gemini (requise si `LLM_PROVIDER=gemini`) |
+| `LLM_MODEL` | `gemini-3.5-flash` | Modèle Gemini à utiliser |
+| `LLM_TIMEOUT_SECONDS` | `20` | Timeout des appels LLM en secondes |
+| `LLM_MAX_RESPONSE_BYTES` | `65536` | Taille max de la réponse LLM |
