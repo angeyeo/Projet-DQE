@@ -135,6 +135,86 @@ class DQECalculatorTestCase(TestCase):
 
         self.assertEqual(dqe_data["sous_totaux"]["main_doeuvre"], 75000)
 
+    def test_calculer_element_dalle(self):
+        dalle = ElementStructurel.objects.create(
+            projet=self.projet,
+            type_element=ElementStructurel.TypeElement.DALLE,
+            identifiant="D1",
+            portee=4.0,
+            surface_m2=50.0,
+            resultat_calcul={"epaisseur_cm": 15},
+            resultat_valide={"epaisseur_cm": 15},
+            statut=ElementStructurel.Statut.VALIDE
+        )
+        lignes = calculer_element_dqe(dalle, {})
+        self.assertEqual(len(lignes), 3)
+
+        beton = next(l for l in lignes if l["categorie"] == "BETON")
+        coffrage = next(l for l in lignes if l["categorie"] == "COFFRAGE")
+        acier = next(l for l in lignes if l["categorie"] == "ACIER")
+
+        self.assertEqual(beton["quantite"], 7.5)
+        self.assertEqual(coffrage["quantite"], 50.0)
+        self.assertEqual(acier["quantite"], 637.5)
+
+    def test_calculer_element_semelle_filante_poids_moteur(self):
+        sf = ElementStructurel.objects.create(
+            projet=self.projet,
+            type_element=ElementStructurel.TypeElement.SEMELLE_FILANTE,
+            identifiant="SF1",
+            longueur_m=10.0,
+            resultat_calcul={
+                "largeur_cm": 50,
+                "hauteur_cm": 30,
+                "acier_transversal_cm2_ml": 4.0,
+                "acier_repartition_cm2_ml": 2.0
+            },
+            resultat_valide={
+                "largeur_cm": 50,
+                "hauteur_cm": 30,
+                "acier_transversal_cm2_ml": 4.0,
+                "acier_repartition_cm2_ml": 2.0
+            },
+            statut=ElementStructurel.Statut.VALIDE
+        )
+        lignes = calculer_element_dqe(sf, {})
+        self.assertEqual(len(lignes), 3)
+
+        beton = next(l for l in lignes if l["categorie"] == "BETON")
+        coffrage = next(l for l in lignes if l["categorie"] == "COFFRAGE")
+        acier = next(l for l in lignes if l["categorie"] == "ACIER")
+
+        self.assertEqual(beton["quantite"], 1.5)
+        self.assertEqual(coffrage["quantite"], 6.0)
+        self.assertEqual(acier["quantite"], 47.1)  # 6.0 cm2/ml * 10m * 7.85 kg/m/cm2 = 47.1 kg
+
+    def test_calculer_element_semelle_filante_ratio(self):
+        sf = ElementStructurel.objects.create(
+            projet=self.projet,
+            type_element=ElementStructurel.TypeElement.SEMELLE_FILANTE,
+            identifiant="SF1",
+            longueur_m=10.0,
+            resultat_calcul={
+                "largeur_cm": 50,
+                "hauteur_cm": 30
+            },
+            resultat_valide={
+                "largeur_cm": 50,
+                "hauteur_cm": 30
+            },
+            statut=ElementStructurel.Statut.VALIDE
+        )
+        lignes = calculer_element_dqe(sf, {})
+        self.assertEqual(len(lignes), 3)
+
+        beton = next(l for l in lignes if l["categorie"] == "BETON")
+        coffrage = next(l for l in lignes if l["categorie"] == "COFFRAGE")
+        acier = next(l for l in lignes if l["categorie"] == "ACIER")
+
+        self.assertEqual(beton["quantite"], 1.5)
+        self.assertEqual(coffrage["quantite"], 6.0)
+        self.assertEqual(acier["quantite"], 75.0)  # 1.5 m3 * 50 kg/m3 = 75.0 kg
+
 
 class DQEExportersTestCase(TestCase):
     def setUp(self):
