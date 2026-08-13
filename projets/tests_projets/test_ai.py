@@ -56,6 +56,48 @@ class AssistantIAUnitTestCase(TestCase):
         with self.assertRaises(ValueError):
             structurer_description_projet("   ")
 
+    @mock.patch("projets.services.assistant_ia.client.MockAIClient.appeler_llm")
+    def test_parser_robustesse_markdown_et_texte(self, mock_appeler):
+        # 1. {"usage":"COMMERCE"} -> accepté
+        mock_appeler.return_value = '{"usage": "COMMERCE", "nombre_niveaux": 3, "configuration": "R+2", "portee_m": 5.0}'
+        res = structurer_description_projet("test")
+        self.assertEqual(res["donnees"]["usage"], "COMMERCE")
+
+        # 2. ```json ... ``` -> accepté
+        mock_appeler.return_value = '```json\n{"usage": "COMMERCE", "nombre_niveaux": 3, "configuration": "R+2", "portee_m": 5.0}\n```'
+        res = structurer_description_projet("test")
+        self.assertEqual(res["donnees"]["usage"], "COMMERCE")
+
+        # 3. Voici le résultat : {"usage":"COMMERCE"} -> accepté
+        mock_appeler.return_value = 'Voici le résultat : {"usage": "COMMERCE", "nombre_niveaux": 3, "configuration": "R+2", "portee_m": 5.0}'
+        res = structurer_description_projet("test")
+        self.assertEqual(res["donnees"]["usage"], "COMMERCE")
+
+        # 4. texte avant + JSON + texte après -> accepté
+        mock_appeler.return_value = 'Blabla {"usage": "COMMERCE", "nombre_niveaux": 3, "configuration": "R+2", "portee_m": 5.0} blabla'
+        res = structurer_description_projet("test")
+        self.assertEqual(res["donnees"]["usage"], "COMMERCE")
+
+        # 5. aucune accolade -> rejet contrôlé
+        mock_appeler.return_value = 'Pas de JSON ici'
+        with self.assertRaises(ValueError):
+            structurer_description_projet("test")
+
+        # 6. JSON tronqué -> rejet contrôlé
+        mock_appeler.return_value = '{"usage": "COMMERCE"'
+        with self.assertRaises(ValueError):
+            structurer_description_projet("test")
+
+        # 7. [] au lieu de {} -> rejet contrôlé
+        mock_appeler.return_value = '[1, 2, 3]'
+        with self.assertRaises(ValueError):
+            structurer_description_projet("test")
+
+        # 8. deux objets JSON successifs -> rejet contrôlé
+        mock_appeler.return_value = '{"usage": "COMMERCE"} {"usage": "HABITATION"}'
+        with self.assertRaises(ValueError):
+            structurer_description_projet("test")
+
     def test_validation_niveaux_configuration_coherence(self):
         self.assertEqual(niveaux_depuis_configuration("R+2"), 3)
         self.assertEqual(niveaux_depuis_configuration("RDC"), 1)

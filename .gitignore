@@ -9,4 +9,4 @@ frontend/dist/
 .vite/
 demo_dqe_jury.pdf
 demo_dqe_jury.xlsx
-demo_gemini_live.py
+scripts/demo_gemini_live.py
