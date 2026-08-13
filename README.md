@@ -84,7 +84,7 @@ LLM_API_KEY=VOTRE_CLE_API_GOOGLE
 | `DEMO_MODE` | `False` | `True` pour désactiver l'auth sur les endpoints IA |
 | `LLM_PROVIDER` | `mock` | `mock` (simulation locale) ou `gemini` (API réelle) |
 | `LLM_API_KEY` | _(vide)_ | Clé API Google Gemini (requise si `LLM_PROVIDER=gemini`) |
-| `LLM_MODEL` | `gemini-1.5-flash` | Modèle Gemini à utiliser |
+| `LLM_MODEL` | `gemini-3.5-flash` | Modèle Gemini à utiliser |
 | `LLM_TIMEOUT_SECONDS` | `20` | Timeout des appels LLM en secondes |
 | `LLM_MAX_RESPONSE_BYTES` | `65536` | Taille max de la réponse LLM |
 
