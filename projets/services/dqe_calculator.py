@@ -6,6 +6,7 @@ from moteur_calcul.constantes import (
     RATIO_ACIER_POTEAUX_KG_M3,
     RATIO_ACIER_POUTRES_KG_M3,
     RATIO_ACIER_SEMELLES_KG_M3,
+    RATIO_ACIER_DALLES_KG_M3,
 )
 
 # Prix unitaires par défaut en FCFA
@@ -22,6 +23,7 @@ RATIOS_ACIER_KG_M3 = {
     "POTEAU": Decimal(str(sum(RATIO_ACIER_POTEAUX_KG_M3) / 2)),    # (100+150)/2 = 125
     "POUTRE": Decimal(str(sum(RATIO_ACIER_POUTRES_KG_M3) / 2)),    # (120+180)/2 = 150
     "SEMELLE": Decimal(str(sum(RATIO_ACIER_SEMELLES_KG_M3) / 2)),  # (40+60)/2 = 50
+    "DALLE": Decimal(str(sum(RATIO_ACIER_DALLES_KG_M3) / 2)),      # (70+100)/2 = 85
 }
 
 
@@ -125,6 +127,73 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> li
             # MODIFIÉ (Ange) : 50 kg/m³ (milieu 40-60 du document
             # technicien) au lieu de 80 kg/m³ dans la version précédente,
             # qui dépassait la fourchette fournie sans justification connue.
+            poids_acier = volume_beton * RATIOS_ACIER_KG_M3["SEMELLE"]
+
+    # 4. Dalle (Module 7)
+    #
+    # AJOUTÉ (Ange) : jusqu'ici absente de calculer_element_dqe() -- une
+    # dalle validée était silencieusement ignorée du DQE (même classe de
+    # bug que le poteau il y a quelques semaines). Le moteur ne renvoie
+    # qu'une épaisseur (predimensionner_dalle ne calcule pas le
+    # ferraillage détaillé), donc l'acier reste toujours au ratio, jamais
+    # au poids moteur.
+    elif element.type_element == ElementStructurel.TypeElement.DALLE:
+        epaisseur_cm = res.get("epaisseur_cm")
+        surface = element.surface_m2  # m², champ ajouté sur le modèle
+
+        if not all(v is not None for v in [epaisseur_cm, surface]):
+            return []
+
+        epaisseur_m = cm_vers_m(epaisseur_cm)
+
+        # Béton (m3) = surface * épaisseur
+        volume_beton = Decimal(str(surface * epaisseur_m))
+        # Coffrage (m2) = sous-face de la dalle uniquement (dalle coulée
+        # sur coffrage horizontal, pas de coffrage latéral à ce niveau
+        # de détail -- cohérent avec le document technicien, section 3.1)
+        surf_coffrage = Decimal(str(surface))
+
+        poids_acier = volume_beton * RATIOS_ACIER_KG_M3["DALLE"]
+
+    # 5. Semelle filante (Module 4)
+    #
+    # AJOUTÉ (Ange) : les résultats de dimensionner_semelle_filante() sont
+    # exprimés PAR MÈTRE LINÉAIRE (largeur_cm, hauteur_cm,
+    # acier_transversal_cm2_ml) -- il faut les multiplier par la longueur
+    # totale du mur porté (element.longueur_m, champ ajouté sur le
+    # modèle) pour obtenir des quantités totales comparables aux autres
+    # lignes du DQE.
+    elif element.type_element == ElementStructurel.TypeElement.SEMELLE_FILANTE:
+        largeur_cm = res.get("largeur_cm")
+        hauteur_cm = res.get("hauteur_cm")
+        longueur = element.longueur_m  # m, champ ajouté sur le modèle
+
+        if not all(v is not None for v in [largeur_cm, hauteur_cm, longueur]):
+            return []
+
+        largeur_m = cm_vers_m(largeur_cm)
+        hauteur_m = cm_vers_m(hauteur_cm)
+
+        # Béton (m3) = largeur * hauteur * longueur totale
+        volume_beton = Decimal(str(largeur_m * hauteur_m * longueur))
+        # Coffrage (m2) = 2 faces latérales * hauteur * longueur
+        # (dessous contre le sol, dessus non coffré -- semelle filante
+        # coulée en tranchée)
+        surf_coffrage = Decimal(str(2 * hauteur_m * longueur))
+
+        # Acier : le moteur donne un poids réel par mètre linéaire
+        # (barres transversales + répartition), contrairement aux autres
+        # types -- priorité au calcul réel plutôt qu'au ratio, dès qu'il
+        # est disponible.
+        acier_transversal_cm2_ml = res.get("acier_transversal_cm2_ml")
+        acier_repartition_cm2_ml = res.get("acier_repartition_cm2_ml")
+        if acier_transversal_cm2_ml is not None:
+            # Poids = section totale (cm² -> m²) x longueur x densité acier
+            section_totale_cm2_ml = acier_transversal_cm2_ml + (acier_repartition_cm2_ml or 0)
+            section_totale_m2 = section_totale_cm2_ml / 10_000
+            from moteur_calcul.constantes import DENSITE_ACIER_KG_M3
+            poids_acier = Decimal(str(section_totale_m2 * longueur * DENSITE_ACIER_KG_M3))
+        else:
             poids_acier = volume_beton * RATIOS_ACIER_KG_M3["SEMELLE"]
 
     else:

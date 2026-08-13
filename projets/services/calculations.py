@@ -10,16 +10,15 @@ class CalculNonDisponible(Exception):
     """Levée quand le moteur de calcul n'est pas encore prêt (formules en attente)."""
 
 
-def calculer_element(element: ElementStructurel) -> dict:
-    """
-    Appelle la bonne fonction du moteur de calcul selon le type d'élément,
-    et retourne le résultat sous forme de dict prêt à stocker dans
-    `resultat_calcul`.
+def calculer_charge_permanente_totale(element: ElementStructurel) -> float:
+    """Module 2 : Calcule la charge permanente G en sommant les couches complexes."""
+    couches = element.couches_charges.all()
+    if couches.exists():
+        return sum(couche.poids_surfacique_kn_m2 for couche in couches)
+    return getattr(element, "charge_lineaire", 0.0) or 0.0
 
-    Lève CalculNonDisponible si le moteur de calcul n'a pas encore les
-    formules réelles (NotImplementedError propagée depuis moteur_calcul).
-    Lève EntreeInvalide si les données de l'élément sont incohérentes.
-    """
+
+def calculer_element(element: ElementStructurel) -> dict:
     try:
         if element.type_element == ElementStructurel.TypeElement.POTEAU:
             return dimensionner_poteau(
@@ -27,31 +26,60 @@ def calculer_element(element: ElementStructurel) -> dict:
                 hauteur_poteau=element.hauteur_poteau,
             )
         elif element.type_element == ElementStructurel.TypeElement.POUTRE:
+            charge_g = calculer_charge_permanente_totale(element) or element.charge_lineaire
             return dimensionner_poutre(
                 portee=element.portee,
-                charge_lineaire=element.charge_lineaire,
+                charge_lineaire=charge_g,
             )
         elif element.type_element == ElementStructurel.TypeElement.SEMELLE:
+            poteau_associe = getattr(element, "poteau_associe", None)
+            cote_poteau = None
+            if poteau_associe and poteau_associe.resultat_calcul:
+                cote_poteau = poteau_associe.resultat_calcul.get("cote_cm")
+
             return dimensionner_semelle(
                 charge_poteau=element.charge_calculee,
                 taux_travail_sol=element.taux_travail_sol,
             )
+        elif element.type_element == getattr(ElementStructurel.TypeElement, "DALLE", "dalle"):
+            # Module 7 : Import dynamique sécurisé si la formule Dev 1 n'est pas encore poussée
+            try:
+                from moteur_calcul.formules.dimensionnement_dalles import predimensionner_dalle
+            except (ImportError, ModuleNotFoundError) as err:
+                raise CalculNonDisponible("Module de calcul des dalles pas encore disponible.") from err
+
+            # MODIFIÉ (Ange) : predimensionner_dalle() n'accepte que
+            # (portee, portant_deux_sens) -- "charge_calculee" n'existe
+            # pas dans sa signature, l'appel précédent levait un TypeError
+            # à chaque tentative de calcul d'une dalle.
+            return predimensionner_dalle(portee=element.portee)
+        elif element.type_element == getattr(ElementStructurel.TypeElement, "SEMELLE_FILANTE", "semelle_filante"):
+            # MODIFIÉ (Ange) : le module dimensionner_semelle_filante() vit dans
+            # dimensionnement_semelles.py (pas un fichier séparé
+            # dimensionnement_semelles_filantes.py qui n'existe pas) -- l'import
+            # précédent échouait toujours, silencieusement transformé en
+            # CalculNonDisponible, donc jamais détecté par les tests unitaires
+            # du moteur (qui appellent la fonction directement, pas via l'API).
+            try:
+                from moteur_calcul.formules.dimensionnement_semelles import dimensionner_semelle_filante
+            except (ImportError, ModuleNotFoundError) as err:
+                raise CalculNonDisponible("Module de calcul des semelles filantes pas encore disponible.") from err
+
+            # MODIFIÉ (Ange) : le paramètre réel s'appelle charge_lineaire_kn_m,
+            # pas charge_lineaire -- l'appel précédent levait un TypeError.
+            return dimensionner_semelle_filante(
+                charge_lineaire_kn_m=element.charge_lineaire,
+                taux_travail_sol=element.taux_travail_sol,
+            )
         else:
             raise ValueError(f"Type d'élément inconnu : {element.type_element}")
-    except NotImplementedError as exc:
+    except (NotImplementedError, CalculNonDisponible) as exc:
         raise CalculNonDisponible(str(exc)) from exc
     except EntreeInvalide:
-        raise  # laissée telle quelle, la vue la traduit en 400
+        raise
 
 
 def recalculer_projet(projet):
-    """
-    Relance le calcul pour tous les éléments d'un projet dont le statut
-    est 'propose' ou 'modifie' (jamais pour les éléments déjà 'valide' --
-    c'est le verrou logiciel : un élément validé n'est jamais recalculé
-    automatiquement, il faut le repasser explicitement à 'modifie'
-    d'abord).
-    """
     elements_a_calculer = projet.elements.exclude(
         statut=ElementStructurel.Statut.VALIDE
     )

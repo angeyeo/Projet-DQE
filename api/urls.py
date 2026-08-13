@@ -21,6 +21,7 @@ from projets.views import (
     ProjetViewSet,
     ElementStructurelViewSet,
     PosteMainDoeuvreViewSet,
+    CoucheChargeViewSet,
     AssistantStructurerView,
     AssistantExpliquerView,
 )
@@ -29,6 +30,7 @@ router = DefaultRouter()
 router.register(r"projets", ProjetViewSet, basename="projet")
 router.register(r"elements", ElementStructurelViewSet, basename="element")
 router.register(r"postes-main-doeuvre", PosteMainDoeuvreViewSet, basename="poste-main-doeuvre")
+router.register(r"couches-charges", CoucheChargeViewSet, basename="couchecharge")  # <-- Ajouter cette ligne
 
 urlpatterns = router.urls + [
     path("assistant/structurer-projet/", AssistantStructurerView.as_view(), name="assistant-structurer"),
