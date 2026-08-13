@@ -87,4 +87,3 @@ LLM_API_KEY=VOTRE_CLE_API_GOOGLE
 | `LLM_MODEL` | `gemini-3.5-flash` | Modèle Gemini à utiliser |
 | `LLM_TIMEOUT_SECONDS` | `20` | Timeout des appels LLM en secondes |
 | `LLM_MAX_RESPONSE_BYTES` | `65536` | Taille max de la réponse LLM |
-
