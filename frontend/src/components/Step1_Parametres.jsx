@@ -104,7 +104,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         </div>
 
         <div className="form-group">
-          <label className="form-label">Portée Maximale des Poutres (<i>L</i> en m)</label>
+          <label className="form-label">Portée Maximale des Poutres (L en mètres)</label>
           <input
             type="number"
             step="0.1"
@@ -116,7 +116,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         </div>
 
         <div className="form-group">
-          <label className="form-label">Charge d'Exploitation (<i>Q</i> en kN/m²)</label>
+          <label className="form-label">Charge d'Exploitation (Q en kN/m²)</label>
           <input
             type="number"
             step="0.1"

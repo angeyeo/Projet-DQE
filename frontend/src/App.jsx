@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import DashboardView from './components/DashboardView';
 import Step1_Parametres from './components/Step1_Parametres';
+import StepDalles from './components/StepDalles';
 import Step2_Calculs from './components/Step2_Calculs';
 import Step3_ValidationLock from './components/Step3_ValidationLock';
 import Step4_DQEExport from './components/Step4_DQEExport';
@@ -12,7 +13,7 @@ export default function App() {
   const [activeView, setActiveView] = useState('dashboard');
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  // État du Projet BTP (initialement vide pour la saisie de l'utilisateur)
+  // État du Projet BTP Phase 2
   const [projectData, setProjectData] = useState({
     nomProjet: '',
     planFileName: '',
@@ -24,7 +25,10 @@ export default function App() {
     norme: 'BAEL91',
   });
 
-  // Sections calculées (initialement vides)
+  // Charges permanentes composées (Module 2 Multi-couches Phase 2)
+  const [couchesG, setCouchesG] = useState([]);
+
+  // Sections calculées (Phase 2)
   const [sections, setSections] = useState({
     poteaux: [],
     poutres: [],
@@ -34,16 +38,14 @@ export default function App() {
   // Données du Devis DQE
   const [dqeData, setDqeData] = useState(null);
 
-  // Id du projet côté backend (null tant qu'on est en mode local/fallback)
-  const [projetId, setProjetId] = useState(null);
-
   const updateProjectData = (newFields) => {
     setProjectData((prev) => ({ ...prev, ...newFields }));
   };
 
   const handleCalculate = async () => {
-    const { projetId: id, ...results } = await dqeService.calculateSections(projectData);
-    setProjetId(id);
+    const totalG = couchesG.reduce((sum, c) => sum + (parseFloat(c.chargeG) || 0), 0);
+    const updatedData = { ...projectData, chargePermanenteG: totalG > 0 ? totalG : 5.0 };
+    const results = await dqeService.calculateSections(updatedData);
     setSections(results);
     setActiveView('step2');
   };
@@ -53,35 +55,17 @@ export default function App() {
   };
 
   const handleGenerateDQE = async () => {
-    const dqeResults = await dqeService.calculateDQE(projetId, sections);
+    const dqeResults = await dqeService.calculateDQE(sections, projectData);
     setDqeData(dqeResults);
     setActiveView('step4');
   };
 
-  // Verrouille/déverrouille un élément. Si un elementId réel existe
-  // (mode API), on appelle /elements/{id}/valider/ côté backend --
-  // c'est la seule façon officielle de faire passer un élément à
-  // 'valide' (voir projets/views.py). En mode local (elementId absent),
-  // on se contente de basculer l'état en mémoire.
-  const toggleLock = async (id, category) => {
+  const toggleLock = (id, category) => {
     const key = category.toLowerCase() + 's';
-    const item = (sections[key] || []).find((i) => i.id === id);
-    if (!item) return;
-
-    const nextLocked = !item.locked;
-
-    if (nextLocked && item.elementId) {
-      try {
-        await dqeService.validerElementDRF(item.elementId, item.resultat);
-      } catch (e) {
-        console.warn('Validation backend impossible, verrou local uniquement :', e.message);
-      }
-    }
-
     setSections((prev) => ({
       ...prev,
-      [key]: prev[key].map((i) =>
-        i.id === id ? { ...i, locked: nextLocked, statut: nextLocked ? 'valide' : 'modifie' } : i
+      [key]: prev[key].map((item) =>
+        item.id === id ? { ...item, locked: !item.locked } : item
       ),
     }));
   };
@@ -113,7 +97,6 @@ export default function App() {
 
   return (
     <div className="app-layout">
-      {/* Sidebar Core 2.0 */}
       <Sidebar
         activeView={activeView}
         setActiveView={setActiveView}
@@ -123,10 +106,9 @@ export default function App() {
         totalCount={allElements.length}
       />
 
-      {/* Workspace Principal */}
       <div className="main-wrapper">
         <TopBar
-          projectName={projectData.nomProjet}
+          projectName={projectData.nomProjet || 'Nouveau Projet BTP'}
           onNewCalculation={() => setActiveView('step1')}
           lockedCount={lockedCount}
           totalCount={allElements.length}
@@ -147,6 +129,15 @@ export default function App() {
             <Step1_Parametres
               projectData={projectData}
               updateProjectData={updateProjectData}
+              couchesG={couchesG}
+              setCouchesG={setCouchesG}
+              onNext={() => setActiveView('stepDalles')}
+            />
+          )}
+
+          {activeView === 'stepDalles' && (
+            <StepDalles
+              projectData={projectData}
               onNext={handleCalculate}
             />
           )}
@@ -155,7 +146,7 @@ export default function App() {
             <Step2_Calculs
               sections={sections}
               projectData={projectData}
-              onBack={() => setActiveView('step1')}
+              onBack={() => setActiveView('stepDalles')}
               onNext={handleGoToValidation}
             />
           )}

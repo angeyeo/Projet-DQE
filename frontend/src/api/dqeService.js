@@ -1,5 +1,5 @@
 // Service API Frontend pour le Projet DQE
-// Aligné sur l'API Django REST Framework réelle (voir api/urls.py, projets/models.py)
+// Aligné sur l'API Django REST Framework réelle d'Ange Yeo (voir api/urls.py, projets/models.py)
 //
 // Endpoints DRF utilisés :
 // - POST /api/projets/
@@ -30,10 +30,6 @@ async function postJSON(url, body) {
 
 export const dqeService = {
   // Créer un projet -- champs alignés sur projets/models.py::Projet
-  // (nom, usage_batiment, nb_niveaux). Il n'existe PAS de champs
-  // charge_exploitation_Q / charge_permanente_G sur le modèle : ces
-  // valeurs restent gérées côté frontend et transmises élément par
-  // élément lors de la création des ElementStructurel.
   createProjet: async (projectData) => {
     const payload = {
       nom: projectData.nomProjet || 'Projet sans nom',
@@ -44,22 +40,17 @@ export const dqeService = {
   },
 
   // Crée les ElementStructurel du projet à partir des paramètres saisis,
-  // puis déclenche leur calcul. C'est l'étape qui manquait entièrement
-  // avant : sans elle, /generer_dqe/ ne peut jamais aboutir côté API
-  // réelle (aucun élément à valider).
+  // puis déclenche leur calcul.
   createAndCalculateElements: async (projetId, projectData) => {
     const portee = parseFloat(projectData.porteeMax || 6.0);
     const chargeExploitation = parseFloat(projectData.chargeExploitation || 2.5);
     const nbNiveaux = parseInt(projectData.nombreNiveaux || 1, 10);
 
-    const G = 5.0; // charge permanente forfaitaire (kN/m²), à affiner plus tard
+    const G = 5.0; // charge permanente forfaitaire (kN/m²)
     const qELU = 1.35 * G + 1.5 * chargeExploitation;
     const surfaceInfluence = (portee / 2) * (portee / 2);
     const chargeCalculeePoteau = surfaceInfluence * qELU * nbNiveaux; // kN
 
-    // Un jeu d'éléments simple correspondant au formulaire actuel
-    // (2 poteaux, 2 poutres, 1 semelle). type_element et statut sont
-    // en minuscules pour matcher ElementStructurel.TypeElement / Statut.
     const elementsACreer = [
       { type_element: 'poteau', identifiant: 'POT-C1', charge_calculee: chargeCalculeePoteau, hauteur_poteau: 3.0 },
       { type_element: 'poteau', identifiant: 'POT-P1', charge_calculee: chargeCalculeePoteau * 0.6, hauteur_poteau: 3.0 },
@@ -70,16 +61,7 @@ export const dqeService = {
 
     const elements = [];
     for (const base of elementsACreer) {
-      // La création (POST /elements/) doit réussir -- si elle échoue,
-      // on laisse l'erreur remonter (payload invalide = vrai bug).
       const created = await postJSON(`${API_BASE_URL}/elements/`, { projet: projetId, ...base });
-
-      // Le calcul (POST /elements/{id}/calculer/), lui, peut légitimement
-      // échouer élément par élément -- ex. 503 CalculNonDisponible quand
-      // le moteur refuse de conclure automatiquement (élancement trop
-      // grand, etc.). Dans ce cas, on garde l'élément avec un statut
-      // d'erreur au lieu de faire échouer tout le batch : l'ingénieur
-      // pourra le voir et le traiter manuellement à l'étape suivante.
       try {
         const calcule = await postJSON(`${API_BASE_URL}/elements/${created.id}/calculer/`, undefined);
         elements.push(calcule);
@@ -95,11 +77,7 @@ export const dqeService = {
     return elements;
   },
 
-  // Calcule le pré-dimensionnement via le vrai backend. Retombe sur un
-  // simulateur local uniquement si l'API est injoignable ou renvoie une
-  // erreur -- dans ce cas, `projetId`/`elementIds` restent absents et
-  // les étapes suivantes (validation, DQE) resteront elles aussi en
-  // mode local pour rester cohérentes.
+  // Calcule le pré-dimensionnement via le vrai backend DRF
   calculateSections: async (projectData) => {
     try {
       const projet = await dqeService.createProjet(projectData);
@@ -111,9 +89,7 @@ export const dqeService = {
     }
   },
 
-  // Valide/verrouille un élément côté backend -- c'est la SEULE façon
-  // de faire passer un élément à 'valide' (voir projets/views.py).
-  // Ne fait rien si elementId est absent (mode local/fallback).
+  // Valide/verrouille un élément côté backend
   validerElementDRF: async (elementId, resultatValide) => {
     if (!elementId) return null;
     return postJSON(`${API_BASE_URL}/elements/${elementId}/valider/`, {
@@ -148,9 +124,7 @@ export const dqeService = {
     }
   },
 
-  // Génère le DQE. Utilise l'id de projet réel (plus de "1" en dur) et
-  // n'envoie plus {sections, projectData} : le backend calcule le DQE
-  // uniquement à partir des ElementStructurel déjà validés en base.
+  // Génère le DQE via l'API DRF avec le vrai projetId
   calculateDQE: async (projetId, sections) => {
     if (!projetId) {
       return simulateDQELocal(sections);
@@ -174,11 +148,6 @@ export const dqeService = {
   },
 };
 
-// ---------------------------------------------------------------------
-// Adaptation des réponses réelles du backend vers le format attendu par
-// les composants Step2/Step3 (id, name, section, armatures, locked...)
-// ---------------------------------------------------------------------
-
 function parseDRFResponse(elements) {
   if (!elements) return { poteaux: [], poutres: [], semelles: [] };
   return {
@@ -193,7 +162,7 @@ function formatElement(e) {
   const calculIndisponible = !e.resultat_calcul && !e.resultat_valide;
   return {
     id: e.identifiant || `EL-${e.id}`,
-    elementId: e.id, // id réel côté DB, nécessaire pour /valider/
+    elementId: e.id,
     name: e.identifiant,
     section: calculIndisponible ? 'Calcul manuel requis' : formatSection(e.type_element, res),
     armatures: calculIndisponible ? '—' : formatArmatures(e.type_element, res),
@@ -239,10 +208,6 @@ function parseDQEResponse(data) {
       'Devis calculé par le moteur de calcul (BAEL 91) à partir des sections validées et verrouillées.',
   };
 }
-
-// ---------------------------------------------------------------------
-// Fallback local (utilisé uniquement si l'API réelle est injoignable)
-// ---------------------------------------------------------------------
 
 function simulateSectionsLocal(projectData) {
   const { porteeMax = 6.0, chargeExploitation = 2.5, nombreNiveaux = 3 } = projectData;
