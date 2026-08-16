@@ -1,16 +1,32 @@
-import React from 'react';
-import { Download, FileSpreadsheet, FileText, Bot, ArrowLeft, RefreshCw, CheckCircle2, Sparkles } from 'lucide-react';
+import React, { useState } from 'react';
+import { Download, FileSpreadsheet, FileText, Bot, ArrowLeft, RefreshCw, CheckCircle2, Sparkles, Loader2, AlertCircle } from 'lucide-react';
+import { dqeService } from '../api/dqeService';
 
-export default function Step4_DQEExport({ dqeData, projectData, onBack, onReset }) {
+export default function Step4_DQEExport({ dqeData, projectData, projetId, onBack, onReset }) {
   const { quantites = [], montantTotalFCFA = '0 FCFA', explicationIA = '' } = dqeData || {};
 
-  const handleExportPDF = () => {
-    alert("Génération et téléchargement du rapport PDF (ReportLab)...");
+  // AJOUTÉ : les deux boutons d'export ne faisaient qu'un alert()
+  // factice -- aucun fichier n'était jamais réellement généré, alors
+  // que le backend (GET /projets/{id}/generer_dqe/?export=pdf|excel,
+  // voir projets/views.py + services/dqe_exporters.py) sait déjà
+  // produire un vrai PDF (reportlab) et un vrai Excel (openpyxl).
+  const [exportEnCours, setExportEnCours] = useState(null); // 'pdf' | 'excel' | null
+  const [exportErreur, setExportErreur] = useState(null);
+
+  const telecharger = async (format) => {
+    setExportErreur(null);
+    setExportEnCours(format);
+    try {
+      await dqeService.telechargerDQEFichier(projetId, format);
+    } catch (err) {
+      setExportErreur(`Échec de l'export ${format === 'pdf' ? 'PDF' : 'Excel'} : ${err.message}`);
+    } finally {
+      setExportEnCours(null);
+    }
   };
 
-  const handleExportExcel = () => {
-    alert("Exportation du devis quantitatif sous format Excel (.xlsx openpyxl)...");
-  };
+  const handleExportPDF = () => telecharger('pdf');
+  const handleExportExcel = () => telecharger('excel');
 
   return (
     <div className="glass-panel">
@@ -25,16 +41,38 @@ export default function Step4_DQEExport({ dqeData, projectData, onBack, onReset 
         </div>
 
         <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button className="btn btn-secondary" onClick={handleExportExcel}>
-            <FileSpreadsheet size={18} color="#10b981" />
-            <span>Exporter Excel (.xlsx)</span>
+          <button className="btn btn-secondary" onClick={handleExportExcel} disabled={exportEnCours !== null}>
+            {exportEnCours === 'excel' ? <Loader2 size={18} className="spin" /> : <FileSpreadsheet size={18} color="#10b981" />}
+            <span>{exportEnCours === 'excel' ? 'Génération...' : 'Exporter Excel (.xlsx)'}</span>
           </button>
-          <button className="btn btn-primary" onClick={handleExportPDF}>
-            <Download size={18} />
-            <span>Télécharger PDF</span>
+          <button className="btn btn-primary" onClick={handleExportPDF} disabled={exportEnCours !== null}>
+            {exportEnCours === 'pdf' ? <Loader2 size={18} className="spin" /> : <Download size={18} />}
+            <span>{exportEnCours === 'pdf' ? 'Génération...' : 'Télécharger PDF'}</span>
           </button>
         </div>
       </div>
+
+      {/* AJOUTÉ : message d'erreur si l'export échoue (ex: projet sans
+          éléments validés, backend indisponible) -- avant, un échec
+          silencieux de l'alert() ne pouvait de toute façon jamais se
+          produire puisque rien n'était réellement appelé. */}
+      {exportErreur && (
+        <div
+          style={{
+            padding: '1rem 1.25rem',
+            borderRadius: '12px',
+            background: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid rgba(239, 68, 68, 0.35)',
+            marginBottom: '2rem',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '0.75rem',
+          }}
+        >
+          <AlertCircle size={20} color="#ef4444" style={{ flexShrink: 0, marginTop: '0.1rem' }} />
+          <span style={{ fontSize: '0.88rem', color: '#fca5a5' }}>{exportErreur}</span>
+        </div>
+      )}
 
       {/* Carte Montant Total */}
       <div

@@ -389,3 +389,12 @@ body {
 .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
 .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.25rem; }
+
+/* AJOUTÉ : animation de rotation pour l'icône de chargement pendant
+   l'export PDF/Excel (Step4_DQEExport.jsx) -- lucide-react ne fournit
+   pas d'animation par défaut pour Loader2. */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.spin { animation: spin 0.8s linear infinite; }

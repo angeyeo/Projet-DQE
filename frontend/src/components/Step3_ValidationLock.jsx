@@ -1,8 +1,48 @@
-import React from 'react';
-import { Lock, Unlock, CheckCircle, ShieldAlert, ArrowLeft, ArrowRight, Edit3, ShieldCheck } from 'lucide-react';
+import React, { useState } from 'react';
+import { Lock, Unlock, CheckCircle, ShieldAlert, ArrowLeft, ArrowRight, Edit3, ShieldCheck, HardHat, Plus, Trash2 } from 'lucide-react';
 
-export default function Step3_ValidationLock({ sections, toggleLock, toggleLockAll, updateSection, onBack, onNext }) {
+export default function Step3_ValidationLock({
+  sections,
+  toggleLock,
+  toggleLockAll,
+  updateSection,
+  validationError,
+  validatingId,
+  postesMainDoeuvre = [],
+  onAddPosteMainDoeuvre,
+  onRemovePosteMainDoeuvre,
+  mainDoeuvreError,
+  onBack,
+  onNext,
+}) {
   const { poteaux = [], poutres = [], semelles = [] } = sections || {};
+
+  // AJOUTÉ : formulaire local d'ajout d'un poste de main d'œuvre
+  // (saisie libre par l'ingénieur, distincte des éléments calculés).
+  const [nouveauPoste, setNouveauPoste] = useState({
+    designation: '',
+    unite: 'forfait',
+    quantite: '',
+    prixUnitaire: '',
+  });
+  const [posteEnCours, setPosteEnCours] = useState(false);
+
+  const handleAjouterPoste = async () => {
+    const quantite = parseFloat(nouveauPoste.quantite);
+    const prixUnitaire = parseFloat(nouveauPoste.prixUnitaire);
+    if (!nouveauPoste.designation.trim() || !quantite || quantite <= 0 || !prixUnitaire || prixUnitaire <= 0) {
+      return; // le bouton est de toute façon désactivé tant que ce n'est pas rempli
+    }
+    setPosteEnCours(true);
+    await onAddPosteMainDoeuvre({ ...nouveauPoste, quantite, prixUnitaire });
+    setPosteEnCours(false);
+    setNouveauPoste({ designation: '', unite: 'forfait', quantite: '', prixUnitaire: '' });
+  };
+
+  const totalMainDoeuvre = postesMainDoeuvre.reduce(
+    (sum, p) => sum + (p.montant ?? p.quantite * p.prix_unitaire),
+    0
+  );
 
   const allElements = [
     ...poteaux.map(p => ({ ...p, category: 'Poteau' })),
@@ -33,6 +73,28 @@ export default function Step3_ValidationLock({ sections, toggleLock, toggleLockA
           <span>{isAllLocked ? 'Déverrouiller Tout' : 'Verrouiller Toutes les Sections'}</span>
         </button>
       </div>
+
+      {/* AJOUTÉ : le message d'erreur de validation (validationError) était
+          déjà remonté par App.jsx (ex. "Renseignez un côté valide...",
+          échec réseau, 400/503...) mais n'était jamais affiché ici --
+          l'ingénieur voyait la validation échouer sans aucune explication. */}
+      {validationError && (
+        <div
+          style={{
+            padding: '1rem 1.25rem',
+            borderRadius: '12px',
+            background: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid rgba(239, 68, 68, 0.35)',
+            marginBottom: '1.5rem',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '0.75rem',
+          }}
+        >
+          <ShieldAlert size={20} color="#ef4444" style={{ flexShrink: 0, marginTop: '0.1rem' }} />
+          <span style={{ fontSize: '0.88rem', color: '#fca5a5' }}>{validationError}</span>
+        </div>
+      )}
 
       {/* Banner de Sécurité */}
       <div
@@ -87,51 +149,298 @@ export default function Step3_ValidationLock({ sections, toggleLock, toggleLockA
                 <button
                   className={`btn ${item.locked ? 'btn-secondary' : 'btn-success'}`}
                   style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                  disabled={validatingId === item.id}
                   onClick={() => toggleLock(item.id, item.category)}
                 >
                   {item.locked ? <Unlock size={14} /> : <Lock size={14} />}
-                  <span>{item.locked ? 'Déverrouiller' : 'Valider & Verrouiller'}</span>
+                  <span>
+                    {validatingId === item.id
+                      ? 'Validation...'
+                      : item.locked
+                      ? 'Déverrouiller'
+                      : 'Valider & Verrouiller'}
+                  </span>
                 </button>
               </div>
             </div>
 
-            <div className="grid-3" style={{ alignItems: 'center' }}>
-              <div>
-                <label className="form-label">Section Dimensionnée (b x h)</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  value={item.section}
-                  disabled={item.locked}
-                  onChange={(e) => updateSection(item.id, item.category, 'section', e.target.value)}
-                />
-              </div>
+            {item.calculIndisponible ? (
+              <div className="grid-3" style={{ alignItems: 'start' }}>
+                <div
+                  style={{
+                    gridColumn: '1 / -1',
+                    marginBottom: '0.5rem',
+                    padding: '0.6rem 0.9rem',
+                    borderRadius: '8px',
+                    background: 'rgba(245, 158, 11, 0.1)',
+                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                    fontSize: '0.82rem',
+                    color: '#b45309',
+                  }}
+                >
+                  ⚠ Calcul automatique indisponible pour cet élément
+                  {item.erreurCalcul ? ` (${item.erreurCalcul})` : ''}. Saisissez les
+                  dimensions retenues manuellement pour pouvoir la verrouiller.
+                </div>
 
-              <div>
-                <label className="form-label">Dispositions de Ferraillage</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  value={item.armatures || item.hauteur || ''}
-                  disabled={item.locked}
-                  onChange={(e) => updateSection(item.id, item.category, 'armatures', e.target.value)}
-                />
-              </div>
+                {item.category === 'Poteau' && (
+                  <div>
+                    <label className="form-label">Côté du poteau (cm)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      className="form-control"
+                      placeholder="ex : 25"
+                      value={item.manualCoteCm || ''}
+                      disabled={item.locked}
+                      onChange={(e) => updateSection(item.id, item.category, 'manualCoteCm', e.target.value)}
+                    />
+                  </div>
+                )}
 
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', background: 'rgba(15, 23, 42, 0.4)', padding: '0.75rem', borderRadius: '8px' }}>
-                {item.locked ? (
-                  <span style={{ color: '#fca5a5', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <Lock size={14} /> Section figée par l'ingénieur
-                  </span>
-                ) : (
-                  <span style={{ color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <Edit3 size={14} /> Saisie manuelle autorisée avant verrou
-                  </span>
+                {item.category === 'Poutre' && (
+                  <>
+                    <div>
+                      <label className="form-label">Largeur (cm)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        className="form-control"
+                        placeholder="ex : 25"
+                        value={item.manualLargeurCm || ''}
+                        disabled={item.locked}
+                        onChange={(e) => updateSection(item.id, item.category, 'manualLargeurCm', e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label">Hauteur (cm)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        className="form-control"
+                        placeholder="ex : 80"
+                        value={item.manualHauteurCm || ''}
+                        disabled={item.locked}
+                        onChange={(e) => updateSection(item.id, item.category, 'manualHauteurCm', e.target.value)}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {item.category === 'Semelle' && (
+                  <>
+                    <div>
+                      <label className="form-label">Côté (cm)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        className="form-control"
+                        placeholder="ex : 160"
+                        value={item.manualCoteCm || ''}
+                        disabled={item.locked}
+                        onChange={(e) => updateSection(item.id, item.category, 'manualCoteCm', e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label">Hauteur (cm)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        className="form-control"
+                        placeholder="ex : 40"
+                        value={item.manualHauteurCm || ''}
+                        disabled={item.locked}
+                        onChange={(e) => updateSection(item.id, item.category, 'manualHauteurCm', e.target.value)}
+                      />
+                    </div>
+                  </>
                 )}
               </div>
-            </div>
+            ) : (
+              <div className="grid-3" style={{ alignItems: 'center' }}>
+                <div>
+                  <label className="form-label">Section Dimensionnée (b x h)</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    value={item.section}
+                    disabled={item.locked}
+                    onChange={(e) => updateSection(item.id, item.category, 'section', e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="form-label">Dispositions de Ferraillage</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    value={item.armatures || item.hauteur || ''}
+                    disabled={item.locked}
+                    onChange={(e) => updateSection(item.id, item.category, 'armatures', e.target.value)}
+                  />
+                </div>
+
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', background: 'rgba(15, 23, 42, 0.4)', padding: '0.75rem', borderRadius: '8px' }}>
+                  {item.locked ? (
+                    <span style={{ color: '#fca5a5', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <Lock size={14} /> Section figée par l'ingénieur
+                    </span>
+                  ) : (
+                    <span style={{ color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <Edit3 size={14} /> Saisie manuelle autorisée avant verrou
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         ))}
+      </div>
+
+      {/* AJOUTÉ : le backend gère déjà entièrement les postes de main
+          d'œuvre (modèle PosteMainDoeuvre, intégrés au sous-total du
+          DQE et aux exports PDF/Excel) mais aucune interface ne
+          permettait à l'ingénieur d'en saisir -- ce champ "manquant"
+          signalé. Distinct des éléments structurels : saisie 100%
+          manuelle (désignation, unité, quantité, prix unitaire),
+          jamais calculée automatiquement. */}
+      <div style={{ marginBottom: '2.5rem' }}>
+        <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <HardHat size={20} />
+          <span>Main d'Œuvre & Prestations Complémentaires</span>
+        </h3>
+
+        {mainDoeuvreError && (
+          <div
+            style={{
+              padding: '0.85rem 1.1rem',
+              borderRadius: '10px',
+              background: 'rgba(239, 68, 68, 0.1)',
+              border: '1px solid rgba(239, 68, 68, 0.35)',
+              marginBottom: '1rem',
+              fontSize: '0.85rem',
+              color: '#fca5a5',
+            }}
+          >
+            {mainDoeuvreError}
+          </div>
+        )}
+
+        {postesMainDoeuvre.length > 0 && (
+          <table className="custom-table" style={{ marginBottom: '1rem' }}>
+            <thead>
+              <tr>
+                <th>Désignation</th>
+                <th>Unité</th>
+                <th>Quantité</th>
+                <th>Prix Unitaire (FCFA)</th>
+                <th>Montant (FCFA)</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {postesMainDoeuvre.map((poste) => (
+                <tr key={poste.id}>
+                  <td style={{ fontWeight: 600 }}>{poste.designation}</td>
+                  <td><span className="badge badge-info">{poste.unite}</span></td>
+                  <td>{poste.quantite}</td>
+                  <td>{Number(poste.prix_unitaire).toLocaleString()}</td>
+                  <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>
+                    {Number(poste.montant ?? poste.quantite * poste.prix_unitaire).toLocaleString()}
+                  </td>
+                  <td>
+                    <button
+                      className="btn btn-secondary"
+                      style={{ padding: '0.35rem 0.6rem' }}
+                      onClick={() => onRemovePosteMainDoeuvre(poste.id)}
+                      title="Supprimer ce poste"
+                    >
+                      <Trash2 size={14} color="#ef4444" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              <tr>
+                <td colSpan={4} style={{ textAlign: 'right', fontWeight: 600 }}>Sous-total Main d'Œuvre</td>
+                <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>
+                  {totalMainDoeuvre.toLocaleString()} FCFA
+                </td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+
+        <div className="grid-4" style={{ alignItems: 'end', gap: '0.75rem' }}>
+          <div>
+            <label className="form-label">Désignation</label>
+            <input
+              type="text"
+              className="form-control"
+              placeholder="ex : Main d'œuvre coffrage"
+              value={nouveauPoste.designation}
+              onChange={(e) => setNouveauPoste((p) => ({ ...p, designation: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="form-label">Unité</label>
+            <select
+              className="form-select"
+              value={nouveauPoste.unite}
+              onChange={(e) => setNouveauPoste((p) => ({ ...p, unite: e.target.value }))}
+            >
+              <option value="forfait">Forfait</option>
+              <option value="m²">m²</option>
+              <option value="m³">m³</option>
+              <option value="kg">kg</option>
+              <option value="jour">Jour</option>
+              <option value="unité">Unité</option>
+            </select>
+          </div>
+          <div>
+            <label className="form-label">Quantité</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              className="form-control"
+              placeholder="ex : 1"
+              value={nouveauPoste.quantite}
+              onChange={(e) => setNouveauPoste((p) => ({ ...p, quantite: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="form-label">Prix Unitaire (FCFA)</label>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              className="form-control"
+              placeholder="ex : 150000"
+              value={nouveauPoste.prixUnitaire}
+              onChange={(e) => setNouveauPoste((p) => ({ ...p, prixUnitaire: e.target.value }))}
+            />
+          </div>
+        </div>
+        <button
+          className="btn btn-success"
+          style={{ marginTop: '0.85rem' }}
+          disabled={
+            posteEnCours ||
+            !nouveauPoste.designation.trim() ||
+            !nouveauPoste.quantite ||
+            !nouveauPoste.prixUnitaire
+          }
+          onClick={handleAjouterPoste}
+        >
+          <Plus size={16} />
+          <span>{posteEnCours ? 'Ajout...' : 'Ajouter le Poste'}</span>
+        </button>
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
