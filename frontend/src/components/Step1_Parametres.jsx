@@ -1,8 +1,49 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UploadCloud, FileText, ArrowRight, Layers, Building, HelpCircle } from 'lucide-react';
+
+// AJOUTÉ : charge d'exploitation réglementaire standard associée à
+// chaque usage (mêmes valeurs que celles annoncées dans le libellé du
+// menu déroulant "Usage principal du Bâtiment", jusqu'ici purement
+// indicatives et jamais réellement appliquées au champ "Charge
+// d'Exploitation" -- source probable des charges aberrantes observées
+// (ex: Q laissé incohérent avec l'usage sélectionné).
+const CHARGE_EXPLOITATION_PAR_USAGE = {
+  habitation: 1.5,
+  bureau: 2.5,
+  commercial: 4.0,
+};
+
+// AJOUTÉ : plages réalistes (BAEL / pratique courante BTP) pour éviter
+// une saisie aberrante (ex: 12341 au lieu de 1.5) qui se propage en
+// cascade jusqu'à des sections de poteaux/semelles de plusieurs mètres
+// sans qu'aucune erreur ne soit jamais levée.
+const LIMITES = {
+  nombreNiveaux: { min: 1, max: 20 },
+  porteeMax: { min: 1.5, max: 15 },
+  chargeExploitation: { min: 0.5, max: 20 },
+};
+
+const clamp = (value, { min, max }) => {
+  if (value === '' || value === null || value === undefined) return value;
+  const n = parseFloat(value);
+  if (Number.isNaN(n)) return value;
+  return Math.min(max, Math.max(min, n));
+};
 
 export default function Step1_Parametres({ projectData, updateProjectData, onNext }) {
   const [dragActive, setDragActive] = useState(false);
+
+  // AJOUTÉ : pré-remplit la charge d'exploitation au chargement si elle
+  // est vide, avec la valeur standard de l'usage déjà sélectionné par
+  // défaut (habitation), au lieu de laisser le champ vide jusqu'à ce
+  // que l'utilisateur y pense.
+  useEffect(() => {
+    if (!projectData.chargeExploitation && projectData.typeUsage) {
+      const defaut = CHARGE_EXPLOITATION_PAR_USAGE[projectData.typeUsage];
+      if (defaut) updateProjectData({ chargeExploitation: defaut });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleFileUpload = (e) => {
     const files = e.target.files || e.dataTransfer.files;
@@ -83,7 +124,18 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           <select
             className="form-select"
             value={projectData.typeUsage}
-            onChange={(e) => updateProjectData({ typeUsage: e.target.value })}
+            onChange={(e) => {
+              const usage = e.target.value;
+              // CORRIGÉ : le libellé de l'option affiche "Q = 1.5 kN/m²"
+              // etc. mais ne mettait jamais réellement à jour le champ
+              // "Charge d'Exploitation" -- l'utilisateur pouvait donc
+              // choisir "Habitation" tout en gardant une charge
+              // d'exploitation incohérente (vide ou tapée par erreur).
+              updateProjectData({
+                typeUsage: usage,
+                chargeExploitation: CHARGE_EXPLOITATION_PAR_USAGE[usage],
+              });
+            }}
           >
             <option value="habitation">Bâtiment d'Habitation (Q = 1.5 kN/m²)</option>
             <option value="bureau">Bureaux / Tertiaire (Q = 2.5 kN/m²)</option>
@@ -95,12 +147,16 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           <label className="form-label">Nombre de Niveaux (Étages)</label>
           <input
             type="number"
-            min="1"
-            max="20"
+            min={LIMITES.nombreNiveaux.min}
+            max={LIMITES.nombreNiveaux.max}
             className="form-control"
             value={projectData.nombreNiveaux}
             onChange={(e) => updateProjectData({ nombreNiveaux: e.target.value })}
+            onBlur={(e) => updateProjectData({ nombreNiveaux: clamp(e.target.value, LIMITES.nombreNiveaux) })}
           />
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+            Plage acceptée : {LIMITES.nombreNiveaux.min} à {LIMITES.nombreNiveaux.max} niveaux
+          </p>
         </div>
 
         <div className="form-group">
@@ -108,11 +164,17 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           <input
             type="number"
             step="0.1"
+            min={LIMITES.porteeMax.min}
+            max={LIMITES.porteeMax.max}
             className="form-control"
             value={projectData.porteeMax}
             onChange={(e) => updateProjectData({ porteeMax: e.target.value })}
+            onBlur={(e) => updateProjectData({ porteeMax: clamp(e.target.value, LIMITES.porteeMax) })}
             placeholder="ex: 5.5"
           />
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+            Plage acceptée : {LIMITES.porteeMax.min} à {LIMITES.porteeMax.max} m (portée usuelle en béton armé non précontraint)
+          </p>
         </div>
 
         <div className="form-group">
@@ -120,10 +182,16 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           <input
             type="number"
             step="0.1"
+            min={LIMITES.chargeExploitation.min}
+            max={LIMITES.chargeExploitation.max}
             className="form-control"
             value={projectData.chargeExploitation}
             onChange={(e) => updateProjectData({ chargeExploitation: e.target.value })}
+            onBlur={(e) => updateProjectData({ chargeExploitation: clamp(e.target.value, LIMITES.chargeExploitation) })}
           />
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+            Plage acceptée : {LIMITES.chargeExploitation.min} à {LIMITES.chargeExploitation.max} kN/m² · pré-remplie selon l'usage, modifiable
+          </p>
         </div>
 
         <div className="form-group">

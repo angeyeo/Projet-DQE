@@ -9,14 +9,22 @@ casserait à chaque ajout même quand tout le reste reste correct.
 
 from django.test import SimpleTestCase
 
-from moteur_calcul.formules.dimensionnement_poteaux import dimensionner_poteau
+from moteur_calcul.formules.dimensionnement_poteaux import (
+    dimensionner_poteau,
+    dimensionner_poteau_rectangulaire,
+)
 from moteur_calcul.formules.dimensionnement_poutres import dimensionner_poutre
-from moteur_calcul.formules.dimensionnement_semelles import dimensionner_semelle
+from moteur_calcul.formules.dimensionnement_semelles import (
+    dimensionner_semelle,
+    dimensionner_semelle_filante,
+)
 from moteur_calcul.validators import EntreeInvalide
 from .donnees_test import (
     CAS_DIMENSIONNEMENT_POTEAU_1,
     CAS_DIMENSIONNEMENT_POUTRE_1,
     CAS_DIMENSIONNEMENT_SEMELLE_1,
+    CAS_POTEAU_RECTANGULAIRE,
+    CAS_SEMELLE_FILANTE,
 )
 
 
@@ -87,3 +95,70 @@ class TestDimensionnementReel(SimpleTestCase):
         resultat = dimensionner_semelle(**entrees)
         for cle, valeur_attendue in attendu.items():
             self.assertAlmostEqual(resultat[cle], valeur_attendue, places=1, msg=f"champ '{cle}'")
+
+
+class TestPoteauRectangulaire(SimpleTestCase):
+    """
+    Phase 2, module 3. Cas 250 kN / 3 m avec rapport de forme 2:1
+    (poteau noyé dans un mur de 20 cm) -- vérifie que le petit côté
+    (celui qui gouverne le flambement) est bien identique au cas carré
+    équivalent, et que la profondeur suit le rapport demandé.
+    """
+
+    def test_poteau_rectangulaire_cas_1(self):
+        entrees = CAS_POTEAU_RECTANGULAIRE["entrees"]
+        attendu = CAS_POTEAU_RECTANGULAIRE["resultat_attendu"]
+        resultat = dimensionner_poteau_rectangulaire(**entrees)
+        for cle, valeur_attendue in attendu.items():
+            if isinstance(valeur_attendue, float):
+                self.assertAlmostEqual(resultat[cle], valeur_attendue, places=1, msg=f"champ '{cle}'")
+            else:
+                self.assertEqual(resultat[cle], valeur_attendue, msg=f"champ '{cle}'")
+
+    def test_poteau_carre_delegue_au_rectangulaire(self):
+        """
+        dimensionner_poteau() (carré) doit rester rigoureusement identique
+        à dimensionner_poteau_rectangulaire() avec rapport_forme=1,0 --
+        c'est la garantie de non-régression du refactoring Phase 2.
+        """
+        carre = dimensionner_poteau(charge_calculee=450, hauteur_poteau=3.0)
+        rectangulaire = dimensionner_poteau_rectangulaire(
+            charge_calculee=450, hauteur_poteau=3.0, rapport_forme=1.0
+        )
+        self.assertEqual(carre["cote_cm"], rectangulaire["largeur_cm"])
+        self.assertEqual(carre["cote_cm"], rectangulaire["profondeur_cm"])
+        self.assertEqual(
+            carre["section_acier_retenue_cm2"], rectangulaire["section_acier_retenue_cm2"]
+        )
+
+    def test_rapport_forme_invalide_rejete(self):
+        with self.assertRaises(EntreeInvalide):
+            dimensionner_poteau_rectangulaire(charge_calculee=250, hauteur_poteau=3.0, rapport_forme=0.5)
+
+
+class TestSemelleFilante(SimpleTestCase):
+    """Phase 2, module 4 : semelle continue sous mur porteur."""
+
+    def test_semelle_filante_cas_1(self):
+        entrees = CAS_SEMELLE_FILANTE["entrees"]
+        attendu = CAS_SEMELLE_FILANTE["resultat_attendu"]
+        resultat = dimensionner_semelle_filante(**entrees)
+        for cle, valeur_attendue in attendu.items():
+            if isinstance(valeur_attendue, float):
+                self.assertAlmostEqual(resultat[cle], valeur_attendue, places=1, msg=f"champ '{cle}'")
+            else:
+                self.assertEqual(resultat[cle], valeur_attendue, msg=f"champ '{cle}'")
+
+    def test_semelle_filante_charge_negative_rejetee(self):
+        with self.assertRaises(EntreeInvalide):
+            dimensionner_semelle_filante(charge_lineaire_kn_m=-50)
+
+    def test_semelle_filante_condition_toujours_respectee(self):
+        """
+        La boucle d'élargissement doit toujours produire un résultat qui
+        passe sa propre vérification -- jamais un résultat silencieusement
+        insuffisant (c'est le bug qu'on avait trouvé sur la semelle
+        isolée affinée, à ne pas reproduire ici).
+        """
+        resultat = dimensionner_semelle_filante(charge_lineaire_kn_m=250, taux_travail_sol=200)
+        self.assertTrue(resultat["condition_respectee"])

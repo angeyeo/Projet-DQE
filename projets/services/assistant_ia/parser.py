@@ -21,9 +21,15 @@ def structurer_description_projet(description: str) -> dict:
     prompt = PROMPT_STRUCTURATION.format(description=description.strip())
     raw_response = client.appeler_llm(prompt, forcer_json=True)
 
-    # 3. Parsing du JSON retourné
+    # 3. Extraction et Parsing du JSON retourné
+    cleaned_response = raw_response.strip()
+    first_brace = cleaned_response.find("{")
+    last_brace = cleaned_response.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        cleaned_response = cleaned_response[first_brace:last_brace + 1]
+
     try:
-        data = json.loads(raw_response)
+        data = json.loads(cleaned_response)
     except json.JSONDecodeError as exc:
         raise ValueError("La réponse du LLM n'est pas un JSON valide.") from exc
 

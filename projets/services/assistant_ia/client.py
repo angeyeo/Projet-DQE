@@ -115,7 +115,7 @@ class MockAIClient(BaseAIClient):
 
 
 class GeminiAIClient(BaseAIClient):
-    def __init__(self, api_key: str, model: str = "gemini-1.5-flash", timeout: int = 20):
+    def __init__(self, api_key: str, model: str = "gemini-3.5-flash", timeout: int = 20):
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
@@ -215,7 +215,7 @@ def get_ai_client() -> BaseAIClient:
         raise ValueError(f"La clé API (LLM_API_KEY) est requise pour le fournisseur '{provider}'.")
 
     if provider == "gemini":
-        model_name = model if model else "gemini-1.5-flash"
+        model_name = model if model else "gemini-3.5-flash"
         return GeminiAIClient(api_key, model=model_name, timeout=timeout)
     else:
         raise ValueError(f"Fournisseur d'IA '{provider}' non supporté. Choisissez parmi: mock, gemini.")
