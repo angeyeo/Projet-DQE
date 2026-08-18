@@ -210,7 +210,11 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None) -> dict:
                 sous_totaux[cat] += Decimal(str(ligne["montant"]))
 
     # 2. Ajout des postes de main d'œuvre manuels
-    postes_mo = projet.postes_main_doeuvre.all()
+    postes_mo = (
+        projet.postes_complementaires.all()
+        if hasattr(projet, "postes_complementaires")
+        else []
+       )
     for poste in postes_mo:
         q_dec = Decimal(str(poste.quantite))
         pu_dec = Decimal(str(poste.prix_unitaire))

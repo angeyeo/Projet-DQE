@@ -7,7 +7,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from openpyxl import load_workbook
 
-from projets.models import Projet, ElementStructurel, PosteMainDoeuvre
+from projets.models import Projet, ElementStructurel, PosteComplementaire
 from projets.services.dqe_calculator import calculer_element_dqe, calculer_projet_dqe
 from projets.services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
 
@@ -119,7 +119,7 @@ class DQECalculatorTestCase(TestCase):
         self.assertNotIn("S1", reperes)
 
     def test_calculer_projet_dqe_global_avec_main_doeuvre(self):
-        PosteMainDoeuvre.objects.create(
+        PosteComplementaire.objects.create(
             projet=self.projet,
             designation="Terrassement fouilles",
             unite="m³",

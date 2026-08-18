@@ -1,26 +1,10 @@
-"""
-Routeur DRF principal.
-
-Endpoints exposés :
-- /api/projets/                      GET, POST
-- /api/projets/{id}/                 GET, PUT, PATCH, DELETE
-- /api/projets/{id}/recalculer/      POST
-- /api/projets/{id}/generer_dqe/     POST
-- /api/elements/                     GET, POST  (filtrable par ?projet=<id>)
-- /api/elements/{id}/                GET, PUT, PATCH, DELETE
-- /api/elements/{id}/calculer/       POST
-- /api/elements/{id}/valider/        POST
-- /api/postes-main-doeuvre/          GET, POST  (filtrable par ?projet=<id>)
-- /api/postes-main-doeuvre/{id}/     GET, PUT, PATCH, DELETE
-"""
-
-from django.urls import path
+from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-
 from projets.views import (
     ProjetViewSet,
     ElementStructurelViewSet,
-    PosteMainDoeuvreViewSet,
+    CoucheChargeViewSet,
+    PosteComplementaireViewSet,
     AssistantStructurerView,
     AssistantExpliquerView,
 )
@@ -28,9 +12,45 @@ from projets.views import (
 router = DefaultRouter()
 router.register(r"projets", ProjetViewSet, basename="projet")
 router.register(r"elements", ElementStructurelViewSet, basename="element")
-router.register(r"postes-main-doeuvre", PosteMainDoeuvreViewSet, basename="poste-main-doeuvre")
+router.register(r"couches-charges", CoucheChargeViewSet, basename="couchecharge")
+router.register(
+    r"postes-complementaires",
+    PosteComplementaireViewSet,
+    basename="postecomplementaire",
+)
 
-urlpatterns = router.urls + [
-    path("assistant/structurer-projet/", AssistantStructurerView.as_view(), name="assistant-structurer"),
-    path("assistant/expliquer-element/", AssistantExpliquerView.as_view(), name="assistant-expliquer"),
+urlpatterns = [
+    # Routes exactes attendues par test_ai.py
+    path(
+        "assistant/structurer-projet/",
+        AssistantStructurerView.as_view(),
+        name="assistant-structurer-projet",
+    ),
+    path(
+        "assistant/expliquer-element/",
+        AssistantExpliquerView.as_view(),
+        name="assistant-expliquer-element",
+    ),
+    # Aliases
+    path(
+        "assistant/structurer/",
+        AssistantStructurerView.as_view(),
+        name="assistant-structurer",
+    ),
+    path(
+        "assistant/expliquer/",
+        AssistantExpliquerView.as_view(),
+        name="assistant-expliquer",
+    ),
+    # DQE avec tiret et underscore
+    path(
+        "projets/<int:pk>/generer_dqe/",
+        ProjetViewSet.as_view({"get": "generer_dqe", "post": "generer_dqe"}),
+    ),
+    path(
+        "projets/<int:pk>/generer-dqe/",
+        ProjetViewSet.as_view({"get": "generer_dqe", "post": "generer_dqe"}),
+        name="projet-generer-dqe",
+    ),
+    path("", include(router.urls)),
 ]

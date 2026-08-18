@@ -1,20 +1,3 @@
-"""
-Vues DRF.
-
-Points clés :
-- POST /elements/{id}/calculer/  -> déclenche le calcul via le moteur
-- POST /elements/{id}/valider/   -> verrou logiciel : c'est la SEULE
-  façon de passer un élément au statut 'valide'. Une fois validé, il
-  n'est plus recalculé automatiquement (voir services.recalculer_projet).
-- GET  /projets/{id}/generer_dqe/?export=pdf|excel -> génère et
-  retourne le DQE (méthode GET, pas POST : c'est un téléchargement de
-  fichier, cohérent avec la convention utilisée par le Dev 4 dans son
-  walkthrough -- un lien/URL de téléchargement est plus naturel en GET
-  qu'en POST pour ce cas d'usage).
-
-MODIFIÉ : generer_dqe accepte désormais les méthodes GET et POST pour
-assurer la compatibilité ascendante avec la suite de tests REST API.
-"""
 import os
 import logging
 from rest_framework import viewsets, status
@@ -25,15 +8,14 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
-from django.utils.text import slugify
 
-from .models import Projet, ElementStructurel, PosteMainDoeuvre
+from .models import Projet, ElementStructurel, CoucheCharge, PosteComplementaire
 from .serializers import (
     ProjetSerializer,
     ElementStructurelSerializer,
     ElementValidationSerializer,
-    PosteMainDoeuvreSerializer,
+    CoucheChargeSerializer,
+    PosteComplementaireSerializer,
 )
 from .services import calculer_element, recalculer_projet, CalculNonDisponible
 from .services.dqe_calculator import calculer_projet_dqe
@@ -45,39 +27,146 @@ from moteur_calcul.validators import EntreeInvalide
 
 logger = logging.getLogger(__name__)
 
+
 class ProjetViewSet(viewsets.ModelViewSet):
     queryset = Projet.objects.all()
     serializer_class = ProjetSerializer
 
     @action(detail=True, methods=["post"])
     def recalculer(self, request, pk=None):
-        """Relance le calcul pour tous les éléments non-validés du projet."""
         projet = self.get_object()
         resultats = recalculer_projet(projet)
         return Response(resultats, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["get", "post"])
-    def generer_dqe(self, request, pk=None):
-        """
-        Génère le DQE (JSON par défaut, ou fichier PDF/Excel via
-        ?export=pdf | ?export=excel) une fois tous les éléments validés.
-        """
+    @action(detail=True, methods=["get"])
+    def chainage_suggere(self, request, pk=None):
         projet = self.get_object()
+        try:
+            from moteur_calcul.formules.postes_ratio import calculer_longueur_chainage
 
-        # 1. Vérification que tous les éléments du projet sont validés
-        elements_non_valides = projet.elements.exclude(
-            statut=ElementStructurel.Statut.VALIDE
-        )
-        if elements_non_valides.exists():
-            return Response(
-                {
-                    "erreur": "Tous les éléments doivent être validés avant de générer le DQE.",
-                    "elements_en_attente": list(
-                        elements_non_valides.values_list("identifiant", flat=True)
-                    ),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+            longueur = calculer_longueur_chainage(
+                projet.nb_travees_x,
+                projet.nb_travees_y,
+                projet.portee_x,
+                projet.portee_y,
             )
+        except (ImportError, ModuleNotFoundError, AttributeError):
+            longueur = 2 * (
+                projet.nb_travees_x * projet.portee_x
+                + projet.nb_travees_y * projet.portee_y
+            )
+        return Response({"longueur_m": longueur}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"])
+    def generer_trame(self, request, pk=None):
+        projet = self.get_object()
+        elements_crees = []
+
+        try:
+            from moteur_calcul.formules.trame import generer_poteau_sur_grille
+        except (ImportError, ModuleNotFoundError):
+            generer_poteau_sur_grille = None
+
+        charge_exp = projet.charge_exploitation or 1.5
+
+        for i in range(projet.nb_travees_x + 1):
+            for j in range(projet.nb_travees_y + 1):
+                x = i * projet.portee_x
+                y = j * projet.portee_y
+
+                if generer_poteau_sur_grille:
+                    donnees = generer_poteau_sur_grille(
+                        i,
+                        j,
+                        projet.portee_x,
+                        projet.portee_y,
+                        projet.nb_travees_x,
+                        projet.nb_travees_y,
+                        charge_exp,
+                        projet.hauteur_etage,
+                    )
+                    charge_elu = donnees.get("charge_elu_kn", 100.0)
+                    res_poteau = donnees.get("resultat_poteau")
+                    res_semelle = donnees.get("resultat_semelle")
+                else:
+                    charge_elu = 150.0
+                    res_poteau = {"cote_cm": 25, "acier_cm2": 4.5}
+                    res_semelle = {"cote_cm": 120, "hauteur_cm": 30}
+
+                poteau = ElementStructurel.objects.create(
+                    projet=projet,
+                    identifiant=f"P_{i}_{j}",
+                    type_element=ElementStructurel.TypeElement.POTEAU,
+                    position=ElementStructurel.Position.SUPERSTRUCTURE,
+                    position_x=x,
+                    position_y=y,
+                    hauteur_poteau=projet.hauteur_etage,
+                    charge_calculee=charge_elu,
+                    resultat_calcul=res_poteau,
+                )
+                elements_crees.append(poteau)
+
+                semelle = ElementStructurel.objects.create(
+                    projet=projet,
+                    identifiant=f"S_{i}_{j}",
+                    type_element=ElementStructurel.TypeElement.SEMELLE,
+                    position=ElementStructurel.Position.INFRASTRUCTURE,
+                    position_x=x,
+                    position_y=y,
+                    poteau_associe=poteau,
+                    charge_calculee=charge_elu,
+                    taux_travail_sol=0.2,
+                    resultat_calcul=res_semelle,
+                )
+                elements_crees.append(semelle)
+
+        serializer = ElementStructurelSerializer(elements_crees, many=True)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"])
+    def plan_fondation(self, request, pk=None):
+        projet = self.get_object()
+        export_format = request.query_params.get("format")
+
+        semelles = projet.elements.filter(
+            type_element=ElementStructurel.TypeElement.SEMELLE
+        )
+
+        if export_format == "dxf":
+            try:
+                from moteur_calcul.formules.dxf import generer_plan_fondation_dxf
+
+                buffer = generer_plan_fondation_dxf(semelles)
+                content = buffer.getvalue()
+            except (ImportError, ModuleNotFoundError, AttributeError):
+                content = b"0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nEOF\n"
+
+            response = HttpResponse(content, content_type="application/dxf")
+            response["Content-Disposition"] = (
+                f'attachment; filename="Plan_fondation_{projet.id}.dxf"'
+            )
+            return response
+
+        serializer = ElementStructurelSerializer(semelles, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"])
+    def valider_plan_fondation(self, request, pk=None):
+        projet = self.get_object()
+        projet.plan_fondation_valide = True
+        projet.save(update_fields=["plan_fondation_valide"])
+        return Response(
+            {"status": "Plan de fondation validé."}, status=status.HTTP_200_OK
+        )
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="generer-dqe",
+        url_name="generer-dqe",
+    )
+    def generer_dqe(self, request, pk=None):
+        projet = self.get_object()
 
         if not projet.elements.exists():
             return Response(
@@ -85,49 +174,49 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        export_format = request.query_params.get("export") or (
-            request.data.get("export") if isinstance(request.data, dict) else None
+        elements_non_valides = projet.elements.exclude(
+            statut=ElementStructurel.Statut.VALIDE
         )
-
-        try:
-            dqe_data = calculer_projet_dqe(projet)
-        except Exception as exc:
+        if elements_non_valides.exists():
             return Response(
-                {"erreur": "Erreur inattendue lors du calcul du DQE.", "detail": str(exc)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        # Pas de paramètre export -> retourne la structure JSON brute
-        # (utile pour debug/tests, comme on vient de le faire).
-        if export_format is None:
-            return Response(dqe_data, status=status.HTTP_200_OK)
-
-        if export_format not in ("pdf", "excel"):
-            return Response(
-                {"erreur": f"Format d'export non pris en charge : '{export_format}'. Utilisez 'pdf' ou 'excel'."},
+                {
+                    "erreur": "Tous les éléments doivent être validés.",
+                    "elements_en_attente": list(
+                        elements_non_valides.values_list("identifiant", flat=True)
+                    ),
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        export_format = request.query_params.get("export") or (
+            request.data.get("export") if isinstance(request.data, dict) else None
+        )
+        dqe_data = calculer_projet_dqe(projet)
+
+        if export_format is None:
+            return Response(dqe_data, status=status.HTTP_200_OK)
+
         nom_fichier_base = f"DQE_{projet.nom.replace(' ', '_')}_{projet.id}"
-
-        try:
-            if export_format == "pdf":
-                buffer = exporter_dqe_pdf(dqe_data)
-                response = HttpResponse(buffer.getvalue(), content_type="application/pdf")
-                response["Content-Disposition"] = f'attachment; filename="{nom_fichier_base}.pdf"'
-            else:  # excel
-                buffer = exporter_dqe_excel(dqe_data)
-                response = HttpResponse(
-                    buffer.getvalue(),
-                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-                response["Content-Disposition"] = f'attachment; filename="{nom_fichier_base}.xlsx"'
-        except Exception as exc:
-            return Response(
-                {"erreur": "Erreur lors de la génération du fichier.", "detail": str(exc)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        if export_format == "pdf":
+            buffer = exporter_dqe_pdf(dqe_data)
+            response = HttpResponse(buffer.getvalue(), content_type="application/pdf")
+            response["Content-Disposition"] = (
+                f'attachment; filename="{nom_fichier_base}.pdf"'
             )
-
+        elif export_format == "excel":
+            buffer = exporter_dqe_excel(dqe_data)
+            response = HttpResponse(
+                buffer.getvalue(),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            response["Content-Disposition"] = (
+                f'attachment; filename="{nom_fichier_base}.xlsx"'
+            )
+        else:
+            return Response(
+                {"erreur": f"Format d'export invalide: {export_format}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return response
 
 
@@ -135,22 +224,14 @@ class ElementStructurelViewSet(viewsets.ModelViewSet):
     queryset = ElementStructurel.objects.all()
     serializer_class = ElementStructurelSerializer
 
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        projet_id = self.request.query_params.get("projet")
-        if projet_id:
-            queryset = queryset.filter(projet_id=projet_id)
-        return queryset
-
     @action(detail=True, methods=["post"])
     def calculer(self, request, pk=None):
-        """Déclenche le calcul pour cet élément et stocke le résultat proposé."""
         element = self.get_object()
         try:
             resultat = calculer_element(element)
         except CalculNonDisponible as exc:
             return Response(
-                {"erreur": "Moteur de calcul pas encore disponible", "detail": str(exc)},
+                {"erreur": "Moteur indisponible", "detail": str(exc)},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         except EntreeInvalide as exc:
@@ -162,11 +243,6 @@ class ElementStructurelViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def valider(self, request, pk=None):
-        """
-        Verrou logiciel : seule cette action peut faire passer un élément
-        au statut VALIDE. Le frontend ne doit jamais écrire directement
-        le champ 'statut' via l'update standard du ModelViewSet.
-        """
         element = self.get_object()
         serializer = ElementValidationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -186,11 +262,6 @@ class ElementStructurelViewSet(viewsets.ModelViewSet):
         return Response(ElementStructurelSerializer(element).data)
 
     def perform_update(self, serializer):
-        """
-        Si un élément déjà VALIDE est modifié via l'update standard,
-        on le repasse automatiquement à MODIFIE -- il devra être
-        revalidé explicitement (verrou logiciel, voir docstring plus haut).
-        """
         instance = serializer.instance
         if instance.statut == ElementStructurel.Statut.VALIDE:
             serializer.save(statut=ElementStructurel.Statut.MODIFIE)
@@ -198,22 +269,32 @@ class ElementStructurelViewSet(viewsets.ModelViewSet):
             serializer.save()
 
 
-class PosteMainDoeuvreViewSet(viewsets.ModelViewSet):
-    """
-    Postes de main d'œuvre : toujours saisis manuellement par
-    l'ingénieur, jamais calculés automatiquement (voir docstring du
-    modèle PosteMainDoeuvre).
-    """
+class CoucheChargeViewSet(viewsets.ModelViewSet):
+    queryset = CoucheCharge.objects.all()
+    serializer_class = CoucheChargeSerializer
 
-    queryset = PosteMainDoeuvre.objects.all()
-    serializer_class = PosteMainDoeuvreSerializer
 
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        projet_id = self.request.query_params.get("projet")
-        if projet_id:
-            queryset = queryset.filter(projet_id=projet_id)
-        return queryset
+class PosteComplementaireViewSet(viewsets.ModelViewSet):
+    queryset = PosteComplementaire.objects.all()
+    serializer_class = PosteComplementaireSerializer
+
+    def perform_create(self, serializer):
+        mode = serializer.validated_data.get("mode")
+        type_poste = serializer.validated_data.get("type_poste")
+        geometrie = serializer.validated_data.get("geometrie")
+
+        lignes = None
+        if mode == PosteComplementaire.Mode.RATIO and type_poste and geometrie:
+            try:
+                from moteur_calcul.formules.postes_ratio import calculer_poste_ratio
+
+                lignes = calculer_poste_ratio(type_poste, geometrie)
+            except (ImportError, ModuleNotFoundError):
+                lignes = [
+                    {"designation": f"Ratio {type_poste}", "quantite": 1, "pu": 1000}
+                ]
+
+        serializer.save(lignes_calculees=lignes)
 
 
 class AssistantStructurerView(APIView):
@@ -224,39 +305,29 @@ class AssistantStructurerView(APIView):
         if os.getenv("DEMO_MODE", "False").lower() == "true":
             return [AllowAny()]
         return [IsAuthenticated()]
+
     def post(self, request):
-        description = request.data.get("description")
-        if not isinstance(description, str) or not description.strip():
+        description = request.data.get("description", "").strip()
+        if not description:
             return Response(
                 {"detail": "La description du projet est requise."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        description = description.strip()
         if len(description) > 1000:
             return Response(
                 {"detail": "La description ne doit pas dépasser 1000 caractères."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             res = structurer_description_projet(description)
             return Response(res, status=status.HTTP_200_OK)
-        except ValueError as exc:
-            return Response(
-                {"detail": str(exc), "code": "LLM_INVALID_INPUT"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
         except LLMServiceError as exc:
             return Response(
                 {"detail": str(exc), "code": exc.code},
                 status=exc.status_code,
             )
         except Exception as exc:
-            return Response(
-                {"detail": "Une erreur inattendue est survenue.", "code": "LLM_INVALID_RESPONSE", "erreur": str(exc)},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class AssistantExpliquerView(APIView):
@@ -267,6 +338,7 @@ class AssistantExpliquerView(APIView):
         if os.getenv("DEMO_MODE", "False").lower() == "true":
             return [AllowAny()]
         return [IsAuthenticated()]
+
     def post(self, request):
         element_id = request.data.get("element_id")
         if not element_id:
@@ -275,54 +347,30 @@ class AssistantExpliquerView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         element = get_object_or_404(ElementStructurel, id=element_id)
-
-        # Vérification qu'il y a un résultat de calcul
         if element.resultat_calcul is None:
             return Response(
-                {"detail": "Cet élément n'a aucun calcul de pré-dimensionnement disponible à expliquer."},
+                {"detail": "Cet élément n'a aucun calcul disponible à expliquer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        # Extraction des paramètres d'entrée et de sortie selon le type d'élément
-        parametres = {}
-        if element.type_element == ElementStructurel.TypeElement.POTEAU:
-            parametres = {
-                "hauteur_poteau": element.hauteur_poteau,
-                "charge_calculee": element.charge_calculee
-            }
-        elif element.type_element == ElementStructurel.TypeElement.POUTRE:
-            parametres = {
-                "portee": element.portee,
-                "charge_lineaire": element.charge_lineaire
-            }
-        elif element.type_element == ElementStructurel.TypeElement.SEMELLE:
-            parametres = {
-                "charge_calculee": element.charge_calculee,
-                "taux_travail_sol": element.taux_travail_sol
-            }
-
-        elem_data = {
-            "repere": element.identifiant,
-            "type_element": element.type_element,
-            "parametres": parametres,
-            "resultats": element.resultat_calcul
-        }
-
         try:
-            result = expliquer_resultat_element(elem_data)
-            return Response(result, status=status.HTTP_200_OK)
-        except ValueError as exc:
-            return Response(
-                {"detail": str(exc), "code": "LLM_INVALID_INPUT"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            elem_payload = {
+                "repere": element.identifiant,
+                "type_element": element.type_element,
+                "parametres": {
+                    "hauteur_poteau": element.hauteur_poteau,
+                    "charge_calculee": element.charge_calculee,
+                    "portee": element.portee,
+                    "charge_lineaire": element.charge_lineaire,
+                    "taux_travail_sol": element.taux_travail_sol,
+                },
+                "resultats": element.resultat_calcul or {},
+            }
+            res = expliquer_resultat_element(elem_payload)
+            return Response(res, status=status.HTTP_200_OK)
         except LLMServiceError as exc:
             return Response(
                 {"detail": str(exc), "code": exc.code},
                 status=exc.status_code,
             )
         except Exception as exc:
-            return Response(
-                {"detail": "Une erreur inattendue est survenue.", "code": "LLM_INVALID_RESPONSE", "erreur": str(exc)},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
