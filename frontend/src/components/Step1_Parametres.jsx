@@ -20,6 +20,7 @@ const CHARGE_EXPLOITATION_PAR_USAGE = {
 const LIMITES = {
   nombreNiveaux: { min: 1, max: 20 },
   porteeMax: { min: 1.5, max: 15 },
+  hauteurEtage: { min: 2.4, max: 4.5 },
   chargeExploitation: { min: 0.5, max: 20 },
 };
 
@@ -174,6 +175,24 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           />
           <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
             Plage acceptée : {LIMITES.porteeMax.min} à {LIMITES.porteeMax.max} m (portée usuelle en béton armé non précontraint)
+          </p>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Hauteur d'Étage (m)</label>
+          <input
+            type="number"
+            step="0.1"
+            min={LIMITES.hauteurEtage.min}
+            max={LIMITES.hauteurEtage.max}
+            className="form-control"
+            value={projectData.hauteurEtage}
+            onChange={(e) => updateProjectData({ hauteurEtage: e.target.value })}
+            onBlur={(e) => updateProjectData({ hauteurEtage: clamp(e.target.value, LIMITES.hauteurEtage) })}
+            placeholder="ex: 3.0"
+          />
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+            Plage acceptée : {LIMITES.hauteurEtage.min} à {LIMITES.hauteurEtage.max} m
           </p>
         </div>
 
