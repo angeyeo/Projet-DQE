@@ -1,124 +1,39 @@
-"""
-Serializers DRF.
-
-ElementStructurelSerializer expose resultat_calcul en lecture seule --
-il n'est jamais écrit directement par le frontend, seulement produit
-par le moteur de calcul (voir services.py).
-"""
-
 from rest_framework import serializers
-
-# 1. Importer CoucheCharge une fois le modèle créé dans models.py
-from .models import Projet, ElementStructurel, PosteMainDoeuvre, CoucheCharge
+from .models import Projet, ElementStructurel, CoucheCharge, PosteComplementaire
 
 
-class ElementStructurelSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ElementStructurel
-        fields = [
-            "id",
-            "projet",
-            "type_element",
-            "identifiant",
-            "poteau_associe",  # <-- AJOUT MODULE 6 : Lien vers le poteau lié
-            "portee",
-            "charge_lineaire",
-            "charge_calculee",
-            "hauteur_poteau",
-            "taux_travail_sol",
-            "resultat_calcul",
-            "resultat_valide",
-            "statut",
-            "date_creation",
-            "date_modification",
-        ]
-        read_only_fields = ["resultat_calcul", "date_creation", "date_modification"]
-
-
-class ElementValidationSerializer(serializers.Serializer):
-    """
-    Utilisé uniquement pour l'action de validation (voir views.py) --
-    l'ingénieur peut ajuster manuellement le résultat avant de valider.
-    """
-
-    resultat_valide = serializers.JSONField(required=False)
-
-    def validate(self, data):
-        # TODO : ajouter ici une vérification métier si l'ingénieur modifie
-        # une valeur (ex. refuser une section inférieure à un minimum
-        # réglementaire) -- à définir avec le technicien BTP.
-        return data
-
-
-# 2. AJOUT MODULE 2 : Serializer pour les couches de charges[cite: 1]
 class CoucheChargeSerializer(serializers.ModelSerializer):
     poids_surfacique_kn_m2 = serializers.ReadOnlyField()
 
     class Meta:
         model = CoucheCharge
-        fields = [
-            "id",
-            "projet",
-            "element",
-            "designation",
-            "epaisseur_cm",
-            "poids_volumique_kn_m3",
-            "poids_surfacique_kn_m2",
-        ]
+        fields = "__all__"
 
 
-class PosteMainDoeuvreSerializer(serializers.ModelSerializer):
-    montant = serializers.SerializerMethodField()
+class ElementStructurelSerializer(serializers.ModelSerializer):
+    couches_charges = CoucheChargeSerializer(many=True, read_only=True)
 
     class Meta:
-        model = PosteMainDoeuvre
-        fields = [
-            "id",
-            "projet",
-            "designation",
-            "unite",
-            "quantite",
-            "prix_unitaire",
-            "montant",
-            "date_creation",
-            "date_modification",
-        ]
-        read_only_fields = ["date_creation", "date_modification"]
+        model = ElementStructurel
+        fields = "__all__"
+        read_only_fields = ("statut", "resultat_calcul", "resultat_valide")
 
-    def get_montant(self, obj):
-        return obj.montant
+
+class ElementValidationSerializer(serializers.Serializer):
+    resultat_valide = serializers.JSONField(required=False)
+
+
+class PosteComplementaireSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PosteComplementaire
+        fields = "__all__"
 
 
 class ProjetSerializer(serializers.ModelSerializer):
     elements = ElementStructurelSerializer(many=True, read_only=True)
-    postes_main_doeuvre = PosteMainDoeuvreSerializer(many=True, read_only=True)
-    couches_charges = CoucheChargeSerializer(many=True, read_only=True)  # <-- AJOUT MODULE 2[cite: 1]
-    nb_elements_valides = serializers.SerializerMethodField()
-    nb_elements_total = serializers.SerializerMethodField()
-    total_main_doeuvre = serializers.SerializerMethodField()
+    couches_charges = CoucheChargeSerializer(many=True, read_only=True)
+    postes_complementaires = PosteComplementaireSerializer(many=True, read_only=True)
 
     class Meta:
         model = Projet
-        fields = [
-            "id",
-            "nom",
-            "usage_batiment",
-            "nb_niveaux",
-            "elements",
-            "postes_main_doeuvre",
-            "couches_charges",  # <-- AJOUT MODULE 2[cite: 1]
-            "nb_elements_valides",
-            "nb_elements_total",
-            "total_main_doeuvre",
-            "date_creation",
-            "date_modification",
-        ]
-
-    def get_nb_elements_valides(self, obj):
-        return obj.elements.filter(statut=ElementStructurel.Statut.VALIDE).count()
-
-    def get_nb_elements_total(self, obj):
-        return obj.elements.count()
-
-    def get_total_main_doeuvre(self, obj):
-        return sum(poste.montant for poste in obj.postes_main_doeuvre.all())
+        fields = "__all__"
