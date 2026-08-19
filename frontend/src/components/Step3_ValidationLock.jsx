@@ -309,10 +309,11 @@ export default function Step3_ValidationLock({
           signalé. Distinct des éléments structurels : saisie 100%
           manuelle (désignation, unité, quantité, prix unitaire),
           jamais calculée automatiquement. */}
+      {/* Jour 2.3 : Formulaire des Postes Complémentaires (mode Simple & mode Ratio par lot) */}
       <div style={{ marginBottom: '2.5rem' }}>
         <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <HardHat size={20} />
-          <span>Main d'Œuvre & Prestations Complémentaires</span>
+          <span>Postes Complémentaires & Prestations par Lot</span>
         </h3>
 
         {mainDoeuvreError && (
@@ -335,23 +336,25 @@ export default function Step3_ValidationLock({
           <table className="custom-table" style={{ marginBottom: '1rem' }}>
             <thead>
               <tr>
-                <th>Désignation</th>
-                <th>Unité</th>
-                <th>Quantité</th>
-                <th>Prix Unitaire (FCFA)</th>
-                <th>Montant (FCFA)</th>
-                <th></th>
+                <th>Lot</th>
+                <th>Mode</th>
+                <th>Désignation / Type</th>
+                <th>Quantité / Géométrie</th>
+                <th>Prix Unitaire</th>
+                <th>Montant Total</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
               {postesMainDoeuvre.map((poste) => (
                 <tr key={poste.id}>
-                  <td style={{ fontWeight: 600 }}>{poste.designation}</td>
-                  <td><span className="badge badge-info">{poste.unite}</span></td>
-                  <td>{poste.quantite}</td>
-                  <td>{Number(poste.prix_unitaire).toLocaleString()}</td>
+                  <td><span className="badge badge-info">{poste.lot || 'Généralités'}</span></td>
+                  <td><span className="badge badge-warning">{poste.mode || 'simple'}</span></td>
+                  <td style={{ fontWeight: 600 }}>{poste.designation || poste.type_poste || 'Poste complémentaire'}</td>
+                  <td>{poste.mode === 'ratio' ? JSON.stringify(poste.geometrie || {}) : `${poste.quantite} ${poste.unite || ''}`}</td>
+                  <td>{poste.prix_unitaire ? `${Number(poste.prix_unitaire).toLocaleString()} FCFA` : '—'}</td>
                   <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>
-                    {Number(poste.montant ?? poste.quantite * poste.prix_unitaire).toLocaleString()}
+                    {Number(poste.montant ?? (poste.quantite * poste.prix_unitaire || 0)).toLocaleString()} FCFA
                   </td>
                   <td>
                     <button
@@ -366,7 +369,7 @@ export default function Step3_ValidationLock({
                 </tr>
               ))}
               <tr>
-                <td colSpan={4} style={{ textAlign: 'right', fontWeight: 600 }}>Sous-total Main d'Œuvre</td>
+                <td colSpan={5} style={{ textAlign: 'right', fontWeight: 600 }}>Sous-total Postes Complémentaires</td>
                 <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>
                   {totalMainDoeuvre.toLocaleString()} FCFA
                 </td>
@@ -376,71 +379,145 @@ export default function Step3_ValidationLock({
           </table>
         )}
 
-        <div className="grid-4" style={{ alignItems: 'end', gap: '0.75rem' }}>
-          <div>
-            <label className="form-label">Désignation</label>
-            <input
-              type="text"
-              className="form-control"
-              placeholder="ex : Main d'œuvre coffrage"
-              value={nouveauPoste.designation}
-              onChange={(e) => setNouveauPoste((p) => ({ ...p, designation: e.target.value }))}
-            />
+        {/* Formulaire Bi-mode */}
+        <div style={{ background: '#f8fafc', border: '1px solid var(--core-border)', borderRadius: 'var(--radius-md)', padding: '1.25rem' }}>
+          <div className="grid-3" style={{ marginBottom: '1rem' }}>
+            <div>
+              <label className="form-label">Lot d'Ouvrage</label>
+              <select
+                className="form-select"
+                value={nouveauPoste.lot || 'lot_02_gros_oeuvre_superstructure'}
+                onChange={(e) => setNouveauPoste((p) => ({ ...p, lot: e.target.value }))}
+              >
+                <option value="lot_00_generalites">Lot 00 — Généralités & Installation</option>
+                <option value="lot_01_terrassement">Lot 01 — Terrassement & Fouilles</option>
+                <option value="lot_02_gros_oeuvre_infrastructure">Lot 02a — Gros Œuvre Infrastructure</option>
+                <option value="lot_02_gros_oeuvre_superstructure">Lot 02b — Gros Œuvre Superstructure</option>
+                <option value="lot_03_etancheite">Lot 03 — Étanchéité & Isolation</option>
+                <option value="lot_04_revêtements">Lot 04 — Revêtements Sols & Murs</option>
+                <option value="lot_05_menuiserie">Lot 05 — Menuiserie & Serrurerie</option>
+                <option value="lot_06_plomberie_electricite">Lot 06 — Plomberie & Électricité</option>
+                <option value="lot_07_peinture_finitions">Lot 07 — Peinture & Finitions</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="form-label">Mode de Saisie</label>
+              <select
+                className="form-select"
+                value={nouveauPoste.mode || 'simple'}
+                onChange={(e) => setNouveauPoste((p) => ({ ...p, mode: e.target.value }))}
+              >
+                <option value="simple">Mode Simple (Désignation, Quantité, Prix)</option>
+                <option value="ratio">Mode Ratio (Choix du Type + Géométrie)</option>
+              </select>
+            </div>
           </div>
-          <div>
-            <label className="form-label">Unité</label>
-            <select
-              className="form-select"
-              value={nouveauPoste.unite}
-              onChange={(e) => setNouveauPoste((p) => ({ ...p, unite: e.target.value }))}
-            >
-              <option value="forfait">Forfait</option>
-              <option value="m²">m²</option>
-              <option value="m³">m³</option>
-              <option value="kg">kg</option>
-              <option value="jour">Jour</option>
-              <option value="unité">Unité</option>
-            </select>
-          </div>
-          <div>
-            <label className="form-label">Quantité</label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              className="form-control"
-              placeholder="ex : 1"
-              value={nouveauPoste.quantite}
-              onChange={(e) => setNouveauPoste((p) => ({ ...p, quantite: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="form-label">Prix Unitaire (FCFA)</label>
-            <input
-              type="number"
-              min="0"
-              step="1"
-              className="form-control"
-              placeholder="ex : 150000"
-              value={nouveauPoste.prixUnitaire}
-              onChange={(e) => setNouveauPoste((p) => ({ ...p, prixUnitaire: e.target.value }))}
-            />
-          </div>
+
+          {(nouveauPoste.mode || 'simple') === 'simple' ? (
+            <div className="grid-4" style={{ alignItems: 'end', gap: '0.75rem' }}>
+              <div>
+                <label className="form-label">Désignation du Poste</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  placeholder="ex : Installation de chantier"
+                  value={nouveauPoste.designation}
+                  onChange={(e) => setNouveauPoste((p) => ({ ...p, designation: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="form-label">Unité</label>
+                <select
+                  className="form-select"
+                  value={nouveauPoste.unite}
+                  onChange={(e) => setNouveauPoste((p) => ({ ...p, unite: e.target.value }))}
+                >
+                  <option value="forfait">Forfait</option>
+                  <option value="m²">m²</option>
+                  <option value="m³">m³</option>
+                  <option value="kg">kg</option>
+                  <option value="jour">Jour</option>
+                  <option value="unité">Unité</option>
+                </select>
+              </div>
+              <div>
+                <label className="form-label">Quantité</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="form-control"
+                  placeholder="ex : 1"
+                  value={nouveauPoste.quantite}
+                  onChange={(e) => setNouveauPoste((p) => ({ ...p, quantite: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="form-label">Prix Unitaire (FCFA)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  className="form-control"
+                  placeholder="ex : 150000"
+                  value={nouveauPoste.prixUnitaire}
+                  onChange={(e) => setNouveauPoste((p) => ({ ...p, prixUnitaire: e.target.value }))}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="grid-2" style={{ alignItems: 'end', gap: '1rem' }}>
+              <div>
+                <label className="form-label">Type de Prestation Ratio</label>
+                <select
+                  className="form-select"
+                  value={nouveauPoste.typePoste || 'maconnerie_creuse'}
+                  onChange={(e) => setNouveauPoste((p) => ({ ...p, typePoste: e.target.value }))}
+                >
+                  <option value="maconnerie_creuse">Maçonnerie agglos creux (Surface m²)</option>
+                  <option value="maconnerie_pleine">Maçonnerie agglos pleins (Surface m²)</option>
+                  <option value="enduit_interieur">Enduit ciment intérieur (Surface m²)</option>
+                  <option value="enduit_exterieur">Enduit ciment extérieur (Surface m²)</option>
+                  <option value="chainage_linteau">Chaînage / Linteau (Longueur ml)</option>
+                  <option value="chape_mortier">Chape mortier de lissage (Surface m²)</option>
+                </select>
+              </div>
+              <div>
+                <label className="form-label">
+                  {(nouveauPoste.typePoste || '').includes('chainage') ? 'Longueur (ml)' : 'Surface (m²)'}
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  className="form-control"
+                  placeholder="ex : 45.0"
+                  value={nouveauPoste.valeurGeometrie || ''}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value || 0);
+                    const isMl = (nouveauPoste.typePoste || '').includes('chainage');
+                    setNouveauPoste((p) => ({
+                      ...p,
+                      valeurGeometrie: e.target.value,
+                      geometrie: isMl ? { longueur_ml: val } : { surface_m2: val },
+                    }));
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          <button
+            className="btn btn-success"
+            style={{ marginTop: '1.1rem' }}
+            disabled={posteEnCours}
+            onClick={handleAjouterPoste}
+          >
+            <Plus size={16} />
+            <span>{posteEnCours ? 'Ajout...' : 'Ajouter ce Poste Complémentaire'}</span>
+          </button>
         </div>
-        <button
-          className="btn btn-success"
-          style={{ marginTop: '0.85rem' }}
-          disabled={
-            posteEnCours ||
-            !nouveauPoste.designation.trim() ||
-            !nouveauPoste.quantite ||
-            !nouveauPoste.prixUnitaire
-          }
-          onClick={handleAjouterPoste}
-        >
-          <Plus size={16} />
-          <span>{posteEnCours ? 'Ajout...' : 'Ajouter le Poste'}</span>
-        </button>
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -450,7 +527,7 @@ export default function Step3_ValidationLock({
         </button>
 
         <button className="btn btn-primary" onClick={onNext}>
-          <span>Générer le Devis Quantitatif (DQE)</span>
+          <span>Passer au Plan de Fondation (Étape 3bis)</span>
           <ArrowRight size={18} />
         </button>
       </div>
