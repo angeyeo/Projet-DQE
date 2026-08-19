@@ -21,8 +21,11 @@ export default function App() {
     planFileSize: '',
     typeUsage: 'habitation',
     nombreNiveaux: '',
+    nbTraveesX: '',
+    nbTraveesY: '',
+    porteeX: '',
+    porteeY: '',
     hauteurEtage: '',
-    porteeMax: '',
     chargeExploitation: '',
     norme: 'BAEL91',
   });

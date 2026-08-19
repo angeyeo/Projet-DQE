@@ -45,14 +45,16 @@ export const dqeService = {
   // Crée les ElementStructurel du projet à partir des paramètres saisis,
   // puis déclenche leur calcul.
   createAndCalculateElements: async (projetId, projectData) => {
-    const portee = parseFloat(projectData.porteeMax || 6.0);
+    const porteeX = parseFloat(projectData.porteeX || projectData.porteeMax || 6.0);
+    const porteeY = parseFloat(projectData.porteeY || projectData.porteeMax || 6.0);
+    const portee = Math.max(porteeX, porteeY);
     const chargeExploitation = parseFloat(projectData.chargeExploitation || 2.5);
     const nbNiveaux = parseInt(projectData.nombreNiveaux || 1, 10);
-    const hauteurPoteau = parseFloat(projectData.hauteurEtage || 3.0); // Jour 4: hauteurEtage dynamique
+    const hauteurPoteau = parseFloat(projectData.hauteurEtage || 3.0);
 
     const G = 5.0; // charge permanente forfaitaire (kN/m²)
     const qELU = 1.35 * G + 1.5 * chargeExploitation;
-    const surfaceInfluence = (portee / 2) * (portee / 2);
+    const surfaceInfluence = (porteeX / 2) * (porteeY / 2);
     const chargeCalculeePoteau = surfaceInfluence * qELU * nbNiveaux; // kN
 
     const elementsACreer = [
@@ -136,6 +138,17 @@ export const dqeService = {
   listerPostesMainDoeuvre: async (projetId) => dqeService.listerPostesComplementaires(projetId),
   ajouterPosteMainDoeuvre: async (projetId, poste) => dqeService.ajouterPosteComplementaire(projetId, { ...poste, lot: 'lot_00_generalites', mode: 'simple' }),
   supprimerPosteMainDoeuvre: async (posteId) => dqeService.supprimerPosteComplementaire(posteId),
+
+  // Suggestion de chaînage automatique (Jour 2.2)
+  recupererChainageSuggere: async (projetId) => {
+    if (!projetId) return 0;
+    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/chainage_suggere/`);
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error((data && data.erreur) || `Erreur ${response.status}`);
+    }
+    return data.longueur_m;
+  },
 
   // Plan de fondation (Jour 3.1)
   recupererPlanFondation: async (projetId) => {
