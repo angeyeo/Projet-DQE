@@ -473,13 +473,30 @@ export default function Step3_ValidationLock({
                 <select
                   className="form-select"
                   value={nouveauPoste.typePoste || 'maconnerie_creuse'}
-                  onChange={(e) => setNouveauPoste((p) => ({ ...p, typePoste: e.target.value }))}
+                  onChange={async (e) => {
+                    const type = e.target.value;
+                    setNouveauPoste((p) => ({ ...p, typePoste: type }));
+                    if (type === 'chainage_linteau' || type === 'chainage') {
+                      try {
+                        const longueur = await dqeService.recupererChainageSuggere(sections?.projetId);
+                        if (longueur) {
+                          setNouveauPoste((p) => ({
+                            ...p,
+                            valeurGeometrie: longueur,
+                            geometrie: { longueur_m: longueur },
+                          }));
+                        }
+                      } catch (err) {
+                        console.warn('Suggestion de chaînage indisponible :', err.message);
+                      }
+                    }
+                  }}
                 >
                   <option value="maconnerie_creuse">Maçonnerie agglos creux (Surface m²)</option>
                   <option value="maconnerie_pleine">Maçonnerie agglos pleins (Surface m²)</option>
                   <option value="enduit_interieur">Enduit ciment intérieur (Surface m²)</option>
                   <option value="enduit_exterieur">Enduit ciment extérieur (Surface m²)</option>
-                  <option value="chainage_linteau">Chaînage / Linteau (Longueur ml)</option>
+                  <option value="chainage_linteau">Chaînage / Linteau (Longueur ml — Suggérée)</option>
                   <option value="chape_mortier">Chape mortier de lissage (Surface m²)</option>
                 </select>
               </div>
