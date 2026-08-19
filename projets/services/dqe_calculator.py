@@ -1,6 +1,7 @@
 from decimal import Decimal, ROUND_HALF_UP
+from collections import defaultdict
 
-from projets.models import Projet, ElementStructurel
+from projets.models import Projet, ElementStructurel, PosteMainDoeuvre
 
 from moteur_calcul.constantes import (
     RATIO_ACIER_POTEAUX_KG_M3,
@@ -8,12 +9,22 @@ from moteur_calcul.constantes import (
     RATIO_ACIER_SEMELLES_KG_M3,
     RATIO_ACIER_DALLES_KG_M3,
 )
+from moteur_calcul.formules.postes_ratio import calculer_poste_ratio, TYPES_POSTES
 
 # Prix unitaires par défaut en FCFA
 PRIX_UNITAIRES_DEFAUT = {
     "beton_m3": Decimal("100000"),
     "acier_kg": Decimal("800"),
     "coffrage_m2": Decimal("12000"),
+    # AJOUTÉ (Ange, Jour 2 §2.1) : nécessaires pour valoriser les lignes
+    # produites par calculer_poste_ratio() (maçonnerie, enduit), qui ne
+    # sont ni du béton, ni de l'acier, ni du coffrage au sens des 3 clés
+    # ci-dessus. Ordre de grandeur du DQE CIMBAT reçu -- à ajuster selon
+    # le marché réel comme les 3 autres.
+    "agglos_pleins_m3": Decimal("9000"),
+    "agglos_15_creux_m2": Decimal("8000"),
+    "agglos_10_creux_m2": Decimal("6000"),
+    "enduit_m2": Decimal("3500"),
 }
 
 # Ratios d'acier utilisés en solution de secours (poids moteur non disponible).
@@ -249,42 +260,210 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> li
     return lignes
 
 
-def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None) -> dict:
+def calculer_postes_ratio_projet(geometrie: dict, prix_unitaires: dict, types_postes=TYPES_POSTES) -> list:
+    """
+    AJOUTÉ (Ange, Jour 2 §2.1) : branche calculer_poste_ratio() (postes
+    maçonnerie/enduit/chaînage/raidisseur/acrotère, sans dimensionnement
+    structurel dédié) sur le DQE -- jusqu'ici la fonction moteur existait
+    mais rien ne la valorisait ni ne l'agrégeait au devis.
+
+    Contrairement à calculer_element_dqe(), il n'y a pas d'ElementStructurel
+    associé (ce sont des quantités déduites de la géométrie générale du
+    bâtiment, pas d'un élément individuel) -- element_id reste None.
+
+    Un poste dont la geometrie ne fournit pas les données nécessaires est
+    silencieusement omis (calculer_poste_ratio() renvoie [] dans ce cas,
+    ex. maçonnerie sans hauteur de soubassement) plutôt que de lever une
+    erreur qui bloquerait tout le DQE pour un seul poste incomplet.
+    """
+    lignes = []
+    for type_poste in types_postes:
+        for ligne_brute in calculer_poste_ratio(type_poste, geometrie):
+            cle_prix = _cle_prix_unitaire(ligne_brute["designation"], ligne_brute["unite"])
+            pu = Decimal(str(prix_unitaires.get(cle_prix, PRIX_UNITAIRES_DEFAUT.get(cle_prix, 0))))
+            quantite = Decimal(str(ligne_brute["quantite"]))
+            if quantite <= 0:
+                continue
+            lignes.append({
+                "element_id": None,
+                "repere": type_poste.upper(),
+                "type_element": "RATIO_" + type_poste.upper(),
+                "designation": ligne_brute["designation"],
+                "categorie": _categorie_depuis_unite(ligne_brute["unite"], ligne_brute["designation"]),
+                "unite": ligne_brute["unite"],
+                "quantite": float(quantite.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)),
+                "prix_unitaire": int(pu),
+                "montant": int((quantite * pu).quantize(Decimal("1"), rounding=ROUND_HALF_UP)),
+            })
+    return lignes
+
+
+def _cle_prix_unitaire(designation: str, unite: str) -> str:
+    """Associe une ligne de postes_ratio à sa clé dans PRIX_UNITAIRES_DEFAUT."""
+    d = designation.lower()
+    if "agglos 15 pleins" in d:
+        return "agglos_pleins_m3"
+    if "agglos 15 creux" in d:
+        return "agglos_15_creux_m2"
+    if "agglos 10 creux" in d:
+        return "agglos_10_creux_m2"
+    if "enduit" in d:
+        return "enduit_m2"
+    if "béton" in d:
+        return "beton_m3"
+    if "acier" in d:
+        return "acier_kg"
+    if "coffrage" in d:
+        return "coffrage_m2"
+    raise ValueError(f"Pas de prix unitaire connu pour la ligne : {designation!r}")
+
+
+def _categorie_depuis_unite(unite: str, designation: str) -> str:
+    d = designation.lower()
+    if "béton" in d or "agglos" in d:
+        return "BETON"
+    if "acier" in d:
+        return "ACIER"
+    if "coffrage" in d:
+        return "COFFRAGE"
+    if "enduit" in d:
+        return "ENDUIT"
+    return "AUTRE"
+
+
+# --- Montant en toutes lettres (Jour 4) ----------------------------------
+#
+# Convention d'écriture financière (utilisée par CIMBAT sur le DQE de
+# référence : "...soixante et un mille sept cent", pas "sept cents") :
+# "cent" et "vingt" ne prennent JAMAIS la marque du pluriel dans un
+# montant écrit en toutes lettres, contrairement à la règle grammaticale
+# standard -- convention usuelle sur les chèques et devis pour éviter
+# toute altération frauduleuse du montant.
+
+_UNITES = ["", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf"]
+_DIX_DIX_NEUF = [
+    "dix", "onze", "douze", "treize", "quatorze", "quinze", "seize",
+    "dix-sept", "dix-huit", "dix-neuf",
+]
+_DIZAINES = {20: "vingt", 30: "trente", 40: "quarante", 50: "cinquante", 60: "soixante"}
+
+
+def _deux_chiffres_en_lettres(n: int) -> str:
+    if n < 10:
+        return _UNITES[n]
+    if n < 20:
+        return _DIX_DIX_NEUF[n - 10]
+    if n < 70:
+        dizaine, unite = divmod(n, 10)
+        mot = _DIZAINES[dizaine * 10]
+        if unite == 0:
+            return mot
+        if unite == 1:
+            return f"{mot} et un"
+        return f"{mot}-{_UNITES[unite]}"
+    if n < 80:
+        # 70-79 : soixante + 10..19 (soixante-dix, soixante et onze, soixante-douze...)
+        reste = n - 60
+        if reste == 11:
+            return "soixante et onze"
+        return f"soixante-{_DIX_DIX_NEUF[reste - 10]}"
+    # 80-99 : quatre-vingt + 0..19 (pas de "s", convention financière)
+    reste = n - 80
+    if reste == 0:
+        return "quatre-vingt"
+    if reste < 10:
+        return f"quatre-vingt-{_UNITES[reste]}"
+    return f"quatre-vingt-{_DIX_DIX_NEUF[reste - 10]}"
+
+
+def _trois_chiffres_en_lettres(n: int) -> str:
+    centaines, reste = divmod(n, 100)
+    mots = []
+    if centaines > 0:
+        prefixe = "cent" if centaines == 1 else f"{_UNITES[centaines]} cent"
+        mots.append(prefixe)  # jamais de "s" (convention financière)
+    if reste > 0:
+        mots.append(_deux_chiffres_en_lettres(reste))
+    return " ".join(mots) if mots else "zéro"
+
+
+def nombre_en_lettres(n: int) -> str:
+    """Convertit un entier positif en toutes lettres (français, convention financière)."""
+    if n == 0:
+        return "zéro"
+    if n < 0:
+        return "moins " + nombre_en_lettres(-n)
+
+    milliards, reste = divmod(n, 10**9)
+    millions, reste = divmod(reste, 10**6)
+    milliers, unites = divmod(reste, 1000)
+
+    parts = []
+    if milliards:
+        mot = _trois_chiffres_en_lettres(milliards)
+        parts.append(f"{mot} milliard" + ("s" if milliards > 1 else ""))
+    if millions:
+        mot = _trois_chiffres_en_lettres(millions)
+        parts.append(f"{mot} million" + ("s" if millions > 1 else ""))
+    if milliers:
+        parts.append("mille" if milliers == 1 else f"{_trois_chiffres_en_lettres(milliers)} mille")
+    if unites:
+        parts.append(_trois_chiffres_en_lettres(unites))
+    return " ".join(parts)
+
+
+def montant_en_toutes_lettres(montant_fcfa) -> str:
+    """Ex. 45 961 700 -> 'quarante-cinq millions neuf cent soixante et un mille sept cent'."""
+    return nombre_en_lettres(int(montant_fcfa))
+def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None, geometrie: dict = None) -> dict:
     """
     Parcourt tous les éléments validés d'un projet, calcule leurs métrés,
-    y associe les postes de main d'œuvre saisis manuellement, et agrège
-    le tout dans un dictionnaire DQE unique.
+    y associe les postes ratio (maçonnerie/enduit/chaînage/raidisseur/
+    acrotère, si `geometrie` est fournie) et les postes de main d'œuvre
+    saisis manuellement, et regroupe le tout par LOT façon CIMBAT.
+
+    MODIFIÉ (Ange, Jour 2 §2.2) : restructuration par lot/sous-lot.
+    - Chaque ligne porte désormais un champ "lot" (les éléments
+      structurels et les postes ratio vont systématiquement dans
+      LOT 02 — GROS OEUVRE, comme dans le DQE CIMBAT de référence ; les
+      postes de main d'œuvre utilisent le lot choisi par l'ingénieur).
+    - "sous_totaux_par_lot" (clé "lots" ci-dessous) remplace la clé
+      plate "main_doeuvre" de l'ancien "sous_totaux" (qui mélangeait
+      main d'œuvre et éléments structurels dans un seul total sans
+      distinction de lot) -- retirée comme demandé dans la feuille de
+      route.
+    - Un seul passage sur toutes les lignes (pas de boucle imbriquée) :
+      reste performant même quand poteaux/semelles viennent d'une grille
+      de plusieurs dizaines d'éléments (trame).
     """
     if prix_unitaires is None:
         prix_unitaires = PRIX_UNITAIRES_DEFAUT
+
+    LOT_STRUCTUREL = PosteMainDoeuvre.Lot.GROS_OEUVRE.value
 
     # Uniquement les éléments au statut VALIDE
     elements_valides = projet.elements.filter(statut=ElementStructurel.Statut.VALIDE)
 
     toutes_lignes = []
-    sous_totaux = {
-        "beton": Decimal("0"),
-        "coffrage": Decimal("0"),
-        "acier": Decimal("0"),
-        "main_doeuvre": Decimal("0"),
-    }
 
-    # 1. Calcul pour les éléments structurels
+    # 1. Calcul pour les éléments structurels (LOT 02 — GROS OEUVRE)
     for element in elements_valides:
-        lignes_el = calculer_element_dqe(element, prix_unitaires)
-        toutes_lignes.extend(lignes_el)
-        for ligne in lignes_el:
-            cat = ligne["categorie"].lower()
-            if cat in sous_totaux:
-                sous_totaux[cat] += Decimal(str(ligne["montant"]))
+        for ligne in calculer_element_dqe(element, prix_unitaires):
+            ligne["lot"] = LOT_STRUCTUREL
+            toutes_lignes.append(ligne)
 
-    # 2. Ajout des postes de main d'œuvre manuels
-    postes_mo = (
-        projet.postes_complementaires.all()
-        if hasattr(projet, "postes_complementaires")
-        else []
-       )
-    for poste in postes_mo:
+    # 2. Postes ratio (maçonnerie, enduit, chaînage, raidisseur, acrotère)
+    #    -- uniquement si la géométrie générale du bâtiment est fournie ;
+    #    silencieusement absents sinon (pas d'erreur bloquante : un
+    #    projet peut être calculé sans ces informations si elles ne sont
+    #    pas encore connues).
+    if geometrie:
+        for ligne in calculer_postes_ratio_projet(geometrie, prix_unitaires):
+            ligne["lot"] = LOT_STRUCTUREL
+            toutes_lignes.append(ligne)
+
+    # 3. Postes de main d'œuvre manuels -- chacun dans SON lot
+    for poste in projet.postes_main_doeuvre.all():
         q_dec = Decimal(str(poste.quantite))
         pu_dec = Decimal(str(poste.prix_unitaire))
         montant_dec = (q_dec * pu_dec).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
@@ -299,10 +478,27 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None) -> dict:
             "quantite": float(q_dec.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)),
             "prix_unitaire": int(pu_dec),
             "montant": int(montant_dec),
+            "lot": poste.lot,
         })
-        sous_totaux["main_doeuvre"] += montant_dec
 
-    total_general = sum(sous_totaux.values())
+    # 4. Regroupement par lot + sous-totaux par catégorie -- un seul passage
+    sous_totaux_categorie = defaultdict(Decimal)
+    lots = defaultdict(lambda: {"lignes": [], "sous_total": Decimal("0")})
+
+    for ligne in toutes_lignes:
+        montant = Decimal(str(ligne["montant"]))
+        lots[ligne["lot"]]["lignes"].append(ligne)
+        lots[ligne["lot"]]["sous_total"] += montant
+        if ligne["categorie"] != "MAIN_DOEUVRE":
+            sous_totaux_categorie[ligne["categorie"].lower()] += montant
+
+    total_general = sum(l["sous_total"] for l in lots.values())
+
+    # Ordre d'affichage stable, façon CIMBAT (LOT 00 en premier, etc.)
+    ordre_lots = [choix.value for choix in PosteMainDoeuvre.Lot]
+    lots_ordonnes = sorted(
+        lots.keys(), key=lambda lot: ordre_lots.index(lot) if lot in ordre_lots else len(ordre_lots)
+    )
 
     return {
         "projet": {
@@ -310,12 +506,18 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None) -> dict:
             "nom": projet.nom,
         },
         "lignes": toutes_lignes,
+        "lots": [
+            {
+                "lot": lot,
+                "lignes": lots[lot]["lignes"],
+                "sous_total": int(lots[lot]["sous_total"]),
+            }
+            for lot in lots_ordonnes
+        ],
         "sous_totaux": {
-            "beton": int(sous_totaux["beton"]),
-            "coffrage": int(sous_totaux["coffrage"]),
-            "acier": int(sous_totaux["acier"]),
-            "main_doeuvre": int(sous_totaux["main_doeuvre"]),
+            categorie: int(montant) for categorie, montant in sous_totaux_categorie.items()
         },
         "total_general": int(total_general),
+        "montant_lettres": montant_en_toutes_lettres(total_general),
         "devise": "FCFA",
     }

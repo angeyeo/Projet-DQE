@@ -188,3 +188,52 @@ PORTEE_MAX_M = 15.0
 NB_NIVEAUX_MAX = 20
 
 USAGES_VALIDES = list(CHARGES_EXPLOITATION.keys())
+
+# --- Ratios "postes sans formule dédiée" (Phase 2/3, feuille de route
+# "Ma partie — Backend", Jour 1, §1.1) -----------------------------------
+#
+# Ces postes du DQE type CIMBAT (maçonnerie, enduit, chaînage, raidisseur,
+# acrotère) n'ont pas de dimensionnement structurel dédié dans le moteur
+# -- ce sont des quantités déduites de la géométrie générale du bâtiment
+# (périmètre, hauteurs, nombre de niveaux), pas d'un calcul de résistance.
+#
+# ATTENTION -- POINT CRITIQUE (à valider avec le technicien BTP avant
+# utilisation en production, cf. feuille de route) : ces valeurs sont
+# pour l'instant DÉDUITES DU SEUL EXEMPLE DISPONIBLE (DQE CIMBAT, Villa
+# basse 4 pièces, devis n°0017-2026), pas d'un référentiel validé. Elles
+# sont cohérentes à ±10% entre les différents postes "linéaires légers"
+# du même devis (chaînages, bêches, renforts, linteaux, acrotère : tous
+# à 90 kg/m³ d'acier et ~10 m²/m³ de coffrage), ce qui est un bon signe,
+# mais UN SEUL exemple ne suffit pas à les figer.
+
+# Épaisseur standard d'un mur en agglomérés de 15 (parpaing 15 cm), en m.
+EPAISSEUR_AGGLOS_15_M = 0.15
+EPAISSEUR_AGGLOS_10_M = 0.10
+
+# Coefficient de plein (1 - proportion d'ouvertures : portes, fenêtres) à
+# appliquer à la surface brute de mur pour la maçonnerie d'élévation.
+# 0.80 = hypothèse courante en habitation (à ajuster selon le plan réel).
+COEFFICIENT_PLEIN_MACONNERIE_ELEVATION = 0.80
+
+# Ratios acier / béton (kg/m³), déduits du DQE CIMBAT -- voir avertissement
+# ci-dessus. Les éléments "linéaires légers" (chaînages, linteaux, bêches,
+# renforts de dallage, acrotère) sont tous à 90 kg/m³ dans l'exemple ; les
+# éléments "verticaux/compression" (amorces de poteaux, raidisseurs) à
+# 150 kg/m³, cohérent avec RATIO_ACIER_POTEAUX_KG_M3 déjà utilisé ailleurs.
+RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3 = 90.0
+RATIO_ACIER_RAIDISSEUR_AMORCE_KG_M3 = 150.0
+
+# Ratios coffrage / béton (m²/m³), même source.
+RATIO_COFFRAGE_ELEMENT_LINEAIRE_LEGER_M2_M3 = 10.0
+RATIO_COFFRAGE_ACROTERE_M2_M3 = 15.0
+
+# Sections forfaitaires (m²) des éléments linéaires légers, pratique
+# courante en petit bâtiment (à confirmer avec le technicien) : ex.
+# chaînage 15x20 cm = 0.03 m².
+SECTION_CHAINAGE_M2 = 0.03
+SECTION_ACROTERE_M2 = 0.05  # acrotère un peu plus large (15x33 environ)
+
+# Ratio d'enduit : un raidisseur ou une amorce de poteau par façade/angle
+# structurel, en l'absence d'un vrai plan de ferraillage -- hypothèse
+# grossière tant que le plan réel n'est pas disponible.
+ENDUIT_EPAISSEUR_FORFAITAIRE = "dosé à 350 kg/m³"  # libellé DQE, pas un ratio numérique
