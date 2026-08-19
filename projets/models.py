@@ -79,6 +79,8 @@ class ElementStructurel(models.Model):
     portee = models.FloatField(null=True, blank=True)
     charge_lineaire = models.FloatField(null=True, blank=True)
     taux_travail_sol = models.FloatField(null=True, blank=True)
+    longueur_m = models.FloatField("Longueur (m)", null=True, blank=True)
+    surface_m2 = models.FloatField("Surface (m²)", null=True, blank=True)
 
     # Résultats stockés au format JSON
     resultat_calcul = models.JSONField(null=True, blank=True)
@@ -89,7 +91,6 @@ class ElementStructurel(models.Model):
 
     def __str__(self):
         return f"{self.identifiant} ({self.get_type_element_display()})"
-
 
 class CoucheCharge(models.Model):
     """Module 2 : Couches de charges permanentes composées (multi-couches)"""
