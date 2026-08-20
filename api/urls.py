@@ -7,6 +7,7 @@ from projets.views import (
     PosteComplementaireViewSet,
     AssistantStructurerView,
     AssistantExpliquerView,
+    EntrepriseParametresView,
 )
 
 router = DefaultRouter()
@@ -51,6 +52,11 @@ urlpatterns = [
         "projets/<int:pk>/generer-dqe/",
         ProjetViewSet.as_view({"get": "generer_dqe", "post": "generer_dqe"}),
         name="projet-generer-dqe",
+    ),
+    path(
+        "entreprise/",
+        EntrepriseParametresView.as_view(),
+        name="entreprise-parametres",
     ),
     path("", include(router.urls)),
 ]

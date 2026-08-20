@@ -124,6 +124,17 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         </div>
 
         <div className="form-group">
+          <label className="form-label">N° de Devis (optionnel)</label>
+          <input
+            type="text"
+            className="form-control"
+            value={projectData.numeroDevis}
+            onChange={(e) => updateProjectData({ numeroDevis: e.target.value })}
+            placeholder="ex: 0017-2026"
+          />
+        </div>
+
+        <div className="form-group">
           <label className="form-label">Usage principal du Bâtiment</label>
           <select
             className="form-select"

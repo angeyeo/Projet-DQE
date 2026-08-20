@@ -14,6 +14,7 @@ ajoutés côté Projet/ElementStructurel (nb_travees_x, position_x...).
 from ..constantes import CHARGES_EXPLOITATION
 from .descente_charges import calculer_surface_influence
 from .dimensionnement_poteaux import dimensionner_poteau
+from .dimensionnement_poutres import dimensionner_poutre
 from .dimensionnement_semelles import dimensionner_semelle
 
 # Charge permanente forfaitaire (kN/m²) pour un niveau courant, tant que
@@ -96,3 +97,33 @@ def calculer_longueur_chainage(nb_travees_x, nb_travees_y, portee_x, portee_y):
     longueur_x = nb_travees_x * portee_x * (nb_travees_y + 1)
     longueur_y = nb_travees_y * portee_y * (nb_travees_x + 1)
     return longueur_x + longueur_y
+
+
+def generer_poutre_sur_grille(portee, largeur_influence, charge_exploitation):
+    """
+    Poutre reliant deux poteaux adjacents de la grille (horizontale ou
+    verticale selon l'appelant -- cette fonction ne connaît que la
+    portée du tronçon).
+
+    `largeur_influence` (m) : largeur de dalle reprise par cette poutre
+    -- portee_perpendiculaire pour une poutre "intérieure" (dalle des
+    deux côtés), portee_perpendiculaire / 2 pour une poutre de rive
+    (dalle d'un seul côté). Reprend le même forfait de charge permanente
+    que generer_poteau_sur_grille() pour rester cohérent sur toute la
+    trame.
+
+    Retour : {"charge_lineaire_kn_m": ..., "resultat_poutre": {...}}
+    (sortie de dimensionner_poutre()).
+    """
+    charge_exploitation = charge_exploitation or CHARGES_EXPLOITATION.get("habitation")
+    charge_surfacique_elu = (
+        1.35 * CHARGE_PERMANENTE_FORFAITAIRE_KN_M2 + 1.5 * charge_exploitation
+    )
+    charge_lineaire_kn_m = charge_surfacique_elu * largeur_influence
+
+    resultat_poutre = dimensionner_poutre(portee=portee, charge_lineaire=charge_lineaire_kn_m)
+
+    return {
+        "charge_lineaire_kn_m": charge_lineaire_kn_m,
+        "resultat_poutre": resultat_poutre,
+    }

@@ -121,6 +121,7 @@ class DQECalculatorTestCase(TestCase):
     def test_calculer_projet_dqe_global_avec_main_doeuvre(self):
         PosteComplementaire.objects.create(
             projet=self.projet,
+            lot=PosteComplementaire.Lot.ELECTRICITE,
             designation="Terrassement fouilles",
             unite="m³",
             quantite=15.0,
@@ -133,7 +134,14 @@ class DQECalculatorTestCase(TestCase):
         self.assertEqual(mo_line["designation"], "Terrassement fouilles")
         self.assertEqual(mo_line["montant"], 75000)
 
-        self.assertEqual(dqe_data["sous_totaux"]["main_doeuvre"], 75000)
+        # Un sous-total plat "main_doeuvre" mélangerait main d'œuvre et
+        # gros œuvre dans un seul total sans distinction de lot ; les
+        # postes de main d'œuvre sont donc comptabilisés dans le
+        # sous-total de LEUR lot (voir calculer_projet_dqe).
+        lot_electricite = next(
+            l for l in dqe_data["lots"] if l["lot"] == PosteComplementaire.Lot.ELECTRICITE.value
+        )
+        self.assertEqual(lot_electricite["sous_total"], 75000)
 
     def test_calculer_element_dalle(self):
         dalle = ElementStructurel.objects.create(
@@ -258,28 +266,34 @@ class DQECalculatorTestCase(TestCase):
 
 class DQEExportersTestCase(TestCase):
     def setUp(self):
+        ligne_poteau = {
+            "element_id": 1,
+            "repere": "P1",
+            "type_element": "POTEAU",
+            "designation": "Béton armé — Poteau P1",
+            "categorie": "BETON",
+            "unite": "m³",
+            "quantite": 0.12,
+            "prix_unitaire": 100000,
+            "montant": 12000
+        }
         self.dqe_data = {
             "projet": {"id": 1, "nom": "Immeuble R+1"},
-            "lignes": [
+            "lignes": [ligne_poteau],
+            "lots": [
                 {
-                    "element_id": 1,
-                    "repere": "P1",
-                    "type_element": "POTEAU",
-                    "designation": "Béton armé — Poteau P1",
-                    "categorie": "BETON",
-                    "unite": "m³",
-                    "quantite": 0.12,
-                    "prix_unitaire": 100000,
-                    "montant": 12000
+                    "lot": "lot_02_gros_oeuvre_superstructure",
+                    "lignes": [ligne_poteau],
+                    "sous_total": 12000,
                 }
             ],
             "sous_totaux": {
                 "beton": 12000,
                 "coffrage": 0,
                 "acier": 0,
-                "main_doeuvre": 0
             },
             "total_general": 12000,
+            "montant_lettres": "douze mille",
             "devise": "FCFA"
         }
 
@@ -291,11 +305,16 @@ class DQEExportersTestCase(TestCase):
     def test_exporter_excel(self):
         buffer = exporter_dqe_excel(self.dqe_data)
         self.assertIsInstance(buffer, BytesIO)
-        
+
         wb = load_workbook(buffer)
-        self.assertIn("DQE", wb.sheetnames)
-        ws = wb["DQE"]
-        self.assertEqual(ws["A1"].value, "DEVIS QUANTITATIF ESTIMATIF (DQE)")
+        # La feuille "Récapitulatif" (total par lot) remplace l'ancienne
+        # feuille unique "DQE" ; le détail est désormais réparti sur une
+        # feuille par lot (voir dqe_exporters.exporter_dqe_excel).
+        self.assertIn("Récapitulatif", wb.sheetnames)
+        ws = wb["Récapitulatif"]
+        self.assertEqual(ws["A1"].value, "DEVIS QUANTITATIF ET ESTIMATIF (DQE)")
+
+        self.assertIn("LOT 02 — GROS ŒUVRE", wb.sheetnames)
 
 
 class DQEAPITestCase(APITestCase):

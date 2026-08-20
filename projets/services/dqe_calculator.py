@@ -1,7 +1,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 from collections import defaultdict
 
-from projets.models import Projet, ElementStructurel, PosteMainDoeuvre
+from projets.models import Projet, ElementStructurel, PosteComplementaire
 
 from moteur_calcul.constantes import (
     RATIO_ACIER_POTEAUX_KG_M3,
@@ -439,7 +439,11 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None, geometrie: 
     if prix_unitaires is None:
         prix_unitaires = PRIX_UNITAIRES_DEFAUT
 
-    LOT_STRUCTUREL = PosteMainDoeuvre.Lot.GROS_OEUVRE.value
+    LOT_GROS_OEUVRE_INFRA = PosteComplementaire.Lot.GROS_OEUVRE_INFRA.value
+    LOT_GROS_OEUVRE_SUPER = PosteComplementaire.Lot.GROS_OEUVRE_SUPER.value
+    # Lot par défaut (postes ratio, éléments sans position renseignée) :
+    # la superstructure reste le cas le plus courant (maçonnerie, chaînages...).
+    LOT_STRUCTUREL = LOT_GROS_OEUVRE_SUPER
 
     # Uniquement les éléments au statut VALIDE
     elements_valides = projet.elements.filter(statut=ElementStructurel.Statut.VALIDE)
@@ -447,9 +451,17 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None, geometrie: 
     toutes_lignes = []
 
     # 1. Calcul pour les éléments structurels (LOT 02 — GROS OEUVRE)
+    #    Semelles/fondations -> Infrastructure, reste (poteaux, poutres,
+    #    dalles...) -> Superstructure, selon le champ `position` de
+    #    l'élément (fallback Superstructure si non renseigné).
     for element in elements_valides:
+        lot_element = (
+            LOT_GROS_OEUVRE_INFRA
+            if element.position == ElementStructurel.Position.INFRASTRUCTURE
+            else LOT_GROS_OEUVRE_SUPER
+        )
         for ligne in calculer_element_dqe(element, prix_unitaires):
-            ligne["lot"] = LOT_STRUCTUREL
+            ligne["lot"] = lot_element
             toutes_lignes.append(ligne)
 
     # 2. Postes ratio (maçonnerie, enduit, chaînage, raidisseur, acrotère)
@@ -463,7 +475,7 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None, geometrie: 
             toutes_lignes.append(ligne)
 
     # 3. Postes de main d'œuvre manuels -- chacun dans SON lot
-    for poste in projet.postes_main_doeuvre.all():
+    for poste in projet.postes_complementaires.all():
         q_dec = Decimal(str(poste.quantite))
         pu_dec = Decimal(str(poste.prix_unitaire))
         montant_dec = (q_dec * pu_dec).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
@@ -495,7 +507,7 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict = None, geometrie: 
     total_general = sum(l["sous_total"] for l in lots.values())
 
     # Ordre d'affichage stable, façon CIMBAT (LOT 00 en premier, etc.)
-    ordre_lots = [choix.value for choix in PosteMainDoeuvre.Lot]
+    ordre_lots = [choix.value for choix in PosteComplementaire.Lot]
     lots_ordonnes = sorted(
         lots.keys(), key=lambda lot: ordre_lots.index(lot) if lot in ordre_lots else len(ordre_lots)
     )
