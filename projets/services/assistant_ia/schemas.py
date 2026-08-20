@@ -136,3 +136,62 @@ def valider_donnees_extraites(data: dict) -> dict:
         res["avertissements"].extend([str(item).strip() for item in avertissements])
 
     return res
+
+
+from projets.models import PosteComplementaire
+
+LOTS_VALIDES = set(PosteComplementaire.Lot.values)
+UNITES_VALIDES = {"ens.", "m²", "m³", "kg", "ml", "u"}
+CONFIANCES_VALIDES = {"haute", "moyenne", "basse"}
+
+
+def valider_suggestion_poste(data: dict) -> dict:
+    """
+    Valide les suggestions de poste faites par le LLM (désignation, unité, lot).
+    Garantit que lot_suggere appartient obligatoirement à PosteComplementaire.Lot.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("La réponse de l'assistant doit être un objet JSON.")
+
+    designation = str(data.get("designation") or "").strip()
+    if not designation:
+        designation = "Poste complémentaire"
+
+    unite = str(data.get("unite") or "ens.").strip().lower()
+    if unite not in UNITES_VALIDES:
+        unite = "ens."
+
+    lot_suggere = str(data.get("lot_suggere") or "").strip()
+    if lot_suggere not in LOTS_VALIDES:
+        lot_suggere = PosteComplementaire.Lot.GENERALITES.value
+
+    confiance = str(data.get("confiance") or "").strip().lower()
+    if confiance not in CONFIANCES_VALIDES:
+        confiance = "moyenne"
+
+    return {
+        "designation": designation,
+        "unite": unite,
+        "lot_suggere": lot_suggere,
+        "confiance": confiance,
+    }
+
+
+def valider_relecture_plan(data: dict) -> dict:
+    """
+    Valide les alertes de relecture du plan de fondation renvoyées par le LLM.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("La réponse de l'assistant doit être un objet JSON.")
+
+    alertes = data.get("alertes")
+    if not isinstance(alertes, list):
+        alertes = []
+
+    alertes_nettoyees = [str(item).strip() for item in alertes if str(item).strip()]
+
+    return {
+        "alertes": alertes_nettoyees,
+        "nombre_alertes": len(alertes_nettoyees),
+    }
+

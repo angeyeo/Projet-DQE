@@ -266,3 +266,185 @@ class AssistantIAAPITestCase(APITestCase):
             exp = expliquer_resultat_element(elem)
             self.assertEqual(exp["source"], "FALLBACK_LOCAL")
             self.assertFalse(exp["explication_technique_disponible"])
+
+
+class SuggestionPosteUnitTestCase(TestCase):
+    """Tests unitaires pour la suggestion de poste complémentaire."""
+
+    def setUp(self):
+        os.environ["LLM_PROVIDER"] = "mock"
+        if "LLM_API_KEY" in os.environ:
+            del os.environ["LLM_API_KEY"]
+
+    def test_suggestion_maconnerie_lot_gros_oeuvre(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        res = suggerer_poste_complementaire("Maçonnerie en agglos pleins 20")
+        suggestion = res["suggestion"]
+        self.assertEqual(suggestion["lot_suggere"], "lot_02_gros_oeuvre_superstructure")
+        self.assertEqual(suggestion["unite"], "m²")
+        self.assertIn("confiance", suggestion)
+        self.assertEqual(res["source"], "MOCK")
+
+    def test_suggestion_terrassement(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        res = suggerer_poste_complementaire("Fouilles en rigole pour fondation")
+        suggestion = res["suggestion"]
+        self.assertEqual(suggestion["lot_suggere"], "lot_01_terrassement")
+        self.assertEqual(suggestion["unite"], "m³")
+
+    def test_suggestion_description_vague_retourne_generalites(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        res = suggerer_poste_complementaire("Installation de chantier et implantation")
+        suggestion = res["suggestion"]
+        self.assertEqual(suggestion["lot_suggere"], "lot_00_generalites")
+
+    def test_suggestion_description_vide_leve_erreur(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        with self.assertRaises(ValueError):
+            suggerer_poste_complementaire("")
+
+    def test_suggestion_lot_toujours_valide(self):
+        """Vérifie que le lot retourné est toujours dans les choix du modèle."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        from projets.models import PosteComplementaire
+        lots_valides = set(PosteComplementaire.Lot.values)
+
+        descriptions = [
+            "Étanchéité de terrasse",
+            "Branchement électricité",
+            "Pose de couverture en tôle",
+            "Charpente bois traditionnel",
+        ]
+        for desc in descriptions:
+            res = suggerer_poste_complementaire(desc)
+            self.assertIn(res["suggestion"]["lot_suggere"], lots_valides, f"Lot invalide pour: {desc}")
+
+
+class RelecturePlanUnitTestCase(TestCase):
+    """Tests unitaires pour la relecture de cohérence du plan de fondation."""
+
+    def setUp(self):
+        os.environ["LLM_PROVIDER"] = "mock"
+        if "LLM_API_KEY" in os.environ:
+            del os.environ["LLM_API_KEY"]
+
+    def test_relecture_plan_coherent_aucune_alerte(self):
+        from projets.services.assistant_ia.postes import relire_plan_fondation
+        semelles = [
+            {"repere": "S1", "type": "SEMELLE", "dimensions": {"cote_cm": 80}},
+            {"repere": "S2", "type": "SEMELLE", "dimensions": {"cote_cm": 80}},
+        ]
+        res = relire_plan_fondation(semelles)
+        self.assertEqual(res["nombre_alertes"], 0)
+        self.assertEqual(res["alertes"], [])
+        self.assertEqual(res["source"], "MOCK")
+
+    def test_relecture_plan_vide_retourne_fallback(self):
+        from projets.services.assistant_ia.postes import relire_plan_fondation
+        res = relire_plan_fondation([])
+        self.assertEqual(res["source"], "FALLBACK_LOCAL")
+
+    def test_relecture_plan_none_retourne_fallback(self):
+        from projets.services.assistant_ia.postes import relire_plan_fondation
+        res = relire_plan_fondation(None)
+        self.assertEqual(res["source"], "FALLBACK_LOCAL")
+
+    def test_relecture_hallucination_declenche_fallback(self):
+        """Vérifie que des nombres inventés par le LLM déclenchent le fallback."""
+        from projets.services.assistant_ia.postes import relire_plan_fondation
+        semelles = [
+            {"repere": "S1", "type": "SEMELLE", "dimensions": {"cote_cm": 80}},
+        ]
+        # Le LLM invente la dimension 120 qui n'existe pas dans les données
+        fake_response = json.dumps({
+            "alertes": ["La semelle S1 de 120 cm est trop petite."],
+            "nombre_alertes": 1,
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = relire_plan_fondation(semelles)
+            self.assertEqual(res["source"], "FALLBACK_LOCAL")
+            self.assertIn("erreur", res)
+
+
+class SuggestionPosteAPITestCase(APITestCase):
+    """Tests d'API REST pour l'endpoint de suggestion de poste."""
+
+    def setUp(self):
+        os.environ["DEMO_MODE"] = "True"
+        os.environ["LLM_PROVIDER"] = "mock"
+
+    def test_api_suggerer_poste_success(self):
+        url = "/api/assistant/suggerer-poste/"
+        payload = {"description": "Fouille en rigole pour fondation"}
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("suggestion", response.data)
+        self.assertIn("lot_suggere", response.data["suggestion"])
+
+    def test_api_suggerer_poste_description_vide(self):
+        url = "/api/assistant/suggerer-poste/"
+        payload = {"description": ""}
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_api_suggerer_poste_description_manquante(self):
+        url = "/api/assistant/suggerer-poste/"
+        payload = {}
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class RelirePlanAPITestCase(APITestCase):
+    """Tests d'API REST pour l'endpoint de relecture de plan."""
+
+    def setUp(self):
+        os.environ["DEMO_MODE"] = "True"
+        os.environ["LLM_PROVIDER"] = "mock"
+        self.projet = Projet.objects.create(
+            nom="Projet Test Plan",
+            nb_niveaux=1,
+            usage_batiment="habitation",
+            portee_x=5.0,
+            portee_y=4.0,
+            nb_travees_x=2,
+            nb_travees_y=2,
+        )
+        self.semelle = ElementStructurel.objects.create(
+            projet=self.projet,
+            identifiant="S1",
+            type_element="semelle",
+            statut="valide",
+            taux_travail_sol=150.0,
+            charge_calculee=200.0,
+            resultat_calcul={"cote_cm": 80, "hauteur_cm": 30},
+        )
+
+    def test_api_relire_plan_success(self):
+        url = f"/api/projets/{self.projet.id}/relire-plan-fondation/"
+        response = self.client.post(url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("alertes", response.data)
+        self.assertIn("nombre_alertes", response.data)
+
+    def test_api_relire_plan_projet_sans_semelle(self):
+        projet_vide = Projet.objects.create(
+            nom="Projet Vide",
+            nb_niveaux=1,
+            usage_batiment="habitation",
+            portee_x=5.0,
+            portee_y=4.0,
+            nb_travees_x=1,
+            nb_travees_y=1,
+        )
+        url = f"/api/projets/{projet_vide.id}/relire-plan-fondation/"
+        response = self.client.post(url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_api_relire_plan_projet_inexistant(self):
+        url = "/api/projets/99999/relire-plan-fondation/"
+        response = self.client.post(url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+

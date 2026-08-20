@@ -51,6 +51,8 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'assistant_structurer': '10/min',
         'assistant_expliquer': '20/min',
+        'assistant_suggerer_poste': '15/min',
+        'assistant_relire_plan': '10/min',
     },
 }
 

@@ -22,6 +22,7 @@ from .services.dqe_calculator import calculer_projet_dqe
 from .services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
 from .services.assistant_ia.parser import structurer_description_projet
 from .services.assistant_ia.explanations import expliquer_resultat_element
+from .services.assistant_ia.postes import suggerer_poste_complementaire, relire_plan_fondation
 from .services.assistant_ia.client import LLMServiceError
 from moteur_calcul.validators import EntreeInvalide
 
@@ -374,3 +375,99 @@ class AssistantExpliquerView(APIView):
             )
         except Exception as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AssistantSuggererPosteView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "assistant_suggerer_poste"
+
+    def get_permissions(self):
+        if os.getenv("DEMO_MODE", "False").lower() == "true":
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
+    def post(self, request):
+        description = request.data.get("description", "").strip()
+        if not description:
+            return Response(
+                {"detail": "La description du poste est requise."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(description) > 500:
+            return Response(
+                {"detail": "La description ne doit pas dépasser 500 caractères."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            res = suggerer_poste_complementaire(description)
+            return Response(res, status=status.HTTP_200_OK)
+        except LLMServiceError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code},
+                status=exc.status_code,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            logger.exception("Erreur inattendue dans AssistantSuggererPosteView")
+            return Response(
+                {"detail": "Erreur interne du service d'assistance IA."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+
+class AssistantRelirePlanView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "assistant_relire_plan"
+
+    def get_permissions(self):
+        if os.getenv("DEMO_MODE", "False").lower() == "true":
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
+    def post(self, request, pk=None):
+        projet = get_object_or_404(Projet, pk=pk)
+
+        # Récupération des semelles du projet
+        semelles_qs = projet.elements.filter(
+            type_element__in=[
+                ElementStructurel.TypeElement.SEMELLE,
+                ElementStructurel.TypeElement.SEMELLE_FILANTE,
+            ],
+            statut=ElementStructurel.Statut.VALIDE,
+        )
+        if not semelles_qs.exists():
+            return Response(
+                {"detail": "Aucune semelle validée trouvée pour ce projet."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        semelles_data = []
+        for s in semelles_qs:
+            entry = {
+                "repere": s.identifiant,
+                "type": s.type_element,
+            }
+            if s.resultat_calcul:
+                entry["dimensions"] = {
+                    k: v for k, v in s.resultat_calcul.items()
+                    if v is not None
+                }
+            semelles_data.append(entry)
+
+        try:
+            res = relire_plan_fondation(semelles_data)
+            return Response(res, status=status.HTTP_200_OK)
+        except LLMServiceError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code},
+                status=exc.status_code,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            logger.exception("Erreur inattendue dans AssistantRelirePlanView")
+            return Response(
+                {"detail": "Erreur interne du service d'assistance IA."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )

@@ -27,9 +27,61 @@ class MockAIClient(BaseAIClient):
     """
     def appeler_llm(self, prompt: str, forcer_json: bool = False) -> str:
         if forcer_json:
+            # ---- Détection du prompt de suggestion de poste ----
+            if "désignation normalisée" in prompt and "lot_suggere" in prompt:
+                description = prompt
+                parts = prompt.split("Description saisie par l'ingénieur :")
+                if len(parts) > 1:
+                    description = parts[-1].strip().strip('"')
+
+                desc_lower = description.lower()
+
+                # Déduction déterministe du lot
+                lot = "lot_00_generalites"
+                unite = "ens."
+                if "maçonnerie" in desc_lower or "agglo" in desc_lower:
+                    lot = "lot_02_gros_oeuvre_superstructure"
+                    unite = "m²"
+                elif "terrassement" in desc_lower or "fouille" in desc_lower:
+                    lot = "lot_01_terrassement"
+                    unite = "m³"
+                elif "étanchéité" in desc_lower:
+                    lot = "lot_03_etancheite"
+                    unite = "m²"
+                elif "plomberie" in desc_lower or "sanitaire" in desc_lower:
+                    lot = "lot_04_plomberie"
+                    unite = "ens."
+                elif "électricité" in desc_lower or "electri" in desc_lower:
+                    lot = "lot_06_electricite"
+                    unite = "ens."
+                elif "charpente" in desc_lower:
+                    lot = "lot_07_charpente"
+                    unite = "m²"
+                elif "couverture" in desc_lower or "toiture" in desc_lower or "tôle" in desc_lower:
+                    lot = "lot_08_couverture"
+                    unite = "m²"
+
+                data = {
+                    "designation": description.strip()[:80].title(),
+                    "unite": unite,
+                    "lot_suggere": lot,
+                    "confiance": "haute",
+                }
+                return json.dumps(data)
+
+            # ---- Détection du prompt de relecture de plan ----
+            if "relire" in prompt.lower() and "semelles" in prompt.lower():
+                data = {
+                    "alertes": [],
+                    "nombre_alertes": 0,
+                }
+                return json.dumps(data)
+
+            # ---- Prompt de structuration existant ----
             # Extraction de la description utilisateur depuis le prompt
             description = prompt
             parts = prompt.split("Description du projet :")
+
             if len(parts) > 1:
                 description = parts[-1].strip().strip('"')
 
