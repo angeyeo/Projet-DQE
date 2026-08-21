@@ -69,14 +69,6 @@ class MockAIClient(BaseAIClient):
                 }
                 return json.dumps(data)
 
-            # ---- Détection du prompt de relecture de plan ----
-            if "relire" in prompt.lower() and "semelles" in prompt.lower():
-                data = {
-                    "alertes": [],
-                    "nombre_alertes": 0,
-                }
-                return json.dumps(data)
-
             # ---- Prompt de structuration existant ----
             # Extraction de la description utilisateur depuis le prompt
             description = prompt

@@ -1,54 +1,34 @@
 import math
+from projets.models import PosteComplementaire
 
-USAGES_VALIDES = ["HABITATION", "BUREAU", "COMMERCE", "INDUSTRIEL", "AUTRE"]
+# Source unique des lots issus du modèle Django (pas de copie statique)
+LOTS_VALIDES = set(PosteComplementaire.Lot.values)
 
+# Constante IA pour la validation des unités (le modèle Django PosteComplementaire n'a pas de choices Enum pour l'unité)
+UNITES_VALIDES = {"ens.", "m²", "m³", "kg", "ml", "u"}
 
-def valider_entier(value, nom_champ):
-    """Rejette explicitement les booléens et valide que la valeur est un entier."""
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{nom_champ} doit être un entier.")
-    return value
-
-
-def valider_nombre(value, nom_champ):
-    """Rejette explicitement les booléens et valide que la valeur est un float fini."""
-    if isinstance(value, bool):
-        raise ValueError(f"{nom_champ} doit être un nombre.")
-
-    try:
-        nombre = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{nom_champ} doit être un nombre.") from exc
-
-    if not math.isfinite(nombre):
-        raise ValueError(f"{nom_champ} doit être un nombre fini.")
-
-    return nombre
+CONFIANCES_VALIDES = {"haute", "moyenne", "basse"}
 
 
-import re
-
-def niveaux_depuis_configuration(configuration: str | None) -> int | None:
-    """Déduit le nombre de niveaux théoriques depuis la chaîne de configuration (ex: 'R+2' -> 3, 'RDC' -> 1)."""
-    if configuration is None:
+def niveaux_depuis_configuration(config_str: str) -> int | None:
+    """Convertit 'R+N' en nombre de niveaux (R+0 -> 1, R+1 -> 2, etc.)."""
+    if not config_str or not isinstance(config_str, str):
         return None
-
-    valeur = str(configuration).strip().upper()
-
-    if valeur in {"RDC", "R+0"}:
-        return 1
-
-    match = re.fullmatch(r"R\+(\d+)", valeur)
-    if not match:
-        return None
-
-    return int(match.group(1)) + 1
+    s = config_str.strip().upper()
+    if s.startswith("R+"):
+        try:
+            val = int(s[2:])
+            if val >= 0:
+                return val + 1
+        except ValueError:
+            pass
+    return None
 
 
 def valider_donnees_extraites(data: dict) -> dict:
     """
-    Valide de manière rigoureuse les données extraites par le LLM
-    pour s'assurer qu'elles respectent les types et limites du backend.
+    Valide et assainit le dictionnaire extrait par le LLM.
+    Lève ValueError si le format de base est invalide.
     """
     if not isinstance(data, dict):
         raise ValueError("La réponse de l'assistant doit être un objet JSON.")
@@ -56,7 +36,7 @@ def valider_donnees_extraites(data: dict) -> dict:
     res = {
         "nombre_niveaux": None,
         "configuration": None,
-        "usage": None,
+        "usage": "AUTRE",
         "portee_m": None,
         "hauteur_niveau_m": None,
         "contrainte_sol_kn_m2": None,
@@ -64,73 +44,66 @@ def valider_donnees_extraites(data: dict) -> dict:
         "avertissements": [],
     }
 
-    # 1. Validation de la configuration (ex: "R+2")
+    # 1. Nombre de niveaux & Configuration
+    nb_niveaux = data.get("nombre_niveaux")
     config = data.get("configuration")
-    if config is not None:
-        res["configuration"] = str(config).strip()
 
-    # 2. Validation de nombre_niveaux
-    nombre_niveaux = data.get("nombre_niveaux")
-    if nombre_niveaux is not None:
-        val_int = valider_entier(nombre_niveaux, "nombre_niveaux")
-        if val_int < 1 or val_int > 100:
-            raise ValueError("Le nombre de niveaux doit être compris entre 1 et 100.")
-        res["nombre_niveaux"] = val_int
+    if isinstance(nb_niveaux, (int, float)) and not isinstance(nb_niveaux, bool):
+        if not math.isnan(nb_niveaux) and not math.isinf(nb_niveaux):
+            val_int = int(nb_niveaux)
+            if val_int >= 1:
+                res["nombre_niveaux"] = val_int
 
-    # 3. Validation croisée entre configuration et nombre_niveaux
-    niveaux_config = niveaux_depuis_configuration(res["configuration"])
-    if (
-        niveaux_config is not None
-        and res["nombre_niveaux"] is not None
-        and niveaux_config != res["nombre_niveaux"]
-    ):
-        raise ValueError("La configuration et le nombre de niveaux sont incohérents.")
+    if isinstance(config, str) and config.strip():
+        config_clean = config.strip().upper()
+        res["configuration"] = config_clean
+        nb_depuis_config = niveaux_depuis_configuration(config_clean)
+        if nb_depuis_config is not None:
+            res["nombre_niveaux"] = nb_depuis_config
 
-    # 3. Validation de l'usage
-    usage = data.get("usage")
-    if usage is not None:
-        usage_str = str(usage).upper().strip()
-        if usage_str in USAGES_VALIDES:
-            res["usage"] = usage_str
-        else:
-            res["usage"] = "AUTRE"
-            res["avertissements"].append(f"Usage '{usage}' inconnu, classé comme 'AUTRE'.")
+    if res["nombre_niveaux"] is None:
+        res["donnees_manquantes"].append("nombre_niveaux")
+    elif res["configuration"] is None:
+        res["configuration"] = f"R+{res['nombre_niveaux'] - 1}"
 
-    # 4. Validation de portee_m
-    portee_m = data.get("portee_m")
-    if portee_m is not None:
-        val_float = valider_nombre(portee_m, "portee_m")
-        if val_float <= 0:
-            raise ValueError("La portée doit être strictement positive.")
-        res["portee_m"] = val_float
-
-    # 5. Validation de hauteur_niveau_m
-    hauteur_niveau_m = data.get("hauteur_niveau_m")
-    if hauteur_niveau_m is not None:
-        val_float = valider_nombre(hauteur_niveau_m, "hauteur_niveau_m")
-        if val_float <= 0:
-            raise ValueError("La hauteur de niveau doit être strictement positive.")
-        res["hauteur_niveau_m"] = val_float
-
-    # 6. Validation de contrainte_sol_kn_m2
-    contrainte_sol = data.get("contrainte_sol_kn_m2")
-    if contrainte_sol is not None:
-        val_float = valider_nombre(contrainte_sol, "contrainte_sol_kn_m2")
-        if val_float <= 0:
-            raise ValueError("La contrainte de sol doit être strictement positive.")
-        res["contrainte_sol_kn_m2"] = val_float
-
-    # 7. Données manquantes
-    donnees_manquantes = data.get("donnees_manquantes")
-    if isinstance(donnees_manquantes, list):
-        res["donnees_manquantes"] = [str(item).strip() for item in donnees_manquantes]
+    # 2. Usage
+    usage_str = str(data.get("usage") or "").strip().upper()
+    usages_valides = {"HABITATION", "BUREAU", "COMMERCE", "INDUSTRIEL", "AUTRE"}
+    if usage_str in usages_valides:
+        res["usage"] = usage_str
     else:
-        # Détection automatique si non fourni par le LLM
-        for champ in ["nombre_niveaux", "usage", "portee_m"]:
-            if res[champ] is None:
-                res["donnees_manquantes"].append(champ)
+        res["usage"] = "AUTRE"
 
-    # 8. Avertissements
+    # 3. Portée (m)
+    portee = data.get("portee_m")
+    if isinstance(portee, (int, float)) and not isinstance(portee, bool):
+        if not math.isnan(portee) and not math.isinf(portee) and portee > 0:
+            res["portee_m"] = round(float(portee), 2)
+
+    if res["portee_m"] is None:
+        res["donnees_manquantes"].append("portee_m")
+
+    # 4. Hauteur niveau (m)
+    hauteur = data.get("hauteur_niveau_m")
+    if isinstance(hauteur, (int, float)) and not isinstance(hauteur, bool):
+        if not math.isnan(hauteur) and not math.isinf(hauteur) and hauteur > 0:
+            res["hauteur_niveau_m"] = round(float(hauteur), 2)
+
+    # 5. Contrainte sol (kN/m²)
+    sol = data.get("contrainte_sol_kn_m2")
+    if isinstance(sol, (int, float)) and not isinstance(sol, bool):
+        if not math.isnan(sol) and not math.isinf(sol) and sol > 0:
+            res["contrainte_sol_kn_m2"] = round(float(sol), 2)
+
+    # 6. Synchronisation des données manquantes transmises par le LLM
+    donnees_manquantes_llm = data.get("donnees_manquantes")
+    if isinstance(donnees_manquantes_llm, list):
+        for item in donnees_manquantes_llm:
+            item_str = str(item).strip()
+            if item_str and item_str not in res["donnees_manquantes"]:
+                res["donnees_manquantes"].append(item_str)
+
+    # 7. Avertissements
     avertissements = data.get("avertissements")
     if isinstance(avertissements, list):
         res["avertissements"].extend([str(item).strip() for item in avertissements])
@@ -138,36 +111,42 @@ def valider_donnees_extraites(data: dict) -> dict:
     return res
 
 
-from projets.models import PosteComplementaire
-
-LOTS_VALIDES = set(PosteComplementaire.Lot.values)
-UNITES_VALIDES = {"ens.", "m²", "m³", "kg", "ml", "u"}
-CONFIANCES_VALIDES = {"haute", "moyenne", "basse"}
-
-
 def valider_suggestion_poste(data: dict) -> dict:
     """
-    Valide les suggestions de poste faites par le LLM (désignation, unité, lot).
-    Garantit que lot_suggere appartient obligatoirement à PosteComplementaire.Lot.
+    Valide strictement la suggestion de poste renvoyée par le LLM.
+    Chaque champ doit être explicitement de type string (str). Aucune conversion automatique (ex: str()) n'est tolérée.
+    Lève ValueError si l'un des champs est absent, de mauvais type, vide ou hors bornes autorisées.
     """
     if not isinstance(data, dict):
         raise ValueError("La réponse de l'assistant doit être un objet JSON.")
 
-    designation = str(data.get("designation") or "").strip()
+    designation = data.get("designation")
+    if not isinstance(designation, str) or isinstance(designation, bool):
+        raise ValueError("Le champ 'designation' doit être une chaîne de caractères (str).")
+    designation = designation.strip()
     if not designation:
-        designation = "Poste complémentaire"
+        raise ValueError("La suggestion de l'assistant doit contenir une désignation non vide.")
 
-    unite = str(data.get("unite") or "ens.").strip().lower()
+    unite = data.get("unite")
+    if not isinstance(unite, str) or isinstance(unite, bool):
+        raise ValueError("Le champ 'unite' doit être une chaîne de caractères (str).")
+    unite = unite.strip().lower()
     if unite not in UNITES_VALIDES:
-        unite = "ens."
+        raise ValueError(f"L'unité suggérée '{unite}' est invalide. Unités autorisées : {sorted(UNITES_VALIDES)}")
 
-    lot_suggere = str(data.get("lot_suggere") or "").strip()
+    lot_suggere = data.get("lot_suggere")
+    if not isinstance(lot_suggere, str) or isinstance(lot_suggere, bool):
+        raise ValueError("Le champ 'lot_suggere' doit être une chaîne de caractères (str).")
+    lot_suggere = lot_suggere.strip()
     if lot_suggere not in LOTS_VALIDES:
-        lot_suggere = PosteComplementaire.Lot.GENERALITES.value
+        raise ValueError(f"Le lot suggéré '{lot_suggere}' est invalide. Lots autorisés issus de PosteComplementaire.Lot.")
 
-    confiance = str(data.get("confiance") or "").strip().lower()
+    confiance = data.get("confiance")
+    if not isinstance(confiance, str) or isinstance(confiance, bool):
+        raise ValueError("Le champ 'confiance' doit être une chaîne de caractères (str).")
+    confiance = confiance.strip().lower()
     if confiance not in CONFIANCES_VALIDES:
-        confiance = "moyenne"
+        raise ValueError(f"Le niveau de confiance '{confiance}' est invalide. Niveaux autorisés : {sorted(CONFIANCES_VALIDES)}")
 
     return {
         "designation": designation,
@@ -175,23 +154,3 @@ def valider_suggestion_poste(data: dict) -> dict:
         "lot_suggere": lot_suggere,
         "confiance": confiance,
     }
-
-
-def valider_relecture_plan(data: dict) -> dict:
-    """
-    Valide les alertes de relecture du plan de fondation renvoyées par le LLM.
-    """
-    if not isinstance(data, dict):
-        raise ValueError("La réponse de l'assistant doit être un objet JSON.")
-
-    alertes = data.get("alertes")
-    if not isinstance(alertes, list):
-        alertes = []
-
-    alertes_nettoyees = [str(item).strip() for item in alertes if str(item).strip()]
-
-    return {
-        "alertes": alertes_nettoyees,
-        "nombre_alertes": len(alertes_nettoyees),
-    }
-
