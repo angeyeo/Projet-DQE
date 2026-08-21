@@ -2,10 +2,27 @@ import json
 import logging
 
 from .client import get_ai_client, MockAIClient
+from .explanations import extraire_nombres, TERMES_INTERDITS
 from .prompts import PROMPT_SUGGESTION_POSTE
 from .schemas import valider_suggestion_poste, LOTS_VALIDES
 
 logger = logging.getLogger(__name__)
+
+# Formulation de sécurité réutilisée depuis le module IA (explanations.py, ligne 95).
+# Ne pas créer une troisième formulation différente.
+MESSAGE_VALIDATION_HUMAINE = (
+    "Cette proposition doit être vérifiée et validée par l'ingénieur structure."
+)
+
+FALLBACK_REPONSE = {
+    "suggestion": None,
+    "source": "FALLBACK_LOCAL",
+    "validation_humaine_requise": True,
+    "message": (
+        "La suggestion automatique n'est pas disponible. "
+        "Le poste doit être renseigné et vérifié manuellement par l'ingénieur."
+    ),
+}
 
 
 # DETTE TECHNIQUE TEMPORAIRE : extraction JSON par accolades dupliquée entre parser.py et postes.py.
@@ -34,6 +51,9 @@ def suggerer_poste_complementaire(description: str) -> dict:
 
     Lève ValueError si la description est vide, non-chaîne, trop longue (>500),
     ou si le LLM renvoie des données invalides ou mal formées.
+
+    Retourne un fallback sécurisé (suggestion=None, source=FALLBACK_LOCAL)
+    si la désignation générée contient un nombre inventé ou un terme interdit.
     """
     if not isinstance(description, str) or isinstance(description, bool) or not description.strip():
         raise ValueError("La description du poste ne doit pas être vide.")
@@ -60,11 +80,38 @@ def suggerer_poste_complementaire(description: str) -> dict:
     # 5. Validation stricte via le schéma (lève ValueError sans correction silencieuse si invalide)
     validated = valider_suggestion_poste(data)
 
-    # 6. Détermination de la source
+    # 6. Post-validation : anti-hallucination numérique
+    #    Comparer les nombres de la designation générée avec ceux de la description d'entrée.
+    #    IMPORTANT : ne PAS analyser lot_suggere (lot_00, lot_01 contiennent des nombres légitimes).
+    nombres_description = extraire_nombres(description)
+    nombres_designation = extraire_nombres(validated["designation"])
+    nombres_inventes = nombres_designation - nombres_description
+    if nombres_inventes:
+        logger.warning(
+            "Suggestion rejetée : nombres inventés %s dans la désignation '%s' "
+            "(description d'entrée : '%s')",
+            nombres_inventes, validated["designation"], description,
+        )
+        return dict(FALLBACK_REPONSE)
+
+    # 7. Post-validation : termes interdits dans la designation
+    #    Comparaison insensible à la casse, réutilise TERMES_INTERDITS depuis explanations.py.
+    designation_lower = validated["designation"].lower()
+    for terme in TERMES_INTERDITS:
+        if terme in designation_lower:
+            logger.warning(
+                "Suggestion rejetée : terme interdit '%s' dans la désignation '%s'",
+                terme, validated["designation"],
+            )
+            return dict(FALLBACK_REPONSE)
+
+    # 8. Détermination de la source
     is_mock = isinstance(client, MockAIClient)
     source = "MOCK" if is_mock else "GEMINI"
 
     return {
         "suggestion": validated,
         "source": source,
+        "validation_humaine_requise": True,
+        "message_validation": MESSAGE_VALIDATION_HUMAINE,
     }

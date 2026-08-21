@@ -502,6 +502,105 @@ class SuggestionPosteUnitTestCase(TestCase):
         self.assertNotIn("prix_unitaire", sug)
         self.assertNotIn("quantite", sug)
 
+    # --- Tests de sécurité anti-hallucination et termes interdits ---
+
+    def test_suggestion_nombre_existant_accepte(self):
+        """Un nombre présent dans la description d'entrée est accepté dans la designation."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": "Maçonnerie agglos pleins 20",
+            "unite": "m²",
+            "lot_suggere": "lot_02_gros_oeuvre_superstructure",
+            "confiance": "haute"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = suggerer_poste_complementaire("Maçonnerie agglos 20")
+            self.assertIsNotNone(res["suggestion"])
+            self.assertIn(res["source"], ("MOCK", "GEMINI"))
+
+    def test_suggestion_nombre_invente_declenche_fallback(self):
+        """Un nombre absent de la description d'entrée déclenche le fallback."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": "Installation de chantier 250 m²",
+            "unite": "ens.",
+            "lot_suggere": "lot_00_generalites",
+            "confiance": "haute"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = suggerer_poste_complementaire("Installation de chantier")
+            self.assertIsNone(res["suggestion"])
+            self.assertEqual(res["source"], "FALLBACK_LOCAL")
+            self.assertTrue(res["validation_humaine_requise"])
+
+    def _assert_terme_interdit_declenche_fallback(self, terme):
+        """Helper : vérifie qu'un terme interdit dans la designation déclenche le fallback."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": f"Fondation {terme} pour bâtiment",
+            "unite": "m³",
+            "lot_suggere": "lot_01_terrassement",
+            "confiance": "haute"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = suggerer_poste_complementaire("Fondation pour bâtiment")
+            self.assertIsNone(res["suggestion"],
+                             f"Le terme interdit '{terme}' n'a pas déclenché le fallback.")
+            self.assertEqual(res["source"], "FALLBACK_LOCAL")
+            self.assertTrue(res["validation_humaine_requise"])
+
+    def test_suggestion_terme_conforme_declenche_fallback(self):
+        self._assert_terme_interdit_declenche_fallback("conforme")
+
+    def test_suggestion_terme_valide_declenche_fallback(self):
+        self._assert_terme_interdit_declenche_fallback("validé")
+
+    def test_suggestion_terme_sur_declenche_fallback(self):
+        self._assert_terme_interdit_declenche_fallback("sûr")
+
+    def test_suggestion_terme_optimal_declenche_fallback(self):
+        self._assert_terme_interdit_declenche_fallback("optimal")
+
+    def test_suggestion_valide_validation_humaine_requise(self):
+        """Toute suggestion valide contient validation_humaine_requise=True."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        res = suggerer_poste_complementaire("Maçonnerie en agglos pleins 20")
+        self.assertTrue(res["validation_humaine_requise"])
+        self.assertIn("message_validation", res)
+        self.assertIsInstance(res["message_validation"], str)
+        self.assertGreater(len(res["message_validation"]), 0)
+
+    def test_fallback_ne_divulgue_aucune_suggestion_metier(self):
+        """En fallback, aucune donnée métier (lot, unité, prix, quantité) ne doit fuiter."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": "Installation de chantier 999 m²",
+            "unite": "ens.",
+            "lot_suggere": "lot_00_generalites",
+            "confiance": "haute"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = suggerer_poste_complementaire("Installation de chantier")
+            self.assertIsNone(res["suggestion"])
+            self.assertNotIn("lot_suggere", res)
+            self.assertNotIn("unite", res)
+            self.assertNotIn("prix", res)
+            self.assertNotIn("prix_unitaire", res)
+            self.assertNotIn("quantite", res)
+            self.assertNotIn("designation", res)
+
 
 class SuggestionPosteAPITestCase(APITestCase):
     """Tests d'API REST exhaustifs pour l'endpoint de suggestion de poste."""
