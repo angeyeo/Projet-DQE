@@ -8,6 +8,7 @@ from moteur_calcul.constantes import (
     RATIO_ACIER_POUTRES_KG_M3,
     RATIO_ACIER_SEMELLES_KG_M3,
     RATIO_ACIER_DALLES_KG_M3,
+    RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3,
 )
 from moteur_calcul.formules.postes_ratio import calculer_poste_ratio, TYPES_POSTES
 
@@ -35,6 +36,10 @@ RATIOS_ACIER_KG_M3 = {
     "POUTRE": Decimal(str(sum(RATIO_ACIER_POUTRES_KG_M3) / 2)),    # (120+180)/2 = 150
     "SEMELLE": Decimal(str(sum(RATIO_ACIER_SEMELLES_KG_M3) / 2)),  # (40+60)/2 = 50
     "DALLE": Decimal(str(sum(RATIO_ACIER_DALLES_KG_M3) / 2)),      # (70+100)/2 = 85
+    # AJOUTÉ (Phase C) : longrine réutilise le ratio POUTRE (même
+    # physique, flexion simple) ; chaînage reprend le ratio "éléments
+    # linéaires légers" déjà utilisé par le poste ratio global.
+    "CHAINAGE": Decimal(str(RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3)),  # 90
 }
 
 
@@ -90,8 +95,12 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> li
             # document technicien, voir RATIOS_ACIER_KG_M3 ci-dessus)
             poids_acier = volume_beton * RATIOS_ACIER_KG_M3["POTEAU"]
 
-    # 2. Poutre
-    elif element.type_element == ElementStructurel.TypeElement.POUTRE:
+    # 2. Poutre (et Longrine, Phase C -- même physique, même calcul de
+    #    quantités : flexion simple BAEL, portee/charge_lineaire).
+    elif element.type_element in (
+        ElementStructurel.TypeElement.POUTRE,
+        getattr(ElementStructurel.TypeElement, "LONGRINE", "longrine"),
+    ):
         largeur_cm = res.get("largeur_cm")
         hauteur_cm = res.get("hauteur_cm")
         portee = element.portee  # en mètres sur le modèle
@@ -206,6 +215,36 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict) -> li
             poids_acier = Decimal(str(section_totale_m2 * longueur * DENSITE_ACIER_KG_M3))
         else:
             poids_acier = volume_beton * RATIOS_ACIER_KG_M3["SEMELLE"]
+
+    # 6. Chaînage identifié (Phase C, repère CH1)
+    #
+    # AJOUTÉ : dimensionner_chainage() renvoie une section fixe
+    # (largeur_cm/hauteur_cm) et directement le poids d'acier total
+    # (poids_acier_total_kg, pas un ratio à appliquer nous-mêmes -- déjà
+    # fait dans postes_ratio.py) -- même volume_beton_m3 disponible
+    # directement, pas besoin de le recalculer depuis largeur*hauteur*longueur.
+    elif element.type_element == getattr(ElementStructurel.TypeElement, "CHAINAGE", "chainage"):
+        largeur_cm = res.get("largeur_cm")
+        hauteur_cm = res.get("hauteur_cm")
+        longueur = element.longueur_m
+
+        if not all(v is not None for v in [largeur_cm, hauteur_cm, longueur]):
+            return []
+
+        largeur_m = cm_vers_m(largeur_cm)
+        hauteur_m = cm_vers_m(hauteur_cm)
+
+        # Béton (m3) = largeur * hauteur * longueur (comme semelle filante)
+        volume_beton = Decimal(str(res.get("volume_beton_m3", largeur_m * hauteur_m * longueur)))
+        # Coffrage (m2) = 2 faces latérales * hauteur * longueur (chaînage
+        # coulé le long du mur, comme une semelle filante en élévation)
+        surf_coffrage = Decimal(str(2 * hauteur_m * longueur))
+
+        poids_moteur = res.get("poids_acier_total_kg")
+        if poids_moteur is not None:
+            poids_acier = Decimal(str(poids_moteur))
+        else:
+            poids_acier = volume_beton * RATIOS_ACIER_KG_M3["CHAINAGE"]
 
     else:
         return []

@@ -233,6 +233,15 @@ RATIO_COFFRAGE_ACROTERE_M2_M3 = 15.0
 SECTION_CHAINAGE_M2 = 0.03
 SECTION_ACROTERE_M2 = 0.05  # acrotère un peu plus large (15x33 environ)
 
+# AJOUTÉ (Phase C) : dimensions par défaut du chaînage (15x20 cm),
+# cohérentes avec SECTION_CHAINAGE_M2 ci-dessus (0.15 x 0.20 = 0.03 m²)
+# -- utilisées par dimensionner_chainage() (postes_ratio.py) pour un
+# chaînage identifié individuellement (repère CH1), par opposition au
+# poste ratio global (calculer_poste_ratio("chainage", ...)) qui ne
+# manipule que la section totale sans la décomposer.
+LARGEUR_CHAINAGE_CM_DEFAUT = 15.0
+HAUTEUR_CHAINAGE_CM_DEFAUT = 20.0
+
 # Ratio d'enduit : un raidisseur ou une amorce de poteau par façade/angle
 # structurel, en l'absence d'un vrai plan de ferraillage -- hypothèse
 # grossière tant que le plan réel n'est pas disponible.

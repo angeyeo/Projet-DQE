@@ -40,6 +40,15 @@ class ElementStructurel(models.Model):
         SEMELLE = "semelle", "Semelle Isolée"
         DALLE = "dalle", "Dalle Pleine"
         SEMELLE_FILANTE = "semelle_filante", "Semelle Filante"
+        # AJOUTÉ (Phase C) : longrine -- même physique qu'une poutre
+        # (flexion simple BAEL), juste à un autre niveau (liaison entre
+        # semelles) -- pas de nouvelle formule, réutilise dimensionner_poutre().
+        LONGRINE = "longrine", "Longrine"
+        # AJOUTÉ (Phase C) : chaînage promu en élément identifié (repère
+        # CH1 individuel, ligne DQE dédiée) -- avant, uniquement un poste
+        # ratio global (voir postes_ratio.calculer_poste_ratio("chainage", ...),
+        # qui reste disponible pour un usage en lot forfaitaire non identifié).
+        CHAINAGE = "chainage", "Chaînage"
 
     class Statut(models.TextChoices):
         PROPOSE = "propose", "Proposé"

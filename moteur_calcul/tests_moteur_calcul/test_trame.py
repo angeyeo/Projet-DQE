@@ -12,7 +12,16 @@ from django.test import SimpleTestCase
 from moteur_calcul.formules.trame import (
     generer_poteau_sur_grille,
     calculer_longueur_chainage,
+    generer_poteau_depuis_position_reelle,
+    generer_poutre_depuis_positions_reelles,
+    detecter_poutres_adjacentes,
+    _trouver_voisin_direct,
 )
+
+
+def _poteau(nom, x, y):
+    """Fixture minimale au format extraire_poteaux() (Phase A)."""
+    return {"nom": nom, "guid": nom, "x": x, "y": y, "z": 0.0}
 
 
 class TestGenererPoteauSurGrille(SimpleTestCase):
@@ -85,6 +94,124 @@ class TestGenererPoteauSurGrille(SimpleTestCase):
                 i=5, j=0, portee_x=5.0, portee_y=4.0, nb_travees_x=2, nb_travees_y=1,
                 charge_exploitation=1.5, hauteur_etage=3.0,
             )
+
+
+class TestGenererPoteauDepuisPositionReelle(SimpleTestCase):
+    def _nuage_2x1(self):
+        """Même trame 2x1, 5,0x4,0 m que TestGenererPoteauSurGrille, mais
+        comme nuage de points réel (positions absolues) plutôt qu'indices."""
+        return [
+            _poteau("A", 0.0, 0.0), _poteau("B", 5.0, 0.0), _poteau("C", 10.0, 0.0),
+            _poteau("D", 0.0, 4.0), _poteau("E", 5.0, 4.0), _poteau("F", 10.0, 4.0),
+        ]
+
+    def test_equivalent_a_generer_poteau_sur_grille_sur_grille_reguliere(self):
+        """Sur une grille parfaitement régulière, la version Phase B doit
+        retomber sur exactement les mêmes charges que la version grille."""
+        voisins = self._nuage_2x1()
+        params_communs = dict(
+            portee_x=5.0, portee_y=4.0, nb_travees_x=2, nb_travees_y=1,
+            charge_exploitation=1.5, hauteur_etage=3.0,
+        )
+        angle_grille = generer_poteau_sur_grille(i=0, j=0, **params_communs)
+        centre_grille = generer_poteau_sur_grille(i=1, j=0, **params_communs)
+
+        poteau_a = next(p for p in voisins if p["nom"] == "A")
+        poteau_b = next(p for p in voisins if p["nom"] == "B")
+        angle_reel = generer_poteau_depuis_position_reelle(
+            poteau_a, voisins, charge_exploitation=1.5, hauteur_etage=3.0
+        )
+        centre_reel = generer_poteau_depuis_position_reelle(
+            poteau_b, voisins, charge_exploitation=1.5, hauteur_etage=3.0
+        )
+
+        self.assertAlmostEqual(angle_reel["charge_elu_kn"], angle_grille["charge_elu_kn"], places=6)
+        self.assertAlmostEqual(centre_reel["charge_elu_kn"], centre_grille["charge_elu_kn"], places=6)
+        self.assertEqual(angle_reel["x"], 0.0)
+        self.assertEqual(angle_reel["y"], 0.0)
+
+    def test_poteau_isole_sans_voisin_leve_une_erreur_explicite(self):
+        """Aucun voisin détecté dans aucune direction -> surface nulle :
+        erreur explicite plutôt que de laisser planter dimensionner_poteau
+        plus loin avec une charge nulle."""
+        poteau_seul = _poteau("SEUL", 0.0, 0.0)
+        with self.assertRaises(ValueError):
+            generer_poteau_depuis_position_reelle(
+                poteau_seul, [poteau_seul], charge_exploitation=1.5, hauteur_etage=3.0
+            )
+
+    def test_grille_irreguliere_utilise_les_distances_reelles(self):
+        """Portées différentes de chaque côté (poteau non centré) --
+        la surface doit refléter les distances réelles, pas une moyenne."""
+        voisins = [
+            _poteau("A", 0.0, 0.0), _poteau("B", 3.0, 0.0), _poteau("C", 8.0, 0.0),
+            _poteau("A2", 0.0, 4.0), _poteau("B2", 3.0, 4.0), _poteau("C2", 8.0, 4.0),
+        ]
+        poteau_b = next(p for p in voisins if p["nom"] == "B")
+        resultat = generer_poteau_depuis_position_reelle(
+            poteau_b, voisins, charge_exploitation=1.5, hauteur_etage=3.0
+        )
+        self.assertAlmostEqual(resultat["portees_detectees"]["gauche"], 3.0)
+        self.assertAlmostEqual(resultat["portees_detectees"]["droite"], 5.0)
+        self.assertAlmostEqual(resultat["portees_detectees"]["avant"], 0.0)
+        self.assertAlmostEqual(resultat["portees_detectees"]["arriere"], 4.0)
+
+    def test_traçabilite_guid_et_nom_transmis(self):
+        voisins = self._nuage_2x1()
+        poteau_b = next(p for p in voisins if p["nom"] == "B")
+        resultat = generer_poteau_depuis_position_reelle(
+            poteau_b, voisins, charge_exploitation=1.5, hauteur_etage=3.0
+        )
+        self.assertEqual(resultat["guid"], "B")
+        self.assertEqual(resultat["nom"], "B")
+
+
+class TestTrouverVoisinDirect(SimpleTestCase):
+    def test_ignore_les_poteaux_non_alignes(self):
+        """Un poteau décalé en y de plus que la tolérance ne doit pas être
+        considéré comme voisin sur l'axe x."""
+        origine = _poteau("O", 0.0, 0.0)
+        voisins = [origine, _poteau("DECALE", 5.0, 1.0)]
+        voisin, distance = _trouver_voisin_direct(origine, voisins, axe="x", sens=1)
+        self.assertIsNone(voisin)
+        self.assertEqual(distance, 0.0)
+
+    def test_retient_le_plus_proche_parmi_plusieurs_alignes(self):
+        origine = _poteau("O", 0.0, 0.0)
+        voisins = [origine, _poteau("PROCHE", 3.0, 0.0), _poteau("LOIN", 8.0, 0.0)]
+        voisin, distance = _trouver_voisin_direct(origine, voisins, axe="x", sens=1)
+        self.assertEqual(voisin["nom"], "PROCHE")
+        self.assertAlmostEqual(distance, 3.0)
+
+
+class TestGenererPoutreDepuisPositionsReelles(SimpleTestCase):
+    def test_equivalent_a_generer_poutre_sur_grille_sur_grille_reguliere(self):
+        voisins = [
+            _poteau("A", 0.0, 0.0), _poteau("B", 5.0, 0.0),
+            _poteau("D", 0.0, 4.0), _poteau("E", 5.0, 4.0),
+        ]
+        poteau_a = next(p for p in voisins if p["nom"] == "A")
+        poteau_b = next(p for p in voisins if p["nom"] == "B")
+        resultat = generer_poutre_depuis_positions_reelles(
+            poteau_a, poteau_b, axe="x", voisins=voisins, charge_exploitation=1.5
+        )
+        self.assertAlmostEqual(resultat["portee_m"], 5.0)
+        self.assertEqual(resultat["poteau_origine_guid"], "A")
+        self.assertEqual(resultat["poteau_destination_guid"], "B")
+        self.assertIn("hauteur_cm", resultat["resultat_poutre"])
+
+    def test_detecter_poutres_adjacentes_pas_de_doublon(self):
+        """Trame 2x1 (6 poteaux) -> 7 poutres attendues (3 en x sur chaque
+        rangée y=0 et y=4, soit 4, + 3 en y entre les deux rangées),
+        chaque segment une seule fois."""
+        voisins = [
+            _poteau("A", 0.0, 0.0), _poteau("B", 5.0, 0.0), _poteau("C", 10.0, 0.0),
+            _poteau("D", 0.0, 4.0), _poteau("E", 5.0, 4.0), _poteau("F", 10.0, 4.0),
+        ]
+        poutres = detecter_poutres_adjacentes(voisins, charge_exploitation=1.5)
+        self.assertEqual(len(poutres), 7)
+        paires = {(p["poteau_origine_guid"], p["poteau_destination_guid"]) for p in poutres}
+        self.assertEqual(len(paires), len(poutres))  # aucune paire générée deux fois
 
 
 class TestCalculerLongueurChainage(SimpleTestCase):

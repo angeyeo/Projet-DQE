@@ -1,6 +1,7 @@
 from moteur_calcul.formules.dimensionnement_poteaux import dimensionner_poteau
 from moteur_calcul.formules.dimensionnement_poutres import dimensionner_poutre
 from moteur_calcul.formules.dimensionnement_semelles import dimensionner_semelle
+from moteur_calcul.formules.postes_ratio import dimensionner_chainage
 from moteur_calcul.validators import EntreeInvalide
 
 from ..models import ElementStructurel
@@ -26,6 +27,15 @@ def calculer_element(element: ElementStructurel) -> dict:
                 hauteur_poteau=element.hauteur_poteau,
             )
         elif element.type_element == ElementStructurel.TypeElement.POUTRE:
+            charge_g = calculer_charge_permanente_totale(element) or element.charge_lineaire
+            return dimensionner_poutre(
+                portee=element.portee,
+                charge_lineaire=charge_g,
+            )
+        elif element.type_element == getattr(ElementStructurel.TypeElement, "LONGRINE", "longrine"):
+            # Phase C : longrine = même physique qu'une poutre (flexion
+            # simple BAEL) entre deux semelles -- pas de formule dédiée,
+            # on réutilise dimensionner_poutre() telle quelle.
             charge_g = calculer_charge_permanente_totale(element) or element.charge_lineaire
             return dimensionner_poutre(
                 portee=element.portee,
@@ -71,6 +81,12 @@ def calculer_element(element: ElementStructurel) -> dict:
                 charge_lineaire_kn_m=element.charge_lineaire,
                 taux_travail_sol=element.taux_travail_sol,
             )
+        elif element.type_element == getattr(ElementStructurel.TypeElement, "CHAINAGE", "chainage"):
+            # Phase C : chaînage promu en élément identifié (repère CH1) --
+            # pas de calcul de résistance, section forfaitaire + ratio
+            # acier (voir dimensionner_chainage(), même constantes
+            # provisoires que le poste ratio global existant).
+            return dimensionner_chainage(longueur_m=element.longueur_m)
         else:
             raise ValueError(f"Type d'élément inconnu : {element.type_element}")
     except (NotImplementedError, CalculNonDisponible) as exc:
