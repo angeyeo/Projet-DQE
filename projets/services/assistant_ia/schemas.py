@@ -189,3 +189,56 @@ def valider_suggestion_poste(data: dict) -> dict:
         "lot_suggere": lot_suggere,
         "confiance": confiance,
     }
+
+
+def valider_reponse_ocr(data: dict) -> dict:
+    """
+    Valide strictement le schéma JSON brut de la réponse OCR retournée par Gemini.
+    Vérifie que la structure contient 'annotations_lues' et 'textes_non_classes'
+    avec les types et contraintes appropriés. Les champs inconnus sont ignorés.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("La réponse de l'assistant doit être un objet JSON.")
+
+    annotations = data.get("annotations_lues")
+    if not isinstance(annotations, list):
+        raise ValueError("Le champ 'annotations_lues' doit être une liste.")
+
+    annotations_valides = []
+    for idx, item in enumerate(annotations):
+        if not isinstance(item, dict):
+            raise ValueError(f"L'élément à l'index {idx} de 'annotations_lues' doit être un objet JSON (dict).")
+
+        texte_lu = item.get("texte_lu")
+        if not isinstance(texte_lu, str) or isinstance(texte_lu, bool):
+            raise ValueError(f"Le champ 'texte_lu' de l'élément à l'index {idx} doit être une chaîne de caractères (str).")
+        texte_lu = texte_lu.strip()
+        if not texte_lu:
+            raise ValueError(f"Le champ 'texte_lu' de l'élément à l'index {idx} ne doit pas être vide.")
+
+        repere = item.get("repere")
+        if not isinstance(repere, str) or isinstance(repere, bool):
+            raise ValueError(f"Le champ 'repere' de l'élément à l'index {idx} doit être une chaîne de caractères (str).")
+        repere = repere.strip()
+        if not repere:
+            raise ValueError(f"Le champ 'repere' de l'élément à l'index {idx} ne doit pas être vide.")
+
+        annotations_valides.append({
+            "texte_lu": texte_lu,
+            "repere": repere,
+        })
+
+    non_classes = data.get("textes_non_classes")
+    if not isinstance(non_classes, list):
+        raise ValueError("Le champ 'textes_non_classes' doit être une liste.")
+
+    non_classes_valides = []
+    for idx, val in enumerate(non_classes):
+        if not isinstance(val, str) or isinstance(val, bool):
+            raise ValueError(f"L'élément à l'index {idx} de 'textes_non_classes' doit être une chaîne de caractères (str).")
+        non_classes_valides.append(val.strip())
+
+    return {
+        "annotations_lues": annotations_valides,
+        "textes_non_classes": non_classes_valides,
+    }
