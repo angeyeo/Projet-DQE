@@ -2,6 +2,7 @@ import os
 import logging
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -9,13 +10,14 @@ from rest_framework.views import APIView
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 
-from .models import Projet, ElementStructurel, CoucheCharge, PosteComplementaire
+from .models import Projet, ElementStructurel, CoucheCharge, PosteComplementaire, EntrepriseParametres
 from .serializers import (
     ProjetSerializer,
     ElementStructurelSerializer,
     ElementValidationSerializer,
     CoucheChargeSerializer,
     PosteComplementaireSerializer,
+    EntrepriseParametresSerializer,
 )
 from .services import calculer_element, recalculer_projet, CalculNonDisponible
 from .services.dqe_calculator import calculer_projet_dqe
@@ -27,6 +29,69 @@ from .services.assistant_ia.client import LLMServiceError
 from moteur_calcul.validators import EntreeInvalide
 
 logger = logging.getLogger(__name__)
+
+
+def _semelles_pour_dxf(semelles) -> list:
+    """
+    Adapte le queryset ElementStructurel (type SEMELLE) vers le format
+    plat attendu par generer_plan_fondation_dxf() (projets/services/plan_fondation.py) :
+    {identifiant, position_x, position_y, cote_cm, hauteur_cm,
+    poteau_associe: {identifiant, cote_cm}, [indice_i, indice_j]}.
+
+    indice_i/indice_j sont extraits de l'identifiant "S_<i>_<j>" généré
+    par ProjetViewSet.generer_trame -- absents pour toute semelle créée
+    autrement (ex. saisie manuelle), auquel cas generer_plan_fondation_dxf
+    retombe sur la méthode d'adjacence par position (voir sa docstring).
+    """
+    resultat = []
+    for semelle in semelles:
+        resultat_calcul = semelle.resultat_calcul or {}
+        poteau = semelle.poteau_associe
+        poteau_resultat = (poteau.resultat_calcul or {}) if poteau else {}
+
+        item = {
+            "identifiant": semelle.identifiant,
+            "position_x": semelle.position_x,
+            "position_y": semelle.position_y,
+            "cote_cm": resultat_calcul.get("cote_cm"),
+            "hauteur_cm": resultat_calcul.get("hauteur_cm"),
+            "poteau_associe": (
+                {"identifiant": poteau.identifiant, "cote_cm": poteau_resultat.get("cote_cm")}
+                if poteau else None
+            ),
+        }
+
+        parts = (semelle.identifiant or "").split("_")
+        if len(parts) == 3 and parts[0] == "S" and parts[1].lstrip("-").isdigit() and parts[2].lstrip("-").isdigit():
+            item["indice_i"] = int(parts[1])
+            item["indice_j"] = int(parts[2])
+
+        resultat.append(item)
+    return resultat
+
+
+def _entreprise_export_dict(entreprise: "EntrepriseParametres") -> dict:
+    """Convertit le modèle EntrepriseParametres en dict simple pour les
+    exporters (découplés de Django), avec le chemin disque du logo."""
+    logo_path = None
+    if entreprise.logo and hasattr(entreprise.logo, "path"):
+        try:
+            if os.path.exists(entreprise.logo.path):
+                logo_path = entreprise.logo.path
+        except (ValueError, NotImplementedError):
+            logo_path = None
+    return {
+        "logo_path": logo_path,
+        "nom": entreprise.nom,
+        "siege_social": entreprise.siege_social,
+        "telephone": entreprise.telephone,
+        "email": entreprise.email,
+        "site_web": entreprise.site_web,
+        "rccm": entreprise.rccm,
+        "cc": entreprise.cc,
+        "cb": entreprise.cb,
+        "capital_social": entreprise.capital_social,
+    }
 
 
 class ProjetViewSet(viewsets.ModelViewSet):
@@ -60,31 +125,45 @@ class ProjetViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def generer_trame(self, request, pk=None):
+        """
+        Génère la grille complète de l'ouvrage (poteaux + semelles à
+        chaque nœud, poutres entre nœuds adjacents) à partir de
+        projet.nb_travees_x/y, portee_x/y et hauteur_etage -- toutes déjà
+        calculées (resultat_calcul rempli), en un seul appel.
+
+        Idempotent : régénérer la trame (ex. après modification des
+        paramètres à l'Étape 1) repart d'une grille vierge pour ce
+        projet, plutôt que d'empiler les éléments à chaque appel.
+        """
         projet = self.get_object()
+        projet.elements.all().delete()
+
         elements_crees = []
 
         try:
-            from moteur_calcul.formules.trame import generer_poteau_sur_grille
+            from moteur_calcul.formules.trame import (
+                generer_poteau_sur_grille,
+                generer_poutre_sur_grille,
+            )
         except (ImportError, ModuleNotFoundError):
             generer_poteau_sur_grille = None
+            generer_poutre_sur_grille = None
 
         charge_exp = projet.charge_exploitation or 1.5
+        nb_x, nb_y = projet.nb_travees_x, projet.nb_travees_y
+        portee_x, portee_y = projet.portee_x, projet.portee_y
 
-        for i in range(projet.nb_travees_x + 1):
-            for j in range(projet.nb_travees_y + 1):
-                x = i * projet.portee_x
-                y = j * projet.portee_y
+        poteaux_par_noeud = {}
+
+        # 1. Poteaux + semelles à chaque nœud (i, j) de la grille.
+        for i in range(nb_x + 1):
+            for j in range(nb_y + 1):
+                x = i * portee_x
+                y = j * portee_y
 
                 if generer_poteau_sur_grille:
                     donnees = generer_poteau_sur_grille(
-                        i,
-                        j,
-                        projet.portee_x,
-                        projet.portee_y,
-                        projet.nb_travees_x,
-                        projet.nb_travees_y,
-                        charge_exp,
-                        projet.hauteur_etage,
+                        i, j, portee_x, portee_y, nb_x, nb_y, charge_exp, projet.hauteur_etage,
                     )
                     charge_elu = donnees.get("charge_elu_kn", 100.0)
                     res_poteau = donnees.get("resultat_poteau")
@@ -106,6 +185,7 @@ class ProjetViewSet(viewsets.ModelViewSet):
                     resultat_calcul=res_poteau,
                 )
                 elements_crees.append(poteau)
+                poteaux_par_noeud[(i, j)] = poteau
 
                 semelle = ElementStructurel.objects.create(
                     projet=projet,
@@ -121,6 +201,58 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 )
                 elements_crees.append(semelle)
 
+        # 2. Poutres entre nœuds adjacents (méthode des largeurs
+        #    d'influence : une poutre "intérieure", encadrée par une
+        #    dalle de chaque côté, reprend la portée perpendiculaire
+        #    complète ; une poutre de rive n'en reprend que la moitié).
+        for j in range(nb_y + 1):
+            for i in range(nb_x):
+                largeur_influence = portee_y if 0 < j < nb_y else portee_y / 2
+                if generer_poutre_sur_grille:
+                    donnees = generer_poutre_sur_grille(portee_x, largeur_influence, charge_exp)
+                    charge_lineaire = donnees["charge_lineaire_kn_m"]
+                    res_poutre = donnees["resultat_poutre"]
+                else:
+                    charge_lineaire = 20.0
+                    res_poutre = {"largeur_cm": 20, "hauteur_cm": 40}
+
+                poutre = ElementStructurel.objects.create(
+                    projet=projet,
+                    identifiant=f"PX_{i}_{j}",
+                    type_element=ElementStructurel.TypeElement.POUTRE,
+                    position=ElementStructurel.Position.SUPERSTRUCTURE,
+                    position_x=(i + 0.5) * portee_x,
+                    position_y=j * portee_y,
+                    portee=portee_x,
+                    charge_lineaire=charge_lineaire,
+                    resultat_calcul=res_poutre,
+                )
+                elements_crees.append(poutre)
+
+        for i in range(nb_x + 1):
+            for j in range(nb_y):
+                largeur_influence = portee_x if 0 < i < nb_x else portee_x / 2
+                if generer_poutre_sur_grille:
+                    donnees = generer_poutre_sur_grille(portee_y, largeur_influence, charge_exp)
+                    charge_lineaire = donnees["charge_lineaire_kn_m"]
+                    res_poutre = donnees["resultat_poutre"]
+                else:
+                    charge_lineaire = 20.0
+                    res_poutre = {"largeur_cm": 20, "hauteur_cm": 40}
+
+                poutre = ElementStructurel.objects.create(
+                    projet=projet,
+                    identifiant=f"PY_{i}_{j}",
+                    type_element=ElementStructurel.TypeElement.POUTRE,
+                    position=ElementStructurel.Position.SUPERSTRUCTURE,
+                    position_x=i * portee_x,
+                    position_y=(j + 0.5) * portee_y,
+                    portee=portee_y,
+                    charge_lineaire=charge_lineaire,
+                    resultat_calcul=res_poutre,
+                )
+                elements_crees.append(poutre)
+
         serializer = ElementStructurelSerializer(elements_crees, many=True)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -134,13 +266,19 @@ class ProjetViewSet(viewsets.ModelViewSet):
         )
 
         if export_format == "dxf":
+            if not semelles.exists():
+                return Response(
+                    {"erreur": "Aucune semelle disponible : impossible de générer le plan de fondation."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             try:
-                from moteur_calcul.formules.dxf import generer_plan_fondation_dxf
+                from projets.services.plan_fondation import generer_plan_fondation_dxf
 
-                buffer = generer_plan_fondation_dxf(semelles)
-                content = buffer.getvalue()
-            except (ImportError, ModuleNotFoundError, AttributeError):
+                content = generer_plan_fondation_dxf(_semelles_pour_dxf(semelles))
+            except (ImportError, ModuleNotFoundError):
                 content = b"0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nEOF\n"
+            except ValueError as err:
+                return Response({"erreur": str(err)}, status=status.HTTP_400_BAD_REQUEST)
 
             response = HttpResponse(content, content_type="application/dxf")
             response["Content-Disposition"] = (
@@ -149,7 +287,7 @@ class ProjetViewSet(viewsets.ModelViewSet):
             return response
 
         serializer = ElementStructurelSerializer(semelles, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response({"semelles": serializer.data}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
     def valider_plan_fondation(self, request, pk=None):
@@ -199,13 +337,15 @@ class ProjetViewSet(viewsets.ModelViewSet):
 
         nom_fichier_base = f"DQE_{projet.nom.replace(' ', '_')}_{projet.id}"
         if export_format == "pdf":
-            buffer = exporter_dqe_pdf(dqe_data)
+            entreprise = _entreprise_export_dict(EntrepriseParametres.get_solo())
+            buffer = exporter_dqe_pdf(dqe_data, entreprise=entreprise)
             response = HttpResponse(buffer.getvalue(), content_type="application/pdf")
             response["Content-Disposition"] = (
                 f'attachment; filename="{nom_fichier_base}.pdf"'
             )
         elif export_format == "excel":
-            buffer = exporter_dqe_excel(dqe_data)
+            entreprise = _entreprise_export_dict(EntrepriseParametres.get_solo())
+            buffer = exporter_dqe_excel(dqe_data, entreprise=entreprise)
             response = HttpResponse(
                 buffer.getvalue(),
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -296,6 +436,37 @@ class PosteComplementaireViewSet(viewsets.ModelViewSet):
                 ]
 
         serializer.save(lignes_calculees=lignes)
+
+
+class EntrepriseParametresView(APIView):
+    """
+    Paramètres d'en-tête (logo + coordonnées) utilisés sur les exports DQE.
+    Un seul jeu de paramètres par installation (singleton) : GET le crée
+    à la volée s'il n'existe pas encore, PUT/PATCH le met à jour.
+    Envoyer en multipart/form-data pour inclure un fichier "logo".
+    """
+
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get(self, request):
+        entreprise = EntrepriseParametres.get_solo()
+        serializer = EntrepriseParametresSerializer(entreprise, context={"request": request})
+        return Response(serializer.data)
+
+    def put(self, request):
+        return self._update(request, partial=False)
+
+    def patch(self, request):
+        return self._update(request, partial=True)
+
+    def _update(self, request, partial):
+        entreprise = EntrepriseParametres.get_solo()
+        serializer = EntrepriseParametresSerializer(
+            entreprise, data=request.data, partial=partial, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class AssistantStructurerView(APIView):

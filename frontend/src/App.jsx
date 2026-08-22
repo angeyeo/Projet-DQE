@@ -8,6 +8,7 @@ import Step2_Calculs from './components/Step2_Calculs';
 import Step3_ValidationLock from './components/Step3_ValidationLock';
 import StepPlanFondation from './components/StepPlanFondation';
 import Step4_DQEExport from './components/Step4_DQEExport';
+import SettingsEntreprise from './components/settingsentreprise';
 import { dqeService } from './api/dqeService';
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
   // État du Projet BTP Phase 2
   const [projectData, setProjectData] = useState({
     nomProjet: '',
+    numeroDevis: '',
     planFileName: '',
     planFileSize: '',
     typeUsage: 'habitation',
@@ -433,6 +435,10 @@ export default function App() {
                 setActiveView('step1');
               }}
             />
+          )}
+
+          {activeView === 'settingsEntreprise' && (
+            <SettingsEntreprise />
           )}
         </main>
       </div>

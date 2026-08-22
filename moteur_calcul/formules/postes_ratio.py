@@ -24,7 +24,10 @@ from ..constantes import (
     RATIO_COFFRAGE_ACROTERE_M2_M3,
     SECTION_CHAINAGE_M2,
     SECTION_ACROTERE_M2,
+    LARGEUR_CHAINAGE_CM_DEFAUT,
+    HAUTEUR_CHAINAGE_CM_DEFAUT,
 )
+from ..validators import EntreeInvalide
 
 TYPES_POSTES = ("maconnerie", "enduit", "chainage", "raidisseur", "acrotere")
 
@@ -153,3 +156,69 @@ def calculer_poste_ratio(type_poste, geometrie):
     if type_poste not in _HANDLERS:
         raise ValueError(f"type_poste inconnu : {type_poste!r} (attendu un de {TYPES_POSTES})")
     return _HANDLERS[type_poste](geometrie)
+
+
+def dimensionner_chainage(longueur_m, largeur_cm=None, hauteur_cm=None, ratio_acier_kg_m3=None):
+    """
+    Chaînage identifié INDIVIDUELLEMENT (Phase C, repère CH1) -- pendant
+    par-élément de _poste_chainage()/calculer_poste_ratio("chainage", ...),
+    pour un chaînage annexe que le plan de référence identifie comme un
+    ouvrage à part entière (repère propre, ligne DQE dédiée), plutôt
+    qu'une ligne forfaitaire globale noyée dans le lot maçonnerie.
+
+    Pas de calcul de résistance (un chaînage n'est pas dimensionné en
+    flexion comme une poutre -- c'est un élément de ceinturage) : section
+    forfaitaire et acier au ratio volumique, EXACTEMENT les mêmes
+    constantes que le poste ratio existant, pour que les deux chemins
+    restent cohérents entre eux si ces valeurs sont un jour révisées
+    avec le technicien (voir l'avertissement "provisoire" dans
+    constantes.py).
+
+    Paramètres
+    ----------
+    longueur_m : float
+        Longueur totale du chaînage (ce repère), en mètres.
+    largeur_cm, hauteur_cm : float, optionnels
+        Dimensions de la section. Défaut : 15x20 cm
+        (LARGEUR_CHAINAGE_CM_DEFAUT / HAUTEUR_CHAINAGE_CM_DEFAUT,
+        cohérent avec SECTION_CHAINAGE_M2 = 0,03 m² déjà utilisé par le
+        poste ratio).
+    ratio_acier_kg_m3 : float, optionnel
+        Défaut : RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3 (90 kg/m³,
+        même source CIMBAT que le poste ratio -- provisoire).
+
+    Retour
+    ------
+    dict : {
+        "largeur_cm", "hauteur_cm",       # section retenue
+        "volume_beton_m3",
+        "poids_acier_total_kg",
+        "hypothese_section": bool,        # True si dimensions par défaut
+        "hypothese_ratio_acier": bool,    # True si ratio par défaut
+    }
+    """
+    if longueur_m is None or longueur_m <= 0:
+        raise EntreeInvalide("La longueur du chaînage doit être positive.")
+    if (largeur_cm is not None and largeur_cm <= 0) or (hauteur_cm is not None and hauteur_cm <= 0):
+        raise EntreeInvalide("Les dimensions de la section doivent être positives.")
+    if ratio_acier_kg_m3 is not None and ratio_acier_kg_m3 <= 0:
+        raise EntreeInvalide("Le ratio d'acier doit être positif.")
+
+    hypothese_section = largeur_cm is None and hauteur_cm is None
+    largeur_cm = largeur_cm or LARGEUR_CHAINAGE_CM_DEFAUT
+    hauteur_cm = hauteur_cm or HAUTEUR_CHAINAGE_CM_DEFAUT
+
+    hypothese_ratio_acier = ratio_acier_kg_m3 is None
+    ratio_acier_kg_m3 = ratio_acier_kg_m3 or RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3
+
+    volume_beton_m3 = (largeur_cm / 100) * (hauteur_cm / 100) * longueur_m
+    poids_acier_total_kg = volume_beton_m3 * ratio_acier_kg_m3
+
+    return {
+        "largeur_cm": largeur_cm,
+        "hauteur_cm": hauteur_cm,
+        "volume_beton_m3": round(volume_beton_m3, 4),
+        "poids_acier_total_kg": round(poids_acier_total_kg, 2),
+        "hypothese_section": hypothese_section,
+        "hypothese_ratio_acier": hypothese_ratio_acier,
+    }

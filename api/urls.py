@@ -8,6 +8,7 @@ from projets.views import (
     AssistantStructurerView,
     AssistantExpliquerView,
     AssistantSuggererPosteView,
+    EntrepriseParametresView,
 )
 
 router = DefaultRouter()
@@ -58,6 +59,11 @@ urlpatterns = [
         "assistant/suggerer-poste/",
         AssistantSuggererPosteView.as_view(),
         name="assistant-suggerer-poste",
+    ),
+    path(
+        "entreprise/",
+        EntrepriseParametresView.as_view(),
+        name="entreprise-parametres",
     ),
     path("", include(router.urls)),
 ]

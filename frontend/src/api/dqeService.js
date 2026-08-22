@@ -38,6 +38,7 @@ export const dqeService = {
       nom: projectData.nomProjet || 'Projet sans nom',
       usage_batiment: projectData.typeUsage || 'habitation',
       nb_niveaux: parseInt(projectData.nombreNiveaux || 1, 10),
+      numero_devis: projectData.numeroDevis || '',
     };
     return postJSON(`${API_BASE_URL}/projets/`, payload);
   },
@@ -211,6 +212,44 @@ export const dqeService = {
     return postJSON(`${API_BASE_URL}/assistant/expliquer-element/`, {
       element_id: elementId,
     });
+  },
+
+  // Paramètres entreprise (logo + coordonnées) utilisés en en-tête des
+  // exports DQE -- voir projets/models.py::EntrepriseParametres.
+  getEntreprise: async () => {
+    const response = await fetch(`${API_BASE_URL}/entreprise/`);
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const err = new Error((data && data.detail) || `Erreur ${response.status}`);
+      err.status = response.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  },
+
+  // `champs` : objet simple (nom, siege_social, telephone, email, site_web,
+  // rccm, cc, cb, capital_social) et/ou `logoFile` (objet File, optionnel).
+  updateEntreprise: async (champs, logoFile) => {
+    const formData = new FormData();
+    Object.entries(champs || {}).forEach(([cle, valeur]) => {
+      formData.append(cle, valeur ?? '');
+    });
+    if (logoFile) {
+      formData.append('logo', logoFile);
+    }
+    const response = await fetch(`${API_BASE_URL}/entreprise/`, {
+      method: 'PATCH',
+      body: formData,
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const err = new Error((data && data.detail) || `Erreur ${response.status}`);
+      err.status = response.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
   },
 
   // Télécharge le DQE binaire (PDF / Excel)

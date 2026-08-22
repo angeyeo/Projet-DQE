@@ -7,6 +7,10 @@ class Projet(models.Model):
     usage_batiment = models.CharField(max_length=100, default="habitation")
     nb_niveaux = models.PositiveIntegerField(default=1)
 
+    # Numéro de devis affiché sur les exports DQE (ex. "0017-2026").
+    # Laissé vide, on retombe sur "DQE-PROJET-<id>" à l'export.
+    numero_devis = models.CharField(max_length=50, blank=True)
+
     # Extension Trame Structurelle (Jour 1)
     nb_travees_x = models.PositiveIntegerField(default=1)
     nb_travees_y = models.PositiveIntegerField(default=1)
@@ -36,6 +40,15 @@ class ElementStructurel(models.Model):
         SEMELLE = "semelle", "Semelle Isolée"
         DALLE = "dalle", "Dalle Pleine"
         SEMELLE_FILANTE = "semelle_filante", "Semelle Filante"
+        # AJOUTÉ (Phase C) : longrine -- même physique qu'une poutre
+        # (flexion simple BAEL), juste à un autre niveau (liaison entre
+        # semelles) -- pas de nouvelle formule, réutilise dimensionner_poutre().
+        LONGRINE = "longrine", "Longrine"
+        # AJOUTÉ (Phase C) : chaînage promu en élément identifié (repère
+        # CH1 individuel, ligne DQE dédiée) -- avant, uniquement un poste
+        # ratio global (voir postes_ratio.calculer_poste_ratio("chainage", ...),
+        # qui reste disponible pour un usage en lot forfaitaire non identifié).
+        CHAINAGE = "chainage", "Chaînage"
 
     class Statut(models.TextChoices):
         PROPOSE = "propose", "Proposé"
@@ -172,3 +185,38 @@ class PosteComplementaire(models.Model):
 
     def __str__(self):
         return f"{self.get_lot_display()} - {self.designation or self.type_poste}"
+
+
+class EntrepriseParametres(models.Model):
+    """
+    En-tête personnalisable pour les exports DQE (PDF/Excel) : logo et
+    coordonnées de l'entreprise de l'utilisateur. Modèle "singleton" --
+    une seule ligne en base (pk=1), créée à la demande si absente. Voir
+    EntrepriseParametresView (get_solo) pour l'accès.
+    """
+
+    logo = models.ImageField(upload_to="logos/", null=True, blank=True)
+    nom = models.CharField(max_length=200, blank=True)
+    siege_social = models.CharField(max_length=255, blank=True)
+    telephone = models.CharField(max_length=100, blank=True)
+    email = models.EmailField(blank=True)
+    site_web = models.CharField(max_length=200, blank=True)
+    rccm = models.CharField("N° R.C.C.M", max_length=100, blank=True)
+    cc = models.CharField("CC N°", max_length=100, blank=True)
+    cb = models.CharField("CB N°", max_length=100, blank=True)
+    capital_social = models.CharField(max_length=100, blank=True)
+
+    date_modification = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        # Force le singleton : toujours pk=1.
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_solo(cls) -> "EntrepriseParametres":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return self.nom or "Paramètres entreprise"
