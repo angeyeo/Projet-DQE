@@ -20,7 +20,7 @@ router.register(
 )
 
 urlpatterns = [
-    # Routes exactes attendues par test_ai.py
+    # Routes Assistant IA
     path(
         "assistant/structurer-projet/",
         AssistantStructurerView.as_view(),
@@ -31,7 +31,6 @@ urlpatterns = [
         AssistantExpliquerView.as_view(),
         name="assistant-expliquer-element",
     ),
-    # Aliases
     path(
         "assistant/structurer/",
         AssistantStructurerView.as_view(),
@@ -42,7 +41,7 @@ urlpatterns = [
         AssistantExpliquerView.as_view(),
         name="assistant-expliquer",
     ),
-    # DQE avec tiret et underscore
+    # Support DQE (underscore et tiret)
     path(
         "projets/<int:pk>/generer_dqe/",
         ProjetViewSet.as_view({"get": "generer_dqe", "post": "generer_dqe"}),
@@ -51,6 +50,16 @@ urlpatterns = [
         "projets/<int:pk>/generer-dqe/",
         ProjetViewSet.as_view({"get": "generer_dqe", "post": "generer_dqe"}),
         name="projet-generer-dqe",
+    ),
+    # Support Analyse Plan Vision (underscore et tiret)
+    path(
+        "projets/<int:pk>/analyser_plan_image/",
+        ProjetViewSet.as_view({"post": "analyser_plan_image"}),
+        name="projet-analyser-plan-image",
+    ),
+    path(
+        "projets/<int:pk>/analyser-plan-image/",
+        ProjetViewSet.as_view({"post": "analyser_plan_image"}),
     ),
     path("", include(router.urls)),
 ]

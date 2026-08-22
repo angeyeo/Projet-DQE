@@ -2,6 +2,7 @@ import os
 import logging
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -24,6 +25,15 @@ from .services.assistant_ia.parser import structurer_description_projet
 from .services.assistant_ia.explanations import expliquer_resultat_element
 from .services.assistant_ia.client import LLMServiceError
 from moteur_calcul.validators import EntreeInvalide
+
+# Tentative d'import de la fonction moteur Vision d'Ange
+try:
+    from .services.assistant_ia.vision import analyser_plan_2d
+except ImportError:
+    try:
+        from moteur_calcul.vision import analyser_plan_2d
+    except ImportError:
+        analyser_plan_2d = None
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +228,57 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return response
+
+    @action(
+        detail=True,
+        methods=["post"],
+        parser_classes=[MultiPartParser, FormParser],
+        url_path="analyser_plan_image",
+        url_name="analyser-plan-image",
+    )
+    def analyser_plan_image(self, request, pk=None):
+        projet = self.get_object()
+
+        fichier_image = request.FILES.get("image") or request.FILES.get("fichier")
+        if not fichier_image:
+            return Response(
+                {"erreur": "Aucun fichier image fourni (champ 'image' requis)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        types_acceptes = ["image/jpeg", "image/png", "image/webp"]
+        mime_type = fichier_image.content_type
+        if mime_type not in types_acceptes:
+            return Response(
+                {
+                    "erreur": f"Format de fichier non supporté ({mime_type}).",
+                    "formats_acceptes": types_acceptes,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        taille_max = 10 * 1024 * 1024  # 10 Mo
+        if fichier_image.size > taille_max:
+            return Response(
+                {"erreur": "Le fichier dépasse la taille maximale autorisée de 10 Mo."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if analyser_plan_2d is None:
+            return Response(
+                {"erreur": "Le moteur d'analyse Vision n'est pas configuré sur le serveur."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            image_bytes = fichier_image.read()
+            resultat = analyser_plan_2d(image_bytes, mime_type)
+            return Response(resultat, status=status.HTTP_200_OK)
+        except Exception as exc:
+            return Response(
+                {"erreur": "Erreur lors de l'analyse du plan.", "detail": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class ElementStructurelViewSet(viewsets.ModelViewSet):
