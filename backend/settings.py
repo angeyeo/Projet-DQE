@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -52,8 +53,13 @@ REST_FRAMEWORK = {
         'assistant_structurer': '10/min',
         'assistant_expliquer': '20/min',
         'assistant_suggerer_poste': '15/min',
+        'assistant_vision': '5/min',
     },
 }
+
+# Limite d'upload pour les images de plans (Phase A Vision)
+PLAN_IMAGE_MAX_BYTES = int(os.getenv("PLAN_IMAGE_MAX_BYTES", str(5 * 1024 * 1024))) # 5 Mo par défaut
+
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
