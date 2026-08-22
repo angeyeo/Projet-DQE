@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from django.conf import settings
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 
@@ -26,6 +27,7 @@ from .services.assistant_ia.parser import structurer_description_projet
 from .services.assistant_ia.explanations import expliquer_resultat_element
 from .services.assistant_ia.postes import suggerer_poste_complementaire
 from .services.assistant_ia.client import LLMServiceError
+from .services.assistant_ia.vision import analyser_plan_2d
 from moteur_calcul.validators import EntreeInvalide
 
 logger = logging.getLogger(__name__)
@@ -155,6 +157,19 @@ def _entreprise_export_dict(entreprise: "EntrepriseParametres") -> dict:
 class ProjetViewSet(viewsets.ModelViewSet):
     queryset = Projet.objects.all()
     serializer_class = ProjetSerializer
+
+    def get_permissions(self):
+        if self.action == "analyser_plan_image":
+            if os.getenv("DEMO_MODE", "False").lower() == "true":
+                return [AllowAny()]
+            return [IsAuthenticated()]
+        return super().get_permissions()
+
+    def get_throttles(self):
+        if self.action == "analyser_plan_image":
+            self.throttle_scope = "assistant_vision"
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
 
     @action(detail=True, methods=["post"])
     def recalculer(self, request, pk=None):
@@ -485,6 +500,47 @@ class ProjetViewSet(viewsets.ModelViewSet):
             {"elements": serializer.data, "avertissements": avertissements},
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser])
+    def analyser_plan_image(self, request, pk=None):
+        """
+        POST /api/projets/{id}/analyser_plan_image/
+        Analyse de plan 2D au format image (JPEG/PNG) en mode APERÇU uniquement (Phase A).
+        """
+        projet = self.get_object()
+
+        fichier = request.FILES.get("fichier")
+        if not fichier:
+            return Response(
+                {"detail": "Le fichier image est requis dans le champ 'fichier'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validation de la taille maximale du fichier avant lecture en mémoire
+        max_bytes = getattr(settings, "PLAN_IMAGE_MAX_BYTES", 5 * 1024 * 1024)
+        if fichier.size > max_bytes:
+            return Response(
+                {
+                    "detail": f"Le fichier est trop volumineux. La taille maximale autorisée est de {max_bytes / (1024 * 1024):.1f} Mo."
+                },
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            )
+
+        try:
+            image_bytes = fichier.read()
+            mime_type = fichier.content_type
+
+            resultat = analyser_plan_2d(image_bytes, mime_type)
+            resultat["mode_import"] = "VISION"
+            return Response(resultat, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            logger.exception("Erreur inattendue lors de l'analyse de l'image du plan")
+            return Response(
+                {"detail": "Une erreur interne est survenue lors du traitement de l'image."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @action(detail=True, methods=["get"])
     def plan_fondation(self, request, pk=None):
