@@ -2,45 +2,174 @@ import os
 import logging
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from django.conf import settings
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 
-from .models import Projet, ElementStructurel, CoucheCharge, PosteComplementaire
+from .models import Projet, ElementStructurel, CoucheCharge, PosteComplementaire, EntrepriseParametres
 from .serializers import (
     ProjetSerializer,
     ElementStructurelSerializer,
     ElementValidationSerializer,
     CoucheChargeSerializer,
     PosteComplementaireSerializer,
+    EntrepriseParametresSerializer,
 )
 from .services import calculer_element, recalculer_projet, CalculNonDisponible
 from .services.dqe_calculator import calculer_projet_dqe
 from .services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
 from .services.assistant_ia.parser import structurer_description_projet
 from .services.assistant_ia.explanations import expliquer_resultat_element
+from .services.assistant_ia.postes import suggerer_poste_complementaire
 from .services.assistant_ia.client import LLMServiceError
+from .services.assistant_ia.vision import analyser_plan_2d
 from moteur_calcul.validators import EntreeInvalide
 
-# Tentative d'import de la fonction moteur Vision d'Ange
-try:
-    from .services.assistant_ia.vision import analyser_plan_2d
-except ImportError:
-    try:
-        from moteur_calcul.vision import analyser_plan_2d
-    except ImportError:
-        analyser_plan_2d = None
-
 logger = logging.getLogger(__name__)
+
+
+def _semelles_pour_dxf(semelles) -> list:
+    """
+    Adapte le queryset ElementStructurel (type SEMELLE) vers le format
+    plat attendu par generer_plan_fondation_dxf() (projets/services/plan_fondation.py) :
+    {identifiant, position_x, position_y, cote_cm, hauteur_cm,
+    poteau_associe: {identifiant, cote_cm}, [indice_i, indice_j]}.
+
+    indice_i/indice_j sont extraits de l'identifiant "S_<i>_<j>" généré
+    par ProjetViewSet.generer_trame -- absents pour toute semelle créée
+    autrement (ex. saisie manuelle), auquel cas generer_plan_fondation_dxf
+    retombe sur la méthode d'adjacence par position (voir sa docstring).
+    """
+    resultat = []
+    for semelle in semelles:
+        resultat_calcul = semelle.resultat_calcul or {}
+        poteau = semelle.poteau_associe
+        poteau_resultat = (poteau.resultat_calcul or {}) if poteau else {}
+
+        item = {
+            "identifiant": semelle.identifiant,
+            "position_x": semelle.position_x,
+            "position_y": semelle.position_y,
+            "cote_cm": resultat_calcul.get("cote_cm"),
+            "hauteur_cm": resultat_calcul.get("hauteur_cm"),
+            "poteau_associe": (
+                {"identifiant": poteau.identifiant, "cote_cm": poteau_resultat.get("cote_cm")}
+                if poteau else None
+            ),
+        }
+
+        parts = (semelle.identifiant or "").split("_")
+        if len(parts) == 3 and parts[0] == "S" and parts[1].lstrip("-").isdigit() and parts[2].lstrip("-").isdigit():
+            item["indice_i"] = int(parts[1])
+            item["indice_j"] = int(parts[2])
+
+        resultat.append(item)
+    return resultat
+
+
+def _empreinte_niveau_bas(poteaux: list) -> list:
+    """
+    Filtre extraire_poteaux()/analyser_fichier_ifc() sur le niveau de plus
+    basse élévation (typiquement le RDC) : hypothèse simplificatrice du
+    moteur de trame (voir moteur_calcul/formules/trame.py) selon laquelle
+    tous les niveaux partagent la même empreinte -- la charge multi-niveaux
+    est cumulée séparément via nb_niveaux (dégression, Module 1), pas en
+    créant un jeu d'éléments par étage.
+    """
+    if not poteaux:
+        return []
+    elevation_min = min(p["niveau_elevation_m"] for p in poteaux)
+    return [p for p in poteaux if p["niveau_elevation_m"] == elevation_min]
+
+
+_TYPES_OUVRAGES_LINEAIRES = {
+    ElementStructurel.TypeElement.POUTRE: "poutres",
+    ElementStructurel.TypeElement.LONGRINE: "longrines",
+    ElementStructurel.TypeElement.CHAINAGE: "chainages_identifies",
+}
+
+
+def _ouvrages_lineaires_pour_dxf(elements) -> dict:
+    """
+    Adapte les ElementStructurel de type poutre/longrine/chaînage
+    identifié (voir Phase C de la feuille de route) vers le format plat
+    attendu par generer_plan_fondation_dxf() :
+    {"poutres": [...], "longrines": [...], "chainages_identifies": [...]}
+    où chaque item est {identifiant, x1, y1, x2, y2, largeur_cm, hauteur_cm}.
+
+    Un ouvrage sans poteau_origine/poteau_destination renseigné (créé
+    avant l'ajout de ces champs, ex. donnée historique) est ignoré ici
+    plutôt que de faire planter tout l'export DXF -- il continue
+    d'exister normalement partout ailleurs (DQE, validation...), juste
+    absent du tracé linéaire du plan de coffrage.
+    """
+    resultat = {"poutres": [], "longrines": [], "chainages_identifies": []}
+    for element in elements:
+        cle = _TYPES_OUVRAGES_LINEAIRES.get(element.type_element)
+        if cle is None:
+            continue
+        origine, destination = element.poteau_origine, element.poteau_destination
+        if origine is None or destination is None:
+            continue
+
+        resultat_calcul = element.resultat_calcul or {}
+        resultat[cle].append({
+            "identifiant": element.identifiant,
+            "x1": origine.position_x,
+            "y1": origine.position_y,
+            "x2": destination.position_x,
+            "y2": destination.position_y,
+            "largeur_cm": resultat_calcul.get("largeur_cm"),
+            "hauteur_cm": resultat_calcul.get("hauteur_cm"),
+        })
+    return resultat
+
+
+def _entreprise_export_dict(entreprise: "EntrepriseParametres") -> dict:
+    """Convertit le modèle EntrepriseParametres en dict simple pour les
+    exporters (découplés de Django), avec le chemin disque du logo."""
+    logo_path = None
+    if entreprise.logo and hasattr(entreprise.logo, "path"):
+        try:
+            if os.path.exists(entreprise.logo.path):
+                logo_path = entreprise.logo.path
+        except (ValueError, NotImplementedError):
+            logo_path = None
+    return {
+        "logo_path": logo_path,
+        "nom": entreprise.nom,
+        "siege_social": entreprise.siege_social,
+        "telephone": entreprise.telephone,
+        "email": entreprise.email,
+        "site_web": entreprise.site_web,
+        "rccm": entreprise.rccm,
+        "cc": entreprise.cc,
+        "cb": entreprise.cb,
+        "capital_social": entreprise.capital_social,
+    }
 
 
 class ProjetViewSet(viewsets.ModelViewSet):
     queryset = Projet.objects.all()
     serializer_class = ProjetSerializer
+
+    def get_permissions(self):
+        if self.action == "analyser_plan_image":
+            if os.getenv("DEMO_MODE", "False").lower() == "true":
+                return [AllowAny()]
+            return [IsAuthenticated()]
+        return super().get_permissions()
+
+    def get_throttles(self):
+        if self.action == "analyser_plan_image":
+            self.throttle_scope = "assistant_vision"
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
 
     @action(detail=True, methods=["post"])
     def recalculer(self, request, pk=None):
@@ -69,31 +198,46 @@ class ProjetViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def generer_trame(self, request, pk=None):
+        """
+        Génère la grille complète de l'ouvrage (poteaux + semelles à
+        chaque nœud, poutres entre nœuds adjacents) à partir de
+        projet.nb_travees_x/y, portee_x/y et hauteur_etage -- toutes déjà
+        calculées (resultat_calcul rempli), en un seul appel.
+
+        Idempotent : régénérer la trame (ex. après modification des
+        paramètres à l'Étape 1) repart d'une grille vierge pour ce
+        projet, plutôt que d'empiler les éléments à chaque appel.
+        """
         projet = self.get_object()
+        projet.elements.all().delete()
+
         elements_crees = []
 
         try:
-            from moteur_calcul.formules.trame import generer_poteau_sur_grille
+            from moteur_calcul.formules.trame import (
+                generer_poteau_sur_grille,
+                generer_poutre_sur_grille,
+            )
         except (ImportError, ModuleNotFoundError):
             generer_poteau_sur_grille = None
+            generer_poutre_sur_grille = None
 
         charge_exp = projet.charge_exploitation or 1.5
+        nb_x, nb_y = projet.nb_travees_x, projet.nb_travees_y
+        portee_x, portee_y = projet.portee_x, projet.portee_y
 
-        for i in range(projet.nb_travees_x + 1):
-            for j in range(projet.nb_travees_y + 1):
-                x = i * projet.portee_x
-                y = j * projet.portee_y
+        poteaux_par_noeud = {}
+
+        # 1. Poteaux + semelles à chaque nœud (i, j) de la grille.
+        for i in range(nb_x + 1):
+            for j in range(nb_y + 1):
+                x = i * portee_x
+                y = j * portee_y
 
                 if generer_poteau_sur_grille:
                     donnees = generer_poteau_sur_grille(
-                        i,
-                        j,
-                        projet.portee_x,
-                        projet.portee_y,
-                        projet.nb_travees_x,
-                        projet.nb_travees_y,
-                        charge_exp,
-                        projet.hauteur_etage,
+                        i, j, portee_x, portee_y, nb_x, nb_y, charge_exp, projet.hauteur_etage,
+                        nb_niveaux=projet.nb_niveaux, usage_batiment=projet.usage_batiment,
                     )
                     charge_elu = donnees.get("charge_elu_kn", 100.0)
                     res_poteau = donnees.get("resultat_poteau")
@@ -115,6 +259,7 @@ class ProjetViewSet(viewsets.ModelViewSet):
                     resultat_calcul=res_poteau,
                 )
                 elements_crees.append(poteau)
+                poteaux_par_noeud[(i, j)] = poteau
 
                 semelle = ElementStructurel.objects.create(
                     projet=projet,
@@ -130,26 +275,314 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 )
                 elements_crees.append(semelle)
 
+        # 2. Poutres entre nœuds adjacents (méthode des largeurs
+        #    d'influence : une poutre "intérieure", encadrée par une
+        #    dalle de chaque côté, reprend la portée perpendiculaire
+        #    complète ; une poutre de rive n'en reprend que la moitié).
+        for j in range(nb_y + 1):
+            for i in range(nb_x):
+                largeur_influence = portee_y if 0 < j < nb_y else portee_y / 2
+                if generer_poutre_sur_grille:
+                    donnees = generer_poutre_sur_grille(portee_x, largeur_influence, charge_exp)
+                    charge_lineaire = donnees["charge_lineaire_kn_m"]
+                    res_poutre = donnees["resultat_poutre"]
+                else:
+                    charge_lineaire = 20.0
+                    res_poutre = {"largeur_cm": 20, "hauteur_cm": 40}
+
+                poutre = ElementStructurel.objects.create(
+                    projet=projet,
+                    identifiant=f"PX_{i}_{j}",
+                    type_element=ElementStructurel.TypeElement.POUTRE,
+                    position=ElementStructurel.Position.SUPERSTRUCTURE,
+                    position_x=(i + 0.5) * portee_x,
+                    position_y=j * portee_y,
+                    portee=portee_x,
+                    charge_lineaire=charge_lineaire,
+                    resultat_calcul=res_poutre,
+                    poteau_origine=poteaux_par_noeud[(i, j)],
+                    poteau_destination=poteaux_par_noeud[(i + 1, j)],
+                )
+                elements_crees.append(poutre)
+
+        for i in range(nb_x + 1):
+            for j in range(nb_y):
+                largeur_influence = portee_x if 0 < i < nb_x else portee_x / 2
+                if generer_poutre_sur_grille:
+                    donnees = generer_poutre_sur_grille(portee_y, largeur_influence, charge_exp)
+                    charge_lineaire = donnees["charge_lineaire_kn_m"]
+                    res_poutre = donnees["resultat_poutre"]
+                else:
+                    charge_lineaire = 20.0
+                    res_poutre = {"largeur_cm": 20, "hauteur_cm": 40}
+
+                poutre = ElementStructurel.objects.create(
+                    projet=projet,
+                    identifiant=f"PY_{i}_{j}",
+                    type_element=ElementStructurel.TypeElement.POUTRE,
+                    position=ElementStructurel.Position.SUPERSTRUCTURE,
+                    position_x=i * portee_x,
+                    position_y=(j + 0.5) * portee_y,
+                    portee=portee_y,
+                    charge_lineaire=charge_lineaire,
+                    resultat_calcul=res_poutre,
+                    poteau_origine=poteaux_par_noeud[(i, j)],
+                    poteau_destination=poteaux_par_noeud[(i, j + 1)],
+                )
+                elements_crees.append(poutre)
+
         serializer = ElementStructurelSerializer(elements_crees, many=True)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser, JSONParser])
+    def importer_plan(self, request, pk=None):
+        """
+        Import de plan (Phases A + B -- voir Feuille_de_route_Import_Plan_Automatique.md).
+
+        Deux usages du même endpoint, distingués par le contenu de la requête :
+
+        1) Aperçu (Phase A) -- multipart avec un fichier "fichier" (IFC) :
+           analyse le fichier via Genius (moteur_calcul.import_ifc), stocke le
+           fichier sur le projet (audit + réutilisation en Phase B) et renvoie
+           les paramètres de trame détectés SANS créer aucun ElementStructurel.
+           C'est le frontend (Yves) qui affiche ces valeurs, pré-remplies mais
+           modifiables, dans le formulaire de l'Étape 1.
+
+        2) Confirmation (Phase B) -- JSON {"confirmer": true}, sans fichier :
+           relit le fichier IFC déjà déposé à l'étape 1) et crée les VRAIS
+           éléments (poteaux + semelles + poutres) à leurs positions réelles
+           détectées, en réutilisant projet.hauteur_etage/nb_niveaux/
+           usage_batiment/charge_exploitation tels que corrigés entre-temps
+           par l'utilisateur. Remplace generer_trame/ pour ce chemin --
+           idempotent comme lui (vide les éléments existants avant de
+           recréer).
+        """
+        projet = self.get_object()
+        fichier = request.FILES.get("fichier")
+        confirmer = str(request.data.get("confirmer", "")).strip().lower() in (
+            "1", "true", "vrai", "oui", "yes",
+        )
+
+        if fichier is None and not confirmer:
+            return Response(
+                {
+                    "erreur": "Fournissez un fichier IFC (champ \"fichier\") pour "
+                    "un aperçu, ou confirmer=true pour créer les éléments à "
+                    "partir d'un aperçu déjà réalisé."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            from moteur_calcul.import_ifc.lecture_ifc import (
+                analyser_fichier_ifc,
+                FichierIFCInvalide,
+                AucunPoteauDetecte,
+            )
+        except ImportError as exc:
+            return Response(
+                {"erreur": f"Moteur d'import IFC indisponible sur ce serveur : {exc}"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        if fichier is not None:
+            # --- Phase A : aperçu, aucun élément créé --------------------
+            projet.fichier_import_origine = fichier
+            projet.save(update_fields=["fichier_import_origine"])
+            try:
+                parametres = analyser_fichier_ifc(projet.fichier_import_origine.path)
+            except (FichierIFCInvalide, AucunPoteauDetecte) as exc:
+                return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+            parametres.pop("poteaux", None)  # détail interne, pas utile côté aperçu
+            return Response(parametres, status=status.HTTP_200_OK)
+
+        # --- Phase B : confirmation, création réelle ---------------------
+        if not projet.fichier_import_origine:
+            return Response(
+                {"erreur": "Aucun plan importé au préalable pour ce projet : "
+                 "envoyez d'abord un fichier IFC à cet endpoint."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            resultat = analyser_fichier_ifc(projet.fichier_import_origine.path)
+        except (FichierIFCInvalide, AucunPoteauDetecte) as exc:
+            return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from moteur_calcul.formules.trame import (
+                generer_poteau_depuis_position_reelle,
+                detecter_poutres_adjacentes,
+            )
+        except ImportError as exc:
+            return Response(
+                {"erreur": f"Moteur de trame indisponible sur ce serveur : {exc}"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        empreinte = _empreinte_niveau_bas(resultat["poteaux"])
+        if not empreinte:
+            return Response(
+                {"erreur": "Aucun poteau exploitable au niveau bas détecté dans ce plan."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        projet.elements.all().delete()
+
+        charge_exp = projet.charge_exploitation or 1.5
+        elements_crees = []
+        poteau_par_guid = {}
+        avertissements = list(resultat.get("avertissements", []))
+
+        for p in empreinte:
+            try:
+                donnees = generer_poteau_depuis_position_reelle(
+                    p, empreinte, charge_exp, projet.hauteur_etage,
+                    nb_niveaux=projet.nb_niveaux, usage_batiment=projet.usage_batiment,
+                )
+            except ValueError as exc:
+                avertissements.append(str(exc))
+                continue
+
+            identifiant_poteau = f"P_{p.get('guid', '')[:8] or len(poteau_par_guid)}"
+            poteau = ElementStructurel.objects.create(
+                projet=projet,
+                identifiant=identifiant_poteau,
+                type_element=ElementStructurel.TypeElement.POTEAU,
+                position=ElementStructurel.Position.SUPERSTRUCTURE,
+                position_x=donnees["x"],
+                position_y=donnees["y"],
+                hauteur_poteau=projet.hauteur_etage,
+                charge_calculee=donnees["charge_elu_kn"],
+                resultat_calcul=donnees["resultat_poteau"],
+            )
+            elements_crees.append(poteau)
+            poteau_par_guid[p.get("guid")] = poteau
+
+            semelle = ElementStructurel.objects.create(
+                projet=projet,
+                identifiant=f"S_{identifiant_poteau}",
+                type_element=ElementStructurel.TypeElement.SEMELLE,
+                position=ElementStructurel.Position.INFRASTRUCTURE,
+                position_x=donnees["x"],
+                position_y=donnees["y"],
+                poteau_associe=poteau,
+                charge_calculee=donnees["charge_elu_kn"],
+                taux_travail_sol=0.2,
+                resultat_calcul=donnees["resultat_semelle"],
+            )
+            elements_crees.append(semelle)
+
+        for pd in detecter_poutres_adjacentes(empreinte, charge_exp):
+            origine = poteau_par_guid.get(pd["poteau_origine_guid"])
+            destination = poteau_par_guid.get(pd["poteau_destination_guid"])
+            if origine is None or destination is None:
+                continue  # un des deux poteaux a été écarté ci-dessus (surface invalide)
+
+            prefixe = "PX" if pd["axe"] == "x" else "PY"
+            poutre = ElementStructurel.objects.create(
+                projet=projet,
+                identifiant=f"{prefixe}_{origine.identifiant}_{destination.identifiant}",
+                type_element=ElementStructurel.TypeElement.POUTRE,
+                position=ElementStructurel.Position.SUPERSTRUCTURE,
+                position_x=(origine.position_x + destination.position_x) / 2,
+                position_y=(origine.position_y + destination.position_y) / 2,
+                portee=pd["portee_m"],
+                charge_lineaire=pd["charge_lineaire_kn_m"],
+                resultat_calcul=pd["resultat_poutre"],
+                poteau_origine=origine,
+                poteau_destination=destination,
+            )
+            elements_crees.append(poutre)
+
+        serializer = ElementStructurelSerializer(elements_crees, many=True)
+        return Response(
+            {"elements": serializer.data, "avertissements": avertissements},
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser])
+    def analyser_plan_image(self, request, pk=None):
+        """
+        POST /api/projets/{id}/analyser_plan_image/
+        Analyse de plan 2D au format image (JPEG/PNG) en mode APERÇU uniquement (Phase A).
+        """
+        projet = self.get_object()
+
+        fichier = request.FILES.get("fichier")
+        if not fichier:
+            return Response(
+                {"detail": "Le fichier image est requis dans le champ 'fichier'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validation de la taille maximale du fichier avant lecture en mémoire
+        max_bytes = getattr(settings, "PLAN_IMAGE_MAX_BYTES", 5 * 1024 * 1024)
+        if fichier.size > max_bytes:
+            return Response(
+                {
+                    "detail": f"Le fichier est trop volumineux. La taille maximale autorisée est de {max_bytes / (1024 * 1024):.1f} Mo."
+                },
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            )
+
+        try:
+            image_bytes = fichier.read()
+            mime_type = fichier.content_type
+
+            resultat = analyser_plan_2d(image_bytes, mime_type)
+            resultat["mode_import"] = "VISION"
+            return Response(resultat, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            logger.exception("Erreur inattendue lors de l'analyse de l'image du plan")
+            return Response(
+                {"detail": "Une erreur interne est survenue lors du traitement de l'image."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     @action(detail=True, methods=["get"])
     def plan_fondation(self, request, pk=None):
+        """
+        GET /api/projets/{id}/plan_fondation/[?export=dxf]
+
+        Note : le paramètre s'appelle "export" (et non "format") --
+        "format" est réservé par la négociation de contenu de DRF : une
+        valeur ne correspondant à aucun renderer enregistré (json, api)
+        y déclenche un Http404 avant même d'atteindre ce code (bug
+        pré-existant, découvert en testant l'endpoint réel plutôt que la
+        seule fonction generer_plan_fondation_dxf() -- voir test_dqe.py
+        pour generer_dqe/, qui utilisait déjà "export" et n'avait donc
+        pas le problème).
+        """
         projet = self.get_object()
-        export_format = request.query_params.get("format")
+        export_format = request.query_params.get("export")
 
         semelles = projet.elements.filter(
             type_element=ElementStructurel.TypeElement.SEMELLE
         )
 
         if export_format == "dxf":
+            if not semelles.exists():
+                return Response(
+                    {"erreur": "Aucune semelle disponible : impossible de générer le plan de fondation."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             try:
-                from moteur_calcul.formules.dxf import generer_plan_fondation_dxf
+                from projets.services.plan_fondation import generer_plan_fondation_dxf
 
-                buffer = generer_plan_fondation_dxf(semelles)
-                content = buffer.getvalue()
-            except (ImportError, ModuleNotFoundError, AttributeError):
+                ouvrages = _ouvrages_lineaires_pour_dxf(projet.elements.all())
+                content = generer_plan_fondation_dxf(
+                    _semelles_pour_dxf(semelles),
+                    poutres=ouvrages["poutres"],
+                    longrines=ouvrages["longrines"],
+                    chainages_identifies=ouvrages["chainages_identifies"],
+                )
+            except (ImportError, ModuleNotFoundError):
                 content = b"0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nEOF\n"
+            except ValueError as err:
+                return Response({"erreur": str(err)}, status=status.HTTP_400_BAD_REQUEST)
 
             response = HttpResponse(content, content_type="application/dxf")
             response["Content-Disposition"] = (
@@ -158,7 +591,7 @@ class ProjetViewSet(viewsets.ModelViewSet):
             return response
 
         serializer = ElementStructurelSerializer(semelles, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response({"semelles": serializer.data}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
     def valider_plan_fondation(self, request, pk=None):
@@ -208,13 +641,15 @@ class ProjetViewSet(viewsets.ModelViewSet):
 
         nom_fichier_base = f"DQE_{projet.nom.replace(' ', '_')}_{projet.id}"
         if export_format == "pdf":
-            buffer = exporter_dqe_pdf(dqe_data)
+            entreprise = _entreprise_export_dict(EntrepriseParametres.get_solo())
+            buffer = exporter_dqe_pdf(dqe_data, entreprise=entreprise)
             response = HttpResponse(buffer.getvalue(), content_type="application/pdf")
             response["Content-Disposition"] = (
                 f'attachment; filename="{nom_fichier_base}.pdf"'
             )
         elif export_format == "excel":
-            buffer = exporter_dqe_excel(dqe_data)
+            entreprise = _entreprise_export_dict(EntrepriseParametres.get_solo())
+            buffer = exporter_dqe_excel(dqe_data, entreprise=entreprise)
             response = HttpResponse(
                 buffer.getvalue(),
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -228,57 +663,6 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return response
-
-    @action(
-        detail=True,
-        methods=["post"],
-        parser_classes=[MultiPartParser, FormParser],
-        url_path="analyser_plan_image",
-        url_name="analyser-plan-image",
-    )
-    def analyser_plan_image(self, request, pk=None):
-        projet = self.get_object()
-
-        fichier_image = request.FILES.get("image") or request.FILES.get("fichier")
-        if not fichier_image:
-            return Response(
-                {"erreur": "Aucun fichier image fourni (champ 'image' requis)."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        types_acceptes = ["image/jpeg", "image/png", "image/webp"]
-        mime_type = fichier_image.content_type
-        if mime_type not in types_acceptes:
-            return Response(
-                {
-                    "erreur": f"Format de fichier non supporté ({mime_type}).",
-                    "formats_acceptes": types_acceptes,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        taille_max = 10 * 1024 * 1024  # 10 Mo
-        if fichier_image.size > taille_max:
-            return Response(
-                {"erreur": "Le fichier dépasse la taille maximale autorisée de 10 Mo."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if analyser_plan_2d is None:
-            return Response(
-                {"erreur": "Le moteur d'analyse Vision n'est pas configuré sur le serveur."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        try:
-            image_bytes = fichier_image.read()
-            resultat = analyser_plan_2d(image_bytes, mime_type)
-            return Response(resultat, status=status.HTTP_200_OK)
-        except Exception as exc:
-            return Response(
-                {"erreur": "Erreur lors de l'analyse du plan.", "detail": str(exc)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
 
 
 class ElementStructurelViewSet(viewsets.ModelViewSet):
@@ -358,6 +742,37 @@ class PosteComplementaireViewSet(viewsets.ModelViewSet):
         serializer.save(lignes_calculees=lignes)
 
 
+class EntrepriseParametresView(APIView):
+    """
+    Paramètres d'en-tête (logo + coordonnées) utilisés sur les exports DQE.
+    Un seul jeu de paramètres par installation (singleton) : GET le crée
+    à la volée s'il n'existe pas encore, PUT/PATCH le met à jour.
+    Envoyer en multipart/form-data pour inclure un fichier "logo".
+    """
+
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get(self, request):
+        entreprise = EntrepriseParametres.get_solo()
+        serializer = EntrepriseParametresSerializer(entreprise, context={"request": request})
+        return Response(serializer.data)
+
+    def put(self, request):
+        return self._update(request, partial=False)
+
+    def patch(self, request):
+        return self._update(request, partial=True)
+
+    def _update(self, request, partial):
+        entreprise = EntrepriseParametres.get_solo()
+        serializer = EntrepriseParametresSerializer(
+            entreprise, data=request.data, partial=partial, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
 class AssistantStructurerView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "assistant_structurer"
@@ -435,3 +850,42 @@ class AssistantExpliquerView(APIView):
             )
         except Exception as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AssistantSuggererPosteView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "assistant_suggerer_poste"
+
+    def get_permissions(self):
+        if os.getenv("DEMO_MODE", "False").lower() == "true":
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
+    def post(self, request):
+        description = request.data.get("description", "").strip()
+        if not description:
+            return Response(
+                {"detail": "La description du poste est requise."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(description) > 500:
+            return Response(
+                {"detail": "La description ne doit pas dépasser 500 caractères."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            res = suggerer_poste_complementaire(description)
+            return Response(res, status=status.HTTP_200_OK)
+        except LLMServiceError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code},
+                status=exc.status_code,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            logger.exception("Erreur inattendue dans AssistantSuggererPosteView")
+            return Response(
+                {"detail": "Erreur interne du service d'assistance IA."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )

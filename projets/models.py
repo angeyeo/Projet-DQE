@@ -7,6 +7,10 @@ class Projet(models.Model):
     usage_batiment = models.CharField(max_length=100, default="habitation")
     nb_niveaux = models.PositiveIntegerField(default=1)
 
+    # Numéro de devis affiché sur les exports DQE (ex. "0017-2026").
+    # Laissé vide, on retombe sur "DQE-PROJET-<id>" à l'export.
+    numero_devis = models.CharField(max_length=50, blank=True)
+
     # Extension Trame Structurelle (Jour 1)
     nb_travees_x = models.PositiveIntegerField(default=1)
     nb_travees_y = models.PositiveIntegerField(default=1)
@@ -22,6 +26,14 @@ class Projet(models.Model):
     # Validation du plan de fondation (Jour 3 pré-intégré)
     plan_fondation_valide = models.BooleanField(default=False)
 
+    # Import de plan (Phase A/B -- voir ProjetViewSet.importer_plan) : trace
+    # le fichier IFC déposé par l'utilisateur. Conservé pour audit et pour
+    # que la confirmation (Phase B) puisse relire les positions réelles
+    # sans redemander le fichier au technicien.
+    fichier_import_origine = models.FileField(
+        upload_to="imports_ifc/", null=True, blank=True
+    )
+
     date_creation = models.DateTimeField(auto_now_add=True)
     date_modification = models.DateTimeField(auto_now=True)
 
@@ -36,6 +48,15 @@ class ElementStructurel(models.Model):
         SEMELLE = "semelle", "Semelle Isolée"
         DALLE = "dalle", "Dalle Pleine"
         SEMELLE_FILANTE = "semelle_filante", "Semelle Filante"
+        # AJOUTÉ (Phase C) : longrine -- même physique qu'une poutre
+        # (flexion simple BAEL), juste à un autre niveau (liaison entre
+        # semelles) -- pas de nouvelle formule, réutilise dimensionner_poutre().
+        LONGRINE = "longrine", "Longrine"
+        # AJOUTÉ (Phase C) : chaînage promu en élément identifié (repère
+        # CH1 individuel, ligne DQE dédiée) -- avant, uniquement un poste
+        # ratio global (voir postes_ratio.calculer_poste_ratio("chainage", ...),
+        # qui reste disponible pour un usage en lot forfaitaire non identifié).
+        CHAINAGE = "chainage", "Chaînage"
 
     class Statut(models.TextChoices):
         PROPOSE = "propose", "Proposé"
@@ -71,6 +92,31 @@ class ElementStructurel(models.Model):
         null=True,
         blank=True,
         related_name="semelles_associees",
+    )
+
+    # Extrémités d'un ouvrage linéaire (poutre, longrine, chaînage
+    # identifié) -- Phase C de la feuille de route "Import plan
+    # automatique". Sans ça, une poutre n'était connue que par son
+    # centre (position_x/y) et sa portée : impossible de tracer le bon
+    # segment dans le plan de coffrage DXF (voir
+    # projets/services/plan_fondation.py, generer_plan_fondation_dxf).
+    # Renseignés par ProjetViewSet.generer_trame et .importer_plan ;
+    # None pour un poteau/une semelle (non concernés) ou un ouvrage créé
+    # avant ce champ (donnée historique, tracé alors omis du DXF plutôt
+    # que de planter -- voir _ouvrages_lineaires_pour_dxf).
+    poteau_origine = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ouvrages_origine",
+    )
+    poteau_destination = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ouvrages_destination",
     )
 
     # Inputs techniques de dimensionnement
@@ -172,3 +218,38 @@ class PosteComplementaire(models.Model):
 
     def __str__(self):
         return f"{self.get_lot_display()} - {self.designation or self.type_poste}"
+
+
+class EntrepriseParametres(models.Model):
+    """
+    En-tête personnalisable pour les exports DQE (PDF/Excel) : logo et
+    coordonnées de l'entreprise de l'utilisateur. Modèle "singleton" --
+    une seule ligne en base (pk=1), créée à la demande si absente. Voir
+    EntrepriseParametresView (get_solo) pour l'accès.
+    """
+
+    logo = models.ImageField(upload_to="logos/", null=True, blank=True)
+    nom = models.CharField(max_length=200, blank=True)
+    siege_social = models.CharField(max_length=255, blank=True)
+    telephone = models.CharField(max_length=100, blank=True)
+    email = models.EmailField(blank=True)
+    site_web = models.CharField(max_length=200, blank=True)
+    rccm = models.CharField("N° R.C.C.M", max_length=100, blank=True)
+    cc = models.CharField("CC N°", max_length=100, blank=True)
+    cb = models.CharField("CB N°", max_length=100, blank=True)
+    capital_social = models.CharField(max_length=100, blank=True)
+
+    date_modification = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        # Force le singleton : toujours pk=1.
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_solo(cls) -> "EntrepriseParametres":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return self.nom or "Paramètres entreprise"

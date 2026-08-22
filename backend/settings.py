@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -51,8 +52,14 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'assistant_structurer': '10/min',
         'assistant_expliquer': '20/min',
+        'assistant_suggerer_poste': '15/min',
+        'assistant_vision': '5/min',
     },
 }
+
+# Limite d'upload pour les images de plans (Phase A Vision)
+PLAN_IMAGE_MAX_BYTES = int(os.getenv("PLAN_IMAGE_MAX_BYTES", str(5 * 1024 * 1024))) # 5 Mo par défaut
+
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -131,6 +138,10 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Fichiers uploadés par l'utilisateur (logo entreprise, etc.)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field

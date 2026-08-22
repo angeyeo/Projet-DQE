@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Projet, ElementStructurel, CoucheCharge, PosteComplementaire
+from .models import Projet, ElementStructurel, CoucheCharge, PosteComplementaire, EntrepriseParametres
 
 
 class CoucheChargeSerializer(serializers.ModelSerializer):
@@ -37,3 +37,10 @@ class ProjetSerializer(serializers.ModelSerializer):
     class Meta:
         model = Projet
         fields = "__all__"
+
+
+class EntrepriseParametresSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EntrepriseParametres
+        fields = "__all__"
+        read_only_fields = ("date_modification",)

@@ -141,6 +141,22 @@ USAGES_AVEC_DEGRESSION = ("habitation", "bureau")
 # Ratios de pré-dimensionnement rapide (poutres, dalles) -- section 3.2/3.3
 RATIO_HAUTEUR_POUTRE_CONTINUE = (10, 12)     # portée / 10 à 12
 RATIO_HAUTEUR_POUTRE_ISOSTATIQUE = (8, 10)   # portée / 8 à 10
+
+# --- Méthode de Caquot (poutres continues, BAEL 91 mod.99 B.6.2) ---
+#
+# Coefficient du dénominateur de la formule des moments sur appuis
+# intermédiaires (8,5 pour une poutre à section constante -- 8 x le
+# coefficient 15/16 usuellement retenu en pratique bâtiment courant).
+COEFFICIENT_CAQUOT = 8.5
+
+# Coefficient de réduction des portées ("portées fictives") appliqué
+# aux travées intermédiaires dans la méthode de Caquot MINORÉE -- ne
+# s'applique QUE si la charge d'exploitation reste modérée par rapport
+# à la charge permanente (Q <= 2G ou Q <= 5 kN/m², BAEL B.6.2,1). Les
+# travées de rive gardent leur portée réelle dans tous les cas.
+# Si cette condition n'est pas vérifiée, il faut appeler la méthode en
+# minore=False (portées réelles partout -- plus défavorable, plus sûr).
+COEFFICIENT_REDUCTION_CAQUOT_MINORE = 0.8
 RATIO_EPAISSEUR_DALLE_1_SENS = (25, 30)       # portée / 25 à 30
 RATIO_EPAISSEUR_DALLE_2_SENS = (35, 40)       # portée / 35 à 40
 EPAISSEUR_DALLE_MIN_CM = 12
@@ -188,3 +204,61 @@ PORTEE_MAX_M = 15.0
 NB_NIVEAUX_MAX = 20
 
 USAGES_VALIDES = list(CHARGES_EXPLOITATION.keys())
+
+# --- Ratios "postes sans formule dédiée" (Phase 2/3, feuille de route
+# "Ma partie — Backend", Jour 1, §1.1) -----------------------------------
+#
+# Ces postes du DQE type CIMBAT (maçonnerie, enduit, chaînage, raidisseur,
+# acrotère) n'ont pas de dimensionnement structurel dédié dans le moteur
+# -- ce sont des quantités déduites de la géométrie générale du bâtiment
+# (périmètre, hauteurs, nombre de niveaux), pas d'un calcul de résistance.
+#
+# ATTENTION -- POINT CRITIQUE (à valider avec le technicien BTP avant
+# utilisation en production, cf. feuille de route) : ces valeurs sont
+# pour l'instant DÉDUITES DU SEUL EXEMPLE DISPONIBLE (DQE CIMBAT, Villa
+# basse 4 pièces, devis n°0017-2026), pas d'un référentiel validé. Elles
+# sont cohérentes à ±10% entre les différents postes "linéaires légers"
+# du même devis (chaînages, bêches, renforts, linteaux, acrotère : tous
+# à 90 kg/m³ d'acier et ~10 m²/m³ de coffrage), ce qui est un bon signe,
+# mais UN SEUL exemple ne suffit pas à les figer.
+
+# Épaisseur standard d'un mur en agglomérés de 15 (parpaing 15 cm), en m.
+EPAISSEUR_AGGLOS_15_M = 0.15
+EPAISSEUR_AGGLOS_10_M = 0.10
+
+# Coefficient de plein (1 - proportion d'ouvertures : portes, fenêtres) à
+# appliquer à la surface brute de mur pour la maçonnerie d'élévation.
+# 0.80 = hypothèse courante en habitation (à ajuster selon le plan réel).
+COEFFICIENT_PLEIN_MACONNERIE_ELEVATION = 0.80
+
+# Ratios acier / béton (kg/m³), déduits du DQE CIMBAT -- voir avertissement
+# ci-dessus. Les éléments "linéaires légers" (chaînages, linteaux, bêches,
+# renforts de dallage, acrotère) sont tous à 90 kg/m³ dans l'exemple ; les
+# éléments "verticaux/compression" (amorces de poteaux, raidisseurs) à
+# 150 kg/m³, cohérent avec RATIO_ACIER_POTEAUX_KG_M3 déjà utilisé ailleurs.
+RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3 = 90.0
+RATIO_ACIER_RAIDISSEUR_AMORCE_KG_M3 = 150.0
+
+# Ratios coffrage / béton (m²/m³), même source.
+RATIO_COFFRAGE_ELEMENT_LINEAIRE_LEGER_M2_M3 = 10.0
+RATIO_COFFRAGE_ACROTERE_M2_M3 = 15.0
+
+# Sections forfaitaires (m²) des éléments linéaires légers, pratique
+# courante en petit bâtiment (à confirmer avec le technicien) : ex.
+# chaînage 15x20 cm = 0.03 m².
+SECTION_CHAINAGE_M2 = 0.03
+SECTION_ACROTERE_M2 = 0.05  # acrotère un peu plus large (15x33 environ)
+
+# AJOUTÉ (Phase C) : dimensions par défaut du chaînage (15x20 cm),
+# cohérentes avec SECTION_CHAINAGE_M2 ci-dessus (0.15 x 0.20 = 0.03 m²)
+# -- utilisées par dimensionner_chainage() (postes_ratio.py) pour un
+# chaînage identifié individuellement (repère CH1), par opposition au
+# poste ratio global (calculer_poste_ratio("chainage", ...)) qui ne
+# manipule que la section totale sans la décomposer.
+LARGEUR_CHAINAGE_CM_DEFAUT = 15.0
+HAUTEUR_CHAINAGE_CM_DEFAUT = 20.0
+
+# Ratio d'enduit : un raidisseur ou une amorce de poteau par façade/angle
+# structurel, en l'absence d'un vrai plan de ferraillage -- hypothèse
+# grossière tant que le plan réel n'est pas disponible.
+ENDUIT_EPAISSEUR_FORFAITAIRE = "dosé à 350 kg/m³"  # libellé DQE, pas un ratio numérique

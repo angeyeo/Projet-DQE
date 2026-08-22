@@ -1,4 +1,6 @@
 from django.contrib import admin
+from django.conf import settings
+from django.conf.urls.static import static
 from django.urls import path, include
 from projets.views import AssistantStructurerView, AssistantExpliquerView
 
@@ -11,3 +13,6 @@ urlpatterns = [
     path("assistant/structurer", AssistantStructurerView.as_view()),
     path("assistant/expliquer", AssistantExpliquerView.as_view()),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

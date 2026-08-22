@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, FileUp, Calculator, Lock, FileSpreadsheet, ChevronLeft, ChevronRight, Building2, ShieldCheck } from 'lucide-react';
+import { LayoutDashboard, FileUp, Calculator, Lock, FileSpreadsheet, ChevronLeft, ChevronRight, Building2, ShieldCheck, Settings } from 'lucide-react';
 
 export default function Sidebar({ activeView, setActiveView, isCollapsed, setIsCollapsed, lockedCount, totalCount }) {
   const menuItems = [
@@ -8,6 +8,10 @@ export default function Sidebar({ activeView, setActiveView, isCollapsed, setIsC
     { id: 'step2', label: 'Calculs Structurels', icon: Calculator },
     { id: 'step3', label: 'Validation & Verrou', icon: Lock, badge: lockedCount > 0 ? `${lockedCount}/${totalCount}` : null },
     { id: 'step4', label: 'Devis DQE & IA', icon: FileSpreadsheet },
+  ];
+
+  const menuItemsBas = [
+    { id: 'settingsEntreprise', label: 'Paramètres Entreprise', icon: Settings },
   ];
 
   return (
@@ -51,6 +55,24 @@ export default function Sidebar({ activeView, setActiveView, isCollapsed, setIsC
                     {item.badge && <span className="nav-badge">{item.badge}</span>}
                   </>
                 )}
+              </li>
+            );
+          })}
+        </ul>
+
+        {!isCollapsed && <div className="nav-section-title">Configuration</div>}
+        <ul className="nav-menu">
+          {menuItemsBas.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeView === item.id;
+            return (
+              <li
+                key={item.id}
+                className={`nav-item ${isActive ? 'active' : ''}`}
+                onClick={() => setActiveView(item.id)}
+              >
+                <Icon size={25} style={{ flexShrink: 0 }} />
+                {!isCollapsed && <span>{item.label}</span>}
               </li>
             );
           })}

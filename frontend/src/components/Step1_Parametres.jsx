@@ -19,8 +19,12 @@ const CHARGE_EXPLOITATION_PAR_USAGE = {
 // sans qu'aucune erreur ne soit jamais levée.
 const LIMITES = {
   nombreNiveaux: { min: 1, max: 20 },
-  porteeMax: { min: 1.5, max: 15 },
+  nbTraveesX: { min: 1, max: 10 },
+  nbTraveesY: { min: 1, max: 10 },
+  porteeX: { min: 1.5, max: 15 },
+  porteeY: { min: 1.5, max: 15 },
   chargeExploitation: { min: 0.5, max: 20 },
+  hauteurEtage: { min: 2.4, max: 4.5 },
 };
 
 const clamp = (value, { min, max }) => {
@@ -120,6 +124,17 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         </div>
 
         <div className="form-group">
+          <label className="form-label">N° de Devis (optionnel)</label>
+          <input
+            type="text"
+            className="form-control"
+            value={projectData.numeroDevis}
+            onChange={(e) => updateProjectData({ numeroDevis: e.target.value })}
+            placeholder="ex: 0017-2026"
+          />
+        </div>
+
+        <div className="form-group">
           <label className="form-label">Usage principal du Bâtiment</label>
           <select
             className="form-select"
@@ -160,20 +175,96 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         </div>
 
         <div className="form-group">
-          <label className="form-label">Portée Maximale des Poutres (L en mètres)</label>
+          <label className="form-label">Nombre de travées — Direction X</label>
+          <input
+            type="number"
+            min={LIMITES.nbTraveesX.min}
+            max={LIMITES.nbTraveesX.max}
+            className="form-control"
+            value={projectData.nbTraveesX}
+            onChange={(e) => updateProjectData({ nbTraveesX: e.target.value })}
+            onBlur={(e) => updateProjectData({ nbTraveesX: clamp(e.target.value, LIMITES.nbTraveesX) })}
+            placeholder="ex: 2"
+          />
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+            Plage acceptée : {LIMITES.nbTraveesX.min} à {LIMITES.nbTraveesX.max} travées
+          </p>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Portée en X (m)</label>
           <input
             type="number"
             step="0.1"
-            min={LIMITES.porteeMax.min}
-            max={LIMITES.porteeMax.max}
+            min={LIMITES.porteeX.min}
+            max={LIMITES.porteeX.max}
             className="form-control"
-            value={projectData.porteeMax}
-            onChange={(e) => updateProjectData({ porteeMax: e.target.value })}
-            onBlur={(e) => updateProjectData({ porteeMax: clamp(e.target.value, LIMITES.porteeMax) })}
-            placeholder="ex: 5.5"
+            value={projectData.porteeX}
+            onChange={(e) => updateProjectData({ porteeX: e.target.value })}
+            onBlur={(e) => updateProjectData({ porteeX: clamp(e.target.value, LIMITES.porteeX) })}
+            placeholder="ex: 5.0"
           />
           <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-            Plage acceptée : {LIMITES.porteeMax.min} à {LIMITES.porteeMax.max} m (portée usuelle en béton armé non précontraint)
+            Plage acceptée : {LIMITES.porteeX.min} à {LIMITES.porteeX.max} m
+          </p>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Nombre de travées — Direction Y</label>
+          <input
+            type="number"
+            min={LIMITES.nbTraveesY.min}
+            max={LIMITES.nbTraveesY.max}
+            className="form-control"
+            value={projectData.nbTraveesY}
+            onChange={(e) => updateProjectData({ nbTraveesY: e.target.value })}
+            onBlur={(e) => updateProjectData({ nbTraveesY: clamp(e.target.value, LIMITES.nbTraveesY) })}
+            placeholder="ex: 2"
+          />
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+            Plage acceptée : {LIMITES.nbTraveesY.min} à {LIMITES.nbTraveesY.max} travées
+          </p>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Portée en Y (m)</label>
+          <input
+            type="number"
+            step="0.1"
+            min={LIMITES.porteeY.min}
+            max={LIMITES.porteeY.max}
+            className="form-control"
+            value={projectData.porteeY}
+            onChange={(e) => updateProjectData({ porteeY: e.target.value })}
+            onBlur={(e) => updateProjectData({ porteeY: clamp(e.target.value, LIMITES.porteeY) })}
+            placeholder="ex: 5.0"
+          />
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+            Plage acceptée : {LIMITES.porteeY.min} à {LIMITES.porteeY.max} m
+          </p>
+        </div>
+
+        <div className="form-group" style={{ gridColumn: 'span 2' }}>
+          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--accent-primary)', background: '#eff6ff', border: '1px solid #bfdbfe', padding: '0.5rem 1rem', borderRadius: '8px', display: 'inline-block' }}>
+            Aperçu Trame : Grille de {(parseInt(projectData.nbTraveesX || 0) + 1) * (parseInt(projectData.nbTraveesY || 0) + 1)} poteaux ({projectData.nbTraveesX || 0}x{projectData.nbTraveesY || 0} travées)
+          </p>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Hauteur d'Étage (m)</label>
+          <input
+            type="number"
+            step="0.1"
+            min={LIMITES.hauteurEtage.min}
+            max={LIMITES.hauteurEtage.max}
+            className="form-control"
+            value={projectData.hauteurEtage}
+            onChange={(e) => updateProjectData({ hauteurEtage: e.target.value })}
+            onBlur={(e) => updateProjectData({ hauteurEtage: clamp(e.target.value, LIMITES.hauteurEtage) })}
+            placeholder="ex: 3.0"
+          />
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+            Plage acceptée : {LIMITES.hauteurEtage.min} à {LIMITES.hauteurEtage.max} m
           </p>
         </div>
 

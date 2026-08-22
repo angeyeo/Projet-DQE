@@ -7,6 +7,8 @@ from projets.views import (
     PosteComplementaireViewSet,
     AssistantStructurerView,
     AssistantExpliquerView,
+    AssistantSuggererPosteView,
+    EntrepriseParametresView,
 )
 
 router = DefaultRouter()
@@ -20,7 +22,7 @@ router.register(
 )
 
 urlpatterns = [
-    # Routes Assistant IA
+    # Routes exactes attendues par test_ai.py
     path(
         "assistant/structurer-projet/",
         AssistantStructurerView.as_view(),
@@ -31,6 +33,7 @@ urlpatterns = [
         AssistantExpliquerView.as_view(),
         name="assistant-expliquer-element",
     ),
+    # Aliases
     path(
         "assistant/structurer/",
         AssistantStructurerView.as_view(),
@@ -41,7 +44,7 @@ urlpatterns = [
         AssistantExpliquerView.as_view(),
         name="assistant-expliquer",
     ),
-    # Support DQE (underscore et tiret)
+    # DQE avec tiret et underscore
     path(
         "projets/<int:pk>/generer_dqe/",
         ProjetViewSet.as_view({"get": "generer_dqe", "post": "generer_dqe"}),
@@ -51,15 +54,16 @@ urlpatterns = [
         ProjetViewSet.as_view({"get": "generer_dqe", "post": "generer_dqe"}),
         name="projet-generer-dqe",
     ),
-    # Support Analyse Plan Vision (underscore et tiret)
+    # Assistant IA — Suggestion de poste complémentaire
     path(
-        "projets/<int:pk>/analyser_plan_image/",
-        ProjetViewSet.as_view({"post": "analyser_plan_image"}),
-        name="projet-analyser-plan-image",
+        "assistant/suggerer-poste/",
+        AssistantSuggererPosteView.as_view(),
+        name="assistant-suggerer-poste",
     ),
     path(
-        "projets/<int:pk>/analyser-plan-image/",
-        ProjetViewSet.as_view({"post": "analyser_plan_image"}),
+        "entreprise/",
+        EntrepriseParametresView.as_view(),
+        name="entreprise-parametres",
     ),
     path("", include(router.urls)),
 ]

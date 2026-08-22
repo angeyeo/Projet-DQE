@@ -6,7 +6,9 @@ import Step1_Parametres from './components/Step1_Parametres';
 import StepDalles from './components/StepDalles';
 import Step2_Calculs from './components/Step2_Calculs';
 import Step3_ValidationLock from './components/Step3_ValidationLock';
+import StepPlanFondation from './components/StepPlanFondation';
 import Step4_DQEExport from './components/Step4_DQEExport';
+import SettingsEntreprise from './components/settingsentreprise';
 import { dqeService } from './api/dqeService';
 
 export default function App() {
@@ -16,11 +18,16 @@ export default function App() {
   // État du Projet BTP Phase 2
   const [projectData, setProjectData] = useState({
     nomProjet: '',
+    numeroDevis: '',
     planFileName: '',
     planFileSize: '',
     typeUsage: 'habitation',
     nombreNiveaux: '',
-    porteeMax: '',
+    nbTraveesX: '',
+    nbTraveesY: '',
+    porteeX: '',
+    porteeY: '',
+    hauteurEtage: '',
     chargeExploitation: '',
     norme: 'BAEL91',
   });
@@ -403,6 +410,15 @@ export default function App() {
               onRemovePosteMainDoeuvre={supprimerPosteMainDoeuvre}
               mainDoeuvreError={mainDoeuvreError}
               onBack={() => setActiveView('step2')}
+              onNext={() => setActiveView('step3bis')}
+            />
+          )}
+
+          {activeView === 'step3bis' && (
+            <StepPlanFondation
+              projetId={sections.projetId}
+              sections={sections}
+              onBack={() => setActiveView('step3')}
               onNext={handleGenerateDQE}
             />
           )}
@@ -412,13 +428,17 @@ export default function App() {
               dqeData={dqeData || {}}
               projectData={projectData}
               projetId={sections.projetId}
-              onBack={() => setActiveView('step3')}
+              onBack={() => setActiveView('step3bis')}
               onReset={() => {
                 setPostesMainDoeuvre([]);
                 setMainDoeuvreError(null);
                 setActiveView('step1');
               }}
             />
+          )}
+
+          {activeView === 'settingsEntreprise' && (
+            <SettingsEntreprise />
           )}
         </main>
       </div>
