@@ -45,6 +45,14 @@ COULEUR_SEMELLES = 5   # bleu
 COULEUR_POTEAUX = 1    # rouge
 COULEUR_CHAINAGE = 3   # vert
 COULEUR_ANNOTATIONS = 7  # blanc/noir (couleur du calque courant)
+# Phase C (voir Feuille_de_route_Import_Plan_Automatique.md) : nouveaux
+# types d'ouvrages transmis par _ouvrages_lineaires_pour_dxf() (Samuel,
+# projets/views.py) -- couleurs distinctes du chaînage "implicite"
+# (segments recalculés entre semelles adjacentes, COULEUR_CHAINAGE
+# ci-dessus) pour ne pas les confondre visuellement sur le plan.
+COULEUR_POUTRES = 4          # cyan
+COULEUR_LONGRINES = 6        # magenta
+COULEUR_CHAINAGES_IDENTIFIES = 2  # jaune
 
 
 def _cm_vers_m(valeur_cm) -> float:
@@ -132,13 +140,62 @@ def _calculer_segments_chainage(semelles, tolerance_position_m):
     return _segments_par_position(semelles, tolerance_position_m)
 
 
-def generer_plan_fondation_dxf(semelles, tolerance_position_m: float = 0.01) -> bytes:
+def _dessiner_ouvrages_lineaires(doc, msp, ouvrages, nom_calque, couleur):
+    """
+    Phase C : dessine une liste plate d'ouvrages linéaires (poutres,
+    longrines ou chaînages identifiés -- même forme
+    {identifiant, x1, y1, x2, y2, largeur_cm, hauteur_cm}, voir
+    _ouvrages_lineaires_pour_dxf() côté vue) : un trait d'axe par
+    ouvrage sur son propre calque, annoté de son repère.
+
+    MVP : trait d'axe simple, pas encore le rectangle de largeur réelle
+    (largeur_cm/hauteur_cm sont transmis mais pas encore utilisés pour
+    dessiner l'emprise -- à enrichir si le plan de coffrage final doit
+    montrer l'épaisseur réelle plutôt qu'un simple repère de tracé).
+    """
+    if not ouvrages:
+        return
+    if not doc.layers.has_entry(nom_calque):
+        doc.layers.add(name=nom_calque, color=couleur)
+
+    for ouvrage in ouvrages:
+        x1, y1, x2, y2 = ouvrage["x1"], ouvrage["y1"], ouvrage["x2"], ouvrage["y2"]
+        msp.add_line((x1, y1), (x2, y2), dxfattribs={"layer": nom_calque})
+
+        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+        msp.add_text(
+            str(ouvrage["identifiant"]),
+            dxfattribs={
+                "layer": nom_calque,
+                "height": 0.15,
+                "insert": (mx, my + 0.15),
+            },
+        )
+
+
+def generer_plan_fondation_dxf(
+    semelles,
+    tolerance_position_m: float = 0.01,
+    poutres: list = None,
+    longrines: list = None,
+    chainages_identifies: list = None,
+) -> bytes:
     """
     semelles : liste de dicts {identifiant, position_x, position_y, cote_cm,
     hauteur_cm, poteau_associe: {identifiant, cote_cm}, [indice_i, indice_j]}
     -- format exact retourné par GET /api/projets/{id}/plan_fondation/
     (Samuel, Jour 2.4). indice_i/indice_j sont optionnels (voir docstring
     du module pour la méthode d'adjacence utilisée selon leur présence).
+
+    poutres, longrines, chainages_identifies (Phase C, optionnels) :
+    listes plates {identifiant, x1, y1, x2, y2, largeur_cm, hauteur_cm}
+    -- format produit par _ouvrages_lineaires_pour_dxf() (Samuel,
+    projets/views.py). Chacune est dessinée sur son propre calque
+    (POUTRES, LONGRINES, CHAINAGES_IDENTIFIES), en plus du chaînage
+    "implicite" toujours recalculé ci-dessous entre semelles adjacentes
+    (COULEUR_CHAINAGE) -- les deux ne se recouvrent pas forcément
+    (chainages_identifies ne concerne que les chaînages promus en
+    éléments identifiés, ex. chaînages annexes hors trame principale).
 
     Dessine chaque semelle à sa vraie position (x, y), le poteau associé
     au centre, et les lignes de chaînage reliant les poteaux adjacents de
@@ -212,6 +269,12 @@ def generer_plan_fondation_dxf(semelles, tolerance_position_m: float = 0.01) -> 
             "height": 0.4,
             "insert": (x_min, y_min - 1.5),
         },
+    )
+
+    _dessiner_ouvrages_lineaires(doc, msp, poutres, "POUTRES", COULEUR_POUTRES)
+    _dessiner_ouvrages_lineaires(doc, msp, longrines, "LONGRINES", COULEUR_LONGRINES)
+    _dessiner_ouvrages_lineaires(
+        doc, msp, chainages_identifies, "CHAINAGES_IDENTIFIES", COULEUR_CHAINAGES_IDENTIFIES
     )
 
     tampon = io.StringIO()
