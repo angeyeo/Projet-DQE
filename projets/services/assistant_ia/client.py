@@ -19,6 +19,17 @@ class BaseAIClient(ABC):
         """Envoie la requête brute au fournisseur LLM et retourne le texte brut."""
         pass
 
+    @abstractmethod
+    def appeler_llm_vision(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        forcer_json: bool = False,
+    ) -> str:
+        """Envoie une requête multimodale (texte + image) et retourne le texte brut."""
+        pass
+
 
 class MockAIClient(BaseAIClient):
     """
@@ -157,6 +168,37 @@ class MockAIClient(BaseAIClient):
                 "Cette proposition doit être vérifiée et validée par l’ingénieur structure."
             )
 
+    def appeler_llm_vision(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        forcer_json: bool = False,
+    ) -> str:
+        # Validation défensive
+        if not isinstance(image_bytes, bytes):
+            raise ValueError("Les données de l'image doivent être de type bytes.")
+        if not image_bytes:
+            raise ValueError("L'image ne doit pas être vide.")
+        if mime_type not in {"image/jpeg", "image/png"}:
+            raise ValueError(f"Type MIME '{mime_type}' non supporté. Types autorisés : image/jpeg, image/png")
+
+        # Retour déterministe brut (Gemini Vision ne doit pas normaliser)
+        res = {
+            "annotations_lues": [
+                {
+                    "texte_lu": "S1(170x170x40)",
+                    "repere": "S1"
+                },
+                {
+                    "texte_lu": "P2",
+                    "repere": "P2"
+                }
+            ],
+            "textes_non_classes": []
+        }
+        return json.dumps(res)
+
 
 class GeminiAIClient(BaseAIClient):
     def __init__(self, api_key: str, model: str = "gemini-3.5-flash", timeout: int = 20):
@@ -164,28 +206,7 @@ class GeminiAIClient(BaseAIClient):
         self.model = model
         self.timeout = timeout
 
-    def appeler_llm(self, prompt: str, forcer_json: bool = False) -> str:
-        # Sécurité : la clé d'API est transmise uniquement via l'en-tête HTTP x-goog-api-key (jamais dans l'URL)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }
-        if forcer_json:
-            payload["generationConfig"] = {"responseMimeType": "application/json"}
-
-        req_data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=req_data,
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": self.api_key
-            },
-            method="POST"
-        )
-
+    def _executer_requete(self, req: urllib.request.Request) -> str:
         max_bytes = int(os.getenv("LLM_MAX_RESPONSE_BYTES", "65536"))
 
         try:
@@ -239,6 +260,77 @@ class GeminiAIClient(BaseAIClient):
                 code="LLM_UNEXPECTED_ERROR",
                 status_code=502
             ) from None
+
+    def appeler_llm(self, prompt: str, forcer_json: bool = False) -> str:
+        # Sécurité : la clé d'API est transmise uniquement via l'en-tête HTTP x-goog-api-key (jamais dans l'URL)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        payload = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
+        }
+        if forcer_json:
+            payload["generationConfig"] = {"responseMimeType": "application/json"}
+
+        req_data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=req_data,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.api_key
+            },
+            method="POST"
+        )
+        return self._executer_requete(req)
+
+    def appeler_llm_vision(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        forcer_json: bool = False,
+    ) -> str:
+        # Validation défensive
+        if not isinstance(image_bytes, bytes):
+            raise ValueError("Les données de l'image doivent être de type bytes.")
+        if not image_bytes:
+            raise ValueError("L'image ne doit pas être vide.")
+        if mime_type not in {"image/jpeg", "image/png"}:
+            raise ValueError(f"Type MIME '{mime_type}' non supporté. Types autorisés : image/jpeg, image/png")
+
+        import base64
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        encoded_data = base64.b64encode(image_bytes).decode("utf-8")
+
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inlineData": {
+                            "mimeType": mime_type,
+                            "data": encoded_data
+                        }
+                    }
+                ]
+            }]
+        }
+        if forcer_json:
+            payload["generationConfig"] = {"responseMimeType": "application/json"}
+
+        req_data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=req_data,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.api_key
+            },
+            method="POST"
+        )
+        return self._executer_requete(req)
 
 
 def get_ai_client() -> BaseAIClient:

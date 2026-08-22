@@ -1,7 +1,11 @@
 import io
 import re
+import json
 from PIL import Image
+from .client import get_ai_client, MockAIClient, LLMServiceError
+from .prompts import PROMPT_EXTRACTION_PLAN_2D
 from .schemas import valider_reponse_ocr
+from .postes import extraire_et_parser_json
 
 # Expression régulière pour le parsing déterministe des dimensions entre parenthèses.
 # Gère les espaces optionnels autour des délimiteurs x, X ou ×.
@@ -42,7 +46,7 @@ def valider_physique_image(image_bytes: bytes, mime_type: str) -> None:
         stream = io.BytesIO(image_bytes)
         img = Image.open(stream)
         real_format = img.format.lower() if img.format else ""
-        
+
         # Comparaison du vrai format détecté avec le MIME déclaré
         if mime_type_clean == "image/jpeg" and real_format not in {"jpeg", "jpg"}:
             raise ValueError(f"Incohérence format : type MIME déclaré 'image/jpeg' mais format réel détecté '{real_format}'.")
@@ -90,7 +94,7 @@ def parser_annotation_structurelle(texte_lu: str) -> dict | None:
     # Extraction ordonnée de tous les nombres
     nombres_str = REGEX_NOMBRE.findall(contenu)
     valeurs = [float(n) for n in nombres_str]
-    
+
     if not valeurs:
         return None
 
@@ -153,5 +157,78 @@ def orchestrer_ocr_local(image_bytes: bytes, mime_type: str, ocr_brut: dict) -> 
         "annotations_lues": annotations_enrichies,
         "textes_non_classes": validated_ocr["textes_non_classes"],
         "source": "MOCK",
+        "validation_humaine_requise": True,
+    }
+
+
+def analyser_plan_2d(image_bytes: bytes, mime_type: str) -> dict:
+    """
+    Pipeline complet d'analyse OCR/Vision de plan 2D (Phase A) :
+    1. Valide physiquement l'image avec Pillow (verify + load).
+    2. Récupère le client IA configuré.
+    3. Exécute l'appel multimodal Vision.
+    4. Parse le JSON et le valide via valider_reponse_ocr.
+    5. Enrichit les données en local avec le parser Python (mapping + dimensions).
+    6. Renvoie le contrat final OCR V1 enrichi.
+
+    En cas d'erreur de service LLM (indisponibilité, timeout, quota),
+    ou de JSON de réponse mal formé, renvoie un fallback local sécurisé.
+    Les exceptions d'image invalide (ValueError) restent levées.
+    """
+    # 1. Validation physique de l'image (lève ValueError si invalide)
+    valider_physique_image(image_bytes, mime_type)
+
+    # 2. Récupération du client LLM
+    client = get_ai_client()
+
+    try:
+        # 3. Appel multimodal
+        raw_response = client.appeler_llm_vision(
+            prompt=PROMPT_EXTRACTION_PLAN_2D,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            forcer_json=True
+        )
+
+        # 4. Parsing et validation du schéma brut
+        data = extraire_et_parser_json(raw_response)
+        validated_ocr = valider_reponse_ocr(data)
+    except (LLMServiceError, ValueError) as exc:
+        # Si c'est une erreur de validation JSON (ValueError) issue de la réponse du LLM,
+        # ou une erreur réseau/service LLM (LLMServiceError), on bascule sur le fallback local.
+        # Les erreurs d'entrée utilisateur (ValueError levée par valider_physique_image) sont en dehors
+        # de ce bloc try et ne sont donc pas capturées ici.
+        return {
+            "annotations_lues": [],
+            "textes_non_classes": [],
+            "source": "FALLBACK_LOCAL",
+            "validation_humaine_requise": True,
+            "message": "L'analyse automatique du plan n'est pas disponible.",
+        }
+
+    # 5. Enrichissement local
+    annotations_enrichies = []
+    for item in validated_ocr["annotations_lues"]:
+        texte_lu = item["texte_lu"]
+        repere = item["repere"]
+
+        type_normalise = determiner_type_normalise(repere)
+        dimensions = parser_annotation_structurelle(texte_lu)
+
+        annotations_enrichies.append({
+            "texte_lu": texte_lu,
+            "repere": repere,
+            "type_normalise": type_normalise,
+            "dimensions_parsees": dimensions,
+        })
+
+    # Détermination propre de la source
+    is_mock = isinstance(client, MockAIClient)
+    source = "MOCK" if is_mock else "GEMINI"
+
+    return {
+        "annotations_lues": annotations_enrichies,
+        "textes_non_classes": validated_ocr["textes_non_classes"],
+        "source": source,
         "validation_humaine_requise": True,
     }
