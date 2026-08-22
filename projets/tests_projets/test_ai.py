@@ -266,3 +266,389 @@ class AssistantIAAPITestCase(APITestCase):
             exp = expliquer_resultat_element(elem)
             self.assertEqual(exp["source"], "FALLBACK_LOCAL")
             self.assertFalse(exp["explication_technique_disponible"])
+
+
+class SuggestionPosteUnitTestCase(TestCase):
+    """Tests unitaires exhaustifs pour la suggestion de poste complémentaire (IA Jour 1)."""
+
+    def setUp(self):
+        os.environ["LLM_PROVIDER"] = "mock"
+        if "LLM_API_KEY" in os.environ:
+            del os.environ["LLM_API_KEY"]
+
+    def test_suggestion_description_valide(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        res = suggerer_poste_complementaire("Maçonnerie en agglos pleins 20")
+        suggestion = res["suggestion"]
+        self.assertEqual(suggestion["lot_suggere"], "lot_02_gros_oeuvre_superstructure")
+        self.assertEqual(suggestion["unite"], "m²")
+        self.assertEqual(suggestion["confiance"], "haute")
+        self.assertEqual(res["source"], "MOCK")
+
+    def test_suggestion_description_vide_refusee(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        with self.assertRaises(ValueError):
+            suggerer_poste_complementaire("")
+
+    def test_suggestion_description_espaces_refusee(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        with self.assertRaises(ValueError):
+            suggerer_poste_complementaire("     ")
+
+    def test_suggestion_mauvais_type_refuse(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        with self.assertRaises(ValueError):
+            suggerer_poste_complementaire(12345)
+        with self.assertRaises(ValueError):
+            suggerer_poste_complementaire(None)
+
+    def test_suggestion_description_trop_longue_refusee(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        longue_desc = "A" * 501
+        with self.assertRaises(ValueError):
+            suggerer_poste_complementaire(longue_desc)
+
+    def test_suggestion_designation_llm_vide_leve_erreur(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": "",
+            "unite": "m²",
+            "lot_suggere": "lot_02_gros_oeuvre_superstructure",
+            "confiance": "haute"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            with self.assertRaises(ValueError):
+                suggerer_poste_complementaire("Terrassement")
+
+    def test_suggestion_unite_invalide_leve_erreur(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": "Terrassement",
+            "unite": "invalide_unit",
+            "lot_suggere": "lot_01_terrassement",
+            "confiance": "haute"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            with self.assertRaises(ValueError):
+                suggerer_poste_complementaire("Terrassement")
+
+    def test_suggestion_lot_invalide_leve_erreur(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": "Plomberie",
+            "unite": "ens.",
+            "lot_suggere": "lot_inexistant",
+            "confiance": "haute"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            with self.assertRaises(ValueError):
+                suggerer_poste_complementaire("Plomberie")
+
+    def test_suggestion_confiance_invalide_leve_erreur(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": "Peinture",
+            "unite": "m²",
+            "lot_suggere": "lot_00_generalites",
+            "confiance": "ultra_sure"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            with self.assertRaises(ValueError):
+                suggerer_poste_complementaire("Peinture")
+
+    def test_prompt_utilise_les_valeurs_du_modele(self):
+        """Vérifie que le prompt transmis au LLM contient l'intégralité des lots du modèle Django."""
+        from projets.models import PosteComplementaire
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+
+        captured_prompts = []
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            def mock_appeler(prompt, forcer_json=False):
+                captured_prompts.append(prompt)
+                return json.dumps({
+                    "designation": "Implantation",
+                    "unite": "ens.",
+                    "lot_suggere": "lot_00_generalites",
+                    "confiance": "haute"
+                })
+            mock_client.appeler_llm.side_effect = mock_appeler
+            mock_get.return_value = mock_client
+
+            suggerer_poste_complementaire("Installation de chantier")
+
+            self.assertEqual(len(captured_prompts), 1)
+            prompt_used = captured_prompts[0]
+
+            for lot in PosteComplementaire.Lot.values:
+                self.assertIn(lot, prompt_used, f"Le lot '{lot}' du modèle Django est absent du prompt envoyé au LLM.")
+
+    def test_suggestion_champs_mauvais_type_levent_erreur(self):
+        """Vérifie qu'aucun champ non-string n'est accepté ni converti silencieusement par str()."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+
+        bad_type_payloads = [
+            {"designation": 12345, "unite": "m²", "lot_suggere": "lot_01_terrassement", "confiance": "haute"},
+            {"designation": True, "unite": "m²", "lot_suggere": "lot_01_terrassement", "confiance": "haute"},
+            {"designation": None, "unite": "m²", "lot_suggere": "lot_01_terrassement", "confiance": "haute"},
+            {"designation": "Fouille", "unite": True, "lot_suggere": "lot_01_terrassement", "confiance": "haute"},
+            {"designation": "Fouille", "unite": 123, "lot_suggere": "lot_01_terrassement", "confiance": "haute"},
+            {"designation": "Fouille", "unite": "m³", "lot_suggere": ["lot_01_terrassement"], "confiance": "haute"},
+            {"designation": "Fouille", "unite": "m³", "lot_suggere": 99, "confiance": "haute"},
+            {"designation": "Fouille", "unite": "m³", "lot_suggere": "lot_01_terrassement", "confiance": 1},
+            {"designation": "Fouille", "unite": "m³", "lot_suggere": "lot_01_terrassement", "confiance": False},
+        ]
+
+        for payload in bad_type_payloads:
+            with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+                mock_client = mock.MagicMock()
+                mock_client.appeler_llm.return_value = json.dumps(payload)
+                mock_get.return_value = mock_client
+                with self.assertRaises(ValueError, msg=f"Échec de rejet du mauvais type pour payload: {payload}"):
+                    suggerer_poste_complementaire("Test types")
+
+    def test_suggestion_cles_inconnues_ignorees(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": "Fouille en rigole",
+            "unite": "m³",
+            "lot_suggere": "lot_01_terrassement",
+            "confiance": "haute",
+            "prix_estime": 50000,
+            "quantite_estimee": 12.5,
+            "commentaire_inutile": "Coucou"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = suggerer_poste_complementaire("Fouilles")
+            sug = res["suggestion"]
+            self.assertNotIn("prix_estime", sug)
+            self.assertNotIn("quantite_estimee", sug)
+            self.assertNotIn("commentaire_inutile", sug)
+
+    def test_suggestion_json_markdown(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = "```json\n" + json.dumps({
+            "designation": "Couverture tôle",
+            "unite": "m²",
+            "lot_suggere": "lot_08_couverture",
+            "confiance": "haute"
+        }) + "\n```"
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = suggerer_poste_complementaire("Toiture tôle")
+            self.assertEqual(res["suggestion"]["lot_suggere"], "lot_08_couverture")
+
+    def test_suggestion_texte_avant_apres_json(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = "Voici mon analyse :\n" + json.dumps({
+            "designation": "Étanchéité",
+            "unite": "m²",
+            "lot_suggere": "lot_03_etancheite",
+            "confiance": "haute"
+        }) + "\nEn espérant avoir aidé !"
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = suggerer_poste_complementaire("Étanchéité terrasse")
+            self.assertEqual(res["suggestion"]["lot_suggere"], "lot_03_etancheite")
+
+    def test_suggestion_json_tronque_leve_erreur(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = '{"designation": "Projet", "unite": "m²"'
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            with self.assertRaises(ValueError):
+                suggerer_poste_complementaire("Test tronqué")
+
+    def test_suggestion_erreur_fournisseur_llm(self):
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.side_effect = LLMServiceError("Timeout LLM", status_code=504)
+            mock_get.return_value = mock_client
+            with self.assertRaises(LLMServiceError):
+                suggerer_poste_complementaire("Test erreur LLM")
+
+    def test_suggestion_aucune_ecriture_db_ni_quantite_ni_prix(self):
+        from projets.models import PosteComplementaire
+        count_before = PosteComplementaire.objects.count()
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        res = suggerer_poste_complementaire("Terrassement pour fondation")
+        count_after = PosteComplementaire.objects.count()
+        self.assertEqual(count_before, count_after)
+
+        sug = res["suggestion"]
+        self.assertNotIn("prix", sug)
+        self.assertNotIn("prix_unitaire", sug)
+        self.assertNotIn("quantite", sug)
+
+    # --- Tests de sécurité anti-hallucination et termes interdits ---
+
+    def test_suggestion_nombre_existant_accepte(self):
+        """Un nombre présent dans la description d'entrée est accepté dans la designation."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": "Maçonnerie agglos pleins 20",
+            "unite": "m²",
+            "lot_suggere": "lot_02_gros_oeuvre_superstructure",
+            "confiance": "haute"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = suggerer_poste_complementaire("Maçonnerie agglos 20")
+            self.assertIsNotNone(res["suggestion"])
+            self.assertIn(res["source"], ("MOCK", "GEMINI"))
+
+    def test_suggestion_nombre_invente_declenche_fallback(self):
+        """Un nombre absent de la description d'entrée déclenche le fallback."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": "Installation de chantier 250 m²",
+            "unite": "ens.",
+            "lot_suggere": "lot_00_generalites",
+            "confiance": "haute"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = suggerer_poste_complementaire("Installation de chantier")
+            self.assertIsNone(res["suggestion"])
+            self.assertEqual(res["source"], "FALLBACK_LOCAL")
+            self.assertTrue(res["validation_humaine_requise"])
+
+    def _assert_terme_interdit_declenche_fallback(self, terme):
+        """Helper : vérifie qu'un terme interdit dans la designation déclenche le fallback."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": f"Fondation {terme} pour bâtiment",
+            "unite": "m³",
+            "lot_suggere": "lot_01_terrassement",
+            "confiance": "haute"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = suggerer_poste_complementaire("Fondation pour bâtiment")
+            self.assertIsNone(res["suggestion"],
+                             f"Le terme interdit '{terme}' n'a pas déclenché le fallback.")
+            self.assertEqual(res["source"], "FALLBACK_LOCAL")
+            self.assertTrue(res["validation_humaine_requise"])
+
+    def test_suggestion_terme_conforme_declenche_fallback(self):
+        self._assert_terme_interdit_declenche_fallback("conforme")
+
+    def test_suggestion_terme_valide_declenche_fallback(self):
+        self._assert_terme_interdit_declenche_fallback("validé")
+
+    def test_suggestion_terme_sur_declenche_fallback(self):
+        self._assert_terme_interdit_declenche_fallback("sûr")
+
+    def test_suggestion_terme_optimal_declenche_fallback(self):
+        self._assert_terme_interdit_declenche_fallback("optimal")
+
+    def test_suggestion_valide_validation_humaine_requise(self):
+        """Toute suggestion valide contient validation_humaine_requise=True."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        res = suggerer_poste_complementaire("Maçonnerie en agglos pleins 20")
+        self.assertTrue(res["validation_humaine_requise"])
+        self.assertIn("message_validation", res)
+        self.assertIsInstance(res["message_validation"], str)
+        self.assertGreater(len(res["message_validation"]), 0)
+
+    def test_fallback_ne_divulgue_aucune_suggestion_metier(self):
+        """En fallback, aucune donnée métier (lot, unité, prix, quantité) ne doit fuiter."""
+        from projets.services.assistant_ia.postes import suggerer_poste_complementaire
+        fake_response = json.dumps({
+            "designation": "Installation de chantier 999 m²",
+            "unite": "ens.",
+            "lot_suggere": "lot_00_generalites",
+            "confiance": "haute"
+        })
+        with mock.patch("projets.services.assistant_ia.postes.get_ai_client") as mock_get:
+            mock_client = mock.MagicMock()
+            mock_client.appeler_llm.return_value = fake_response
+            mock_get.return_value = mock_client
+            res = suggerer_poste_complementaire("Installation de chantier")
+            self.assertIsNone(res["suggestion"])
+            self.assertNotIn("lot_suggere", res)
+            self.assertNotIn("unite", res)
+            self.assertNotIn("prix", res)
+            self.assertNotIn("prix_unitaire", res)
+            self.assertNotIn("quantite", res)
+            self.assertNotIn("designation", res)
+
+
+class SuggestionPosteAPITestCase(APITestCase):
+    """Tests d'API REST exhaustifs pour l'endpoint de suggestion de poste."""
+
+    def setUp(self):
+        os.environ["DEMO_MODE"] = "True"
+        os.environ["LLM_PROVIDER"] = "mock"
+        self.user = User.objects.create_user(username="testuser_ia", password="password123")
+
+    def test_api_suggerer_poste_success(self):
+        url = "/api/assistant/suggerer-poste/"
+        payload = {"description": "Fouille en rigole pour fondation"}
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("suggestion", response.data)
+        self.assertIn("lot_suggere", response.data["suggestion"])
+
+    def test_api_suggerer_poste_description_vide(self):
+        url = "/api/assistant/suggerer-poste/"
+        payload = {"description": ""}
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_api_suggerer_poste_description_manquante(self):
+        url = "/api/assistant/suggerer-poste/"
+        payload = {}
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_api_suggerer_poste_demo_mode_false_sans_auth_refuse(self):
+        os.environ["DEMO_MODE"] = "False"
+        url = "/api/assistant/suggerer-poste/"
+        payload = {"description": "Fouilles"}
+        response = self.client.post(url, payload, format="json")
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+    def test_api_suggerer_poste_demo_mode_false_avec_auth_autorise(self):
+        os.environ["DEMO_MODE"] = "False"
+        self.client.force_authenticate(user=self.user)
+        url = "/api/assistant/suggerer-poste/"
+        payload = {"description": "Fouilles"}
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_api_suggerer_poste_throttling(self):
+        from django.core.cache import cache
+        cache.clear()
+        url = "/api/assistant/suggerer-poste/"
+        payload = {"description": "Fouille en rigole"}
+        status_codes = [self.client.post(url, payload, format="json").status_code for _ in range(17)]
+        self.assertIn(status.HTTP_429_TOO_MANY_REQUESTS, status_codes)

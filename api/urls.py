@@ -7,6 +7,7 @@ from projets.views import (
     PosteComplementaireViewSet,
     AssistantStructurerView,
     AssistantExpliquerView,
+    AssistantSuggererPosteView,
     EntrepriseParametresView,
 )
 
@@ -52,6 +53,12 @@ urlpatterns = [
         "projets/<int:pk>/generer-dqe/",
         ProjetViewSet.as_view({"get": "generer_dqe", "post": "generer_dqe"}),
         name="projet-generer-dqe",
+    ),
+    # Assistant IA — Suggestion de poste complémentaire
+    path(
+        "assistant/suggerer-poste/",
+        AssistantSuggererPosteView.as_view(),
+        name="assistant-suggerer-poste",
     ),
     path(
         "entreprise/",
