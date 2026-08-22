@@ -21,7 +21,7 @@ ajoutés côté Projet/ElementStructurel (nb_travees_x, position_x...).
 
 from ..constantes import CHARGES_EXPLOITATION
 from ..import_ifc.lecture_ifc import TOLERANCE_ALIGNEMENT_M
-from .descente_charges import calculer_surface_influence
+from .descente_charges import calculer_surface_influence, cumuler_charges_exploitation_degressives
 from .dimensionnement_poteaux import dimensionner_poteau
 from .dimensionnement_poutres import dimensionner_poutre
 from .dimensionnement_semelles import dimensionner_semelle
@@ -32,9 +32,56 @@ from .dimensionnement_semelles import dimensionner_semelle
 CHARGE_PERMANENTE_FORFAITAIRE_KN_M2 = 5.0
 
 
+def _cumuler_charge_poteau_multi_niveaux(charge_g_niveau, charge_q_niveau, nb_niveaux, usage_batiment):
+    """
+    Cumule sur nb_niveaux la charge ELU qui descend sur UN poteau,
+    niveau par niveau, en appliquant la loi de dégression (Module 1,
+    descente_charges.py) aux charges d'exploitation.
+
+    Avant ce branchement, generer_poteau_sur_grille() et
+    generer_poteau_depuis_position_reelle() ne calculaient la charge
+    QUE pour un seul niveau (comme si nb_niveaux valait toujours 1),
+    quel que soit le nombre réel d'étages du projet -- un poteau de
+    rez-de-chaussée d'un immeuble R+5 était donc dimensionné avec la
+    charge d'un seul plancher. Voir aussi projets/views.py::generer_trame,
+    qui transmet maintenant projet.nb_niveaux et projet.usage_batiment.
+
+    Hypothèse simplificatrice (comme calculer_descente_charges_complete,
+    dont cette fonction reprend la logique) : tous les niveaux sont
+    identiques (même trame, même usage) -- le dernier niveau ("toiture")
+    n'est pas traité différemment ici, faute d'un usage de toiture
+    distinct côté trame/API pour l'instant.
+
+    Retour : (charge_elu_cumulee_kn, infos) où infos contient
+    "charge_g_cumulee_kn", "charge_q_cumulee_kn", "coefficient_degression",
+    "degression_appliquee", pour diagnostic/traçabilité côté API.
+    """
+    nb_niveaux = nb_niveaux or 1
+    if nb_niveaux < 1:
+        raise ValueError("nb_niveaux doit être un entier positif (au moins 1).")
+
+    charges_etages_q = [charge_q_niveau] * (nb_niveaux - 1)
+    degression = cumuler_charges_exploitation_degressives(
+        charge_toiture_kn=charge_q_niveau,
+        charges_etages_kn=charges_etages_q,
+        usage_batiment=usage_batiment,
+    )
+    charge_q_cumulee = degression["cumuls_kn"][-1]
+    charge_g_cumulee = charge_g_niveau * nb_niveaux
+    charge_elu_cumulee = 1.35 * charge_g_cumulee + 1.5 * charge_q_cumulee
+
+    infos = {
+        "charge_g_cumulee_kn": round(charge_g_cumulee, 2),
+        "charge_q_cumulee_kn": charge_q_cumulee,
+        "coefficient_degression": degression["coefficients"][-1],
+        "degression_appliquee": degression["degression_appliquee"],
+    }
+    return charge_elu_cumulee, infos
+
+
 def generer_poteau_sur_grille(
     i, j, portee_x, portee_y, nb_travees_x, nb_travees_y,
-    charge_exploitation, hauteur_etage,
+    charge_exploitation, hauteur_etage, nb_niveaux=1, usage_batiment=None,
 ):
     """
     (i, j) : indices de la grille, i de 0 à nb_travees_x inclus, j de 0
@@ -45,6 +92,17 @@ def generer_poteau_sur_grille(
     calculer_surface_influence() (Module 1) : les portées vers chaque
     côté valent portee_x/portee_y sauf en bord de grille, où elles
     valent 0 (pas de travée au-delà du bord).
+
+    nb_niveaux : int, optionnel (défaut 1 -- comportement historique
+    inchangé si l'appelant ne le précise pas)
+        Nombre de niveaux dont la charge descend sur ce poteau (voir
+        _cumuler_charge_poteau_multi_niveaux). La loi de dégression
+        (Module 1) est appliquée à la charge d'exploitation cumulée.
+    usage_batiment : str, optionnel
+        Usage du bâtiment (voir constantes.USAGES_AVEC_DEGRESSION) --
+        détermine si la dégression s'applique. Si non fourni, la
+        dégression est appliquée par défaut (voir
+        cumuler_charges_exploitation_degressives).
 
     Retour :
     {
@@ -73,9 +131,11 @@ def generer_poteau_sur_grille(
     surface = calculer_surface_influence(portee_gauche, portee_droite, portee_avant, portee_arriere)
 
     charge_exploitation = charge_exploitation or CHARGES_EXPLOITATION.get("habitation")
-    charge_g = surface * CHARGE_PERMANENTE_FORFAITAIRE_KN_M2
-    charge_q = surface * charge_exploitation
-    charge_elu = 1.35 * charge_g + 1.5 * charge_q
+    charge_g_niveau = surface * CHARGE_PERMANENTE_FORFAITAIRE_KN_M2
+    charge_q_niveau = surface * charge_exploitation
+    charge_elu, infos_degression = _cumuler_charge_poteau_multi_niveaux(
+        charge_g_niveau, charge_q_niveau, nb_niveaux, usage_batiment
+    )
 
     resultat_poteau = dimensionner_poteau(charge_calculee=charge_elu, hauteur_poteau=hauteur_etage)
     # Fix Module 6 : le côté réel du poteau est transmis à la semelle,
@@ -90,6 +150,8 @@ def generer_poteau_sur_grille(
         "charge_elu_kn": charge_elu,
         "resultat_poteau": resultat_poteau,
         "resultat_semelle": resultat_semelle,
+        "nb_niveaux": nb_niveaux or 1,
+        **infos_degression,
     }
 
 
@@ -130,7 +192,9 @@ def _trouver_voisin_direct(poteau, voisins, axe, sens):
     return meilleur, (meilleure_distance or 0.0)
 
 
-def generer_poteau_depuis_position_reelle(poteau_ifc, voisins, charge_exploitation, hauteur_etage):
+def generer_poteau_depuis_position_reelle(
+    poteau_ifc, voisins, charge_exploitation, hauteur_etage, nb_niveaux=1, usage_batiment=None,
+):
     """
     Phase B (import) -- équivalent de generer_poteau_sur_grille() mais
     sans grille régulière : la position et la charge du poteau sont
@@ -176,9 +240,11 @@ def generer_poteau_depuis_position_reelle(poteau_ifc, voisins, charge_exploitati
         )
 
     charge_exploitation = charge_exploitation or CHARGES_EXPLOITATION.get("habitation")
-    charge_g = surface * CHARGE_PERMANENTE_FORFAITAIRE_KN_M2
-    charge_q = surface * charge_exploitation
-    charge_elu = 1.35 * charge_g + 1.5 * charge_q
+    charge_g_niveau = surface * CHARGE_PERMANENTE_FORFAITAIRE_KN_M2
+    charge_q_niveau = surface * charge_exploitation
+    charge_elu, infos_degression = _cumuler_charge_poteau_multi_niveaux(
+        charge_g_niveau, charge_q_niveau, nb_niveaux, usage_batiment
+    )
 
     resultat_poteau = dimensionner_poteau(charge_calculee=charge_elu, hauteur_poteau=hauteur_etage)
     # Même fix Module 6 que generer_poteau_sur_grille : côté réel transmis à la semelle.
@@ -194,6 +260,8 @@ def generer_poteau_depuis_position_reelle(poteau_ifc, voisins, charge_exploitati
         "charge_elu_kn": charge_elu,
         "resultat_poteau": resultat_poteau,
         "resultat_semelle": resultat_semelle,
+        "nb_niveaux": nb_niveaux or 1,
+        **infos_degression,
         "portees_detectees": {
             "gauche": portee_gauche,
             "droite": portee_droite,

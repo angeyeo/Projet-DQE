@@ -19,6 +19,59 @@ from moteur_calcul.formules.trame import (
 )
 
 
+class TestDegressionBrancheeSurLaTrame(SimpleTestCase):
+    """
+    Régression : avant ce test, generer_poteau_sur_grille() calculait
+    toujours la charge d'UN SEUL niveau, quel que soit nb_niveaux réel
+    du projet -- un poteau de RDC d'un immeuble R+4 était dimensionné
+    comme une maison de plain-pied. Voir _cumuler_charge_poteau_multi_niveaux.
+    """
+
+    PARAMS = dict(
+        portee_x=5.0, portee_y=4.0, nb_travees_x=2, nb_travees_y=1,
+        charge_exploitation=1.5, hauteur_etage=3.0,
+    )
+
+    def test_defaut_nb_niveaux_1_comportement_inchange(self):
+        """Sans préciser nb_niveaux, le résultat doit rester identique à avant (1 niveau)."""
+        resultat = generer_poteau_sur_grille(i=1, j=0, **self.PARAMS)
+        self.assertAlmostEqual(resultat["charge_elu_kn"], 90.0, delta=0.5)
+        self.assertFalse(resultat["degression_appliquee"])
+
+    def test_charge_augmente_avec_le_nombre_de_niveaux(self):
+        un_niveau = generer_poteau_sur_grille(i=1, j=0, **self.PARAMS, nb_niveaux=1)
+        cinq_niveaux = generer_poteau_sur_grille(
+            i=1, j=0, **self.PARAMS, nb_niveaux=5, usage_batiment="habitation"
+        )
+        self.assertGreater(cinq_niveaux["charge_elu_kn"], un_niveau["charge_elu_kn"])
+
+    def test_degression_reduit_la_charge_par_rapport_a_une_sommation_simple(self):
+        """
+        La dégression doit toujours réduire (ou laisser égale) la charge
+        cumulée par rapport à une simple sommation des étages -- jamais
+        l'augmenter.
+        """
+        avec_degression = generer_poteau_sur_grille(
+            i=1, j=0, **self.PARAMS, nb_niveaux=5, usage_batiment="habitation"
+        )
+        sans_degression = generer_poteau_sur_grille(
+            i=1, j=0, **self.PARAMS, nb_niveaux=5, usage_batiment="commerce"
+        )
+        self.assertTrue(avec_degression["degression_appliquee"])
+        self.assertFalse(sans_degression["degression_appliquee"])
+        self.assertLess(avec_degression["charge_elu_kn"], sans_degression["charge_elu_kn"])
+
+    def test_generer_poteau_depuis_position_reelle_accepte_aussi_nb_niveaux(self):
+        poteau = _poteau("P1", 0.0, 0.0)
+        voisins = [poteau, _poteau("P2", 5.0, 0.0), _poteau("P3", 0.0, 4.0)]
+        resultat = generer_poteau_depuis_position_reelle(
+            poteau, voisins, charge_exploitation=1.5, hauteur_etage=3.0,
+            nb_niveaux=3, usage_batiment="bureau",
+        )
+        self.assertIn("degression_appliquee", resultat)
+        self.assertEqual(resultat["nb_niveaux"], 3)
+
+
 def _poteau(nom, x, y):
     """Fixture minimale au format extraire_poteaux() (Phase A)."""
     return {"nom": nom, "guid": nom, "x": x, "y": y, "z": 0.0}

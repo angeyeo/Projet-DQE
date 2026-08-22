@@ -141,6 +141,22 @@ USAGES_AVEC_DEGRESSION = ("habitation", "bureau")
 # Ratios de pré-dimensionnement rapide (poutres, dalles) -- section 3.2/3.3
 RATIO_HAUTEUR_POUTRE_CONTINUE = (10, 12)     # portée / 10 à 12
 RATIO_HAUTEUR_POUTRE_ISOSTATIQUE = (8, 10)   # portée / 8 à 10
+
+# --- Méthode de Caquot (poutres continues, BAEL 91 mod.99 B.6.2) ---
+#
+# Coefficient du dénominateur de la formule des moments sur appuis
+# intermédiaires (8,5 pour une poutre à section constante -- 8 x le
+# coefficient 15/16 usuellement retenu en pratique bâtiment courant).
+COEFFICIENT_CAQUOT = 8.5
+
+# Coefficient de réduction des portées ("portées fictives") appliqué
+# aux travées intermédiaires dans la méthode de Caquot MINORÉE -- ne
+# s'applique QUE si la charge d'exploitation reste modérée par rapport
+# à la charge permanente (Q <= 2G ou Q <= 5 kN/m², BAEL B.6.2,1). Les
+# travées de rive gardent leur portée réelle dans tous les cas.
+# Si cette condition n'est pas vérifiée, il faut appeler la méthode en
+# minore=False (portées réelles partout -- plus défavorable, plus sûr).
+COEFFICIENT_REDUCTION_CAQUOT_MINORE = 0.8
 RATIO_EPAISSEUR_DALLE_1_SENS = (25, 30)       # portée / 25 à 30
 RATIO_EPAISSEUR_DALLE_2_SENS = (35, 40)       # portée / 35 à 40
 EPAISSEUR_DALLE_MIN_CM = 12
