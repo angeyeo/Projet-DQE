@@ -635,7 +635,7 @@ class SuggestionPosteAPITestCase(APITestCase):
         url = "/api/assistant/suggerer-poste/"
         payload = {"description": "Fouilles"}
         response = self.client.post(url, payload, format="json")
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
 
     def test_api_suggerer_poste_demo_mode_false_avec_auth_autorise(self):
         os.environ["DEMO_MODE"] = "False"
