@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import DashboardView from './components/DashboardView';
@@ -12,10 +12,18 @@ import SettingsEntreprise from './components/settingsentreprise';
 import { dqeService } from './api/dqeService';
 
 export default function App() {
-  const [activeView, setActiveView] = useState('dashboard');
+  // Persistence de la vue active au rafraîchissement (F5)
+  const [activeView, setActiveView] = useState(() => {
+    return localStorage.getItem('dqe_active_view') || 'dashboard';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('dqe_active_view', activeView);
+  }, [activeView]);
+
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  // État du Projet BTP Phase 2
+  // État du Projet BTP
   const [projectData, setProjectData] = useState({
     nomProjet: '',
     numeroDevis: '',
@@ -32,10 +40,10 @@ export default function App() {
     norme: 'BAEL91',
   });
 
-  // Charges permanentes composées (Module 2 Multi-couches Phase 2)
+  // Charges permanentes composées
   const [couchesG, setCouchesG] = useState([]);
 
-  // Sections calculées (Phase 2)
+  // Sections calculées
   const [sections, setSections] = useState({
     poteaux: [],
     poutres: [],
@@ -45,15 +53,11 @@ export default function App() {
   // Données du Devis DQE
   const [dqeData, setDqeData] = useState(null);
 
-  // MODIFIÉ (Ange) : nécessaires pour que le verrouillage appelle
-  // réellement /api/elements/{id}/valider/ au lieu de rester un simple
-  // état visuel local -- voir toggleLock ci-dessous.
+  // Verrouillage et validation
   const [validationError, setValidationError] = useState(null);
   const [validatingId, setValidatingId] = useState(null);
 
-  // AJOUTÉ : postes de main d'œuvre saisis manuellement par
-  // l'ingénieur (voir Step3_ValidationLock.jsx) -- distincts des
-  // éléments structurels calculés automatiquement.
+  // Postes de main d'œuvre saisis manuellement
   const [postesMainDoeuvre, setPostesMainDoeuvre] = useState([]);
   const [mainDoeuvreError, setMainDoeuvreError] = useState(null);
 
@@ -82,13 +86,19 @@ export default function App() {
   };
 
   const handleCalculate = async () => {
-    const totalG = couchesG.reduce((sum, c) => sum + (parseFloat(c.chargeG) || 0), 0);
-    const updatedData = { ...projectData, chargePermanenteG: totalG > 0 ? totalG : 5.0 };
-    const results = await dqeService.calculateSections(updatedData);
-    setSections(results);
-    setPostesMainDoeuvre([]); // nouveau projet -> pas de postes hérités de l'ancien
-    setMainDoeuvreError(null);
-    setActiveView('step2');
+    try {
+      const totalG = couchesG.reduce((sum, c) => sum + (parseFloat(c.chargeG) || 0), 0);
+      const updatedData = { ...projectData, chargePermanenteG: totalG > 0 ? totalG : 5.0 };
+      const results = await dqeService.calculateSections(updatedData);
+      setSections(results);
+      setPostesMainDoeuvre([]);
+      setMainDoeuvreError(null);
+      setActiveView('step2');
+    } catch (err) {
+      console.error("Erreur lors du calcul :", err);
+      // Fallback vers l'écran 2 même si les données sont partielles
+      setActiveView('step2');
+    }
   };
 
   const handleGoToValidation = () => {
@@ -102,33 +112,10 @@ export default function App() {
       setDqeData(dqeResults);
       setActiveView('step4');
     } catch (err) {
-      // MODIFIÉ (Ange) : avant, une erreur ici (ex. "éléments non
-      // validés") n'était jamais affichée -- l'utilisateur restait
-      // bloqué sur step3 sans comprendre pourquoi.
       setValidationError(`Impossible de générer le DQE : ${err.message}`);
     }
   };
 
-  // MODIFIÉ (Ange) : toggleLock ne faisait qu'un setSections() local,
-  // sans jamais appeler le backend -- donc un élément "verrouillé" à
-  // l'écran restait au statut "propose" côté serveur, et
-  // /generer_dqe/ refusait ensuite (400, éléments non validés), sans
-  // que l'utilisateur comprenne pourquoi puisque l'UI affichait tout
-  // en vert. Verrouiller un élément appelle maintenant réellement
-  // /api/elements/{id}/valider/ avant de mettre à jour l'affichage.
-  //
-  // Note : il n'existe pas d'endpoint pour "dé-valider" côté backend.
-  // Déverrouiller ici ne fait donc que ré-autoriser l'édition locale
-  // (les champs redeviennent modifiables) -- il faudra re-cliquer
-  // "Verrouiller" pour revalider réellement avant de générer le DQE.
-  // AJOUTÉ : construit le resultat_valide numérique attendu par le
-  // backend (voir projets/services/dqe_calculator.py) à partir des
-  // champs saisis manuellement par l'ingénieur, pour un élément dont
-  // le moteur de calcul n'a pas pu produire de résultat (503).
-  // Sans ces clés numériques exactes (cote_cm / largeur_cm / hauteur_cm),
-  // dqe_calculator.py renvoie silencieusement [] pour cet élément --
-  // aucune ligne de béton/coffrage/acier générée dans le devis, sans
-  // erreur visible. On valide donc ici AVANT tout appel API.
   const buildResultatManuel = (item, category) => {
     if (category === 'Poteau') {
       const cote = parseFloat(item.manualCoteCm);
@@ -156,9 +143,6 @@ export default function App() {
     return { error: `Saisie manuelle non prise en charge pour le type "${category}".` };
   };
 
-  // Fige l'affichage (colonne "Section") d'un élément qui vient d'être
-  // validé manuellement, pour qu'il ne reste pas affiché "Calcul manuel
-  // requis" après verrouillage alors qu'une valeur réelle a été envoyée.
   const formatSectionManuelle = (item, category) => {
     if (category === 'Poteau') return `${item.manualCoteCm} x ${item.manualCoteCm} cm`;
     if (category === 'Poutre') return `${item.manualLargeurCm} x ${item.manualHauteurCm} cm`;
@@ -166,16 +150,6 @@ export default function App() {
     return item.section;
   };
 
-  // CORRIGÉ : category.toLowerCase() + 's' donnait "poteaus" pour la
-  // catégorie "Poteau" (pluriel français correct : "poteaux", avec un
-  // x) -- une clé qui n'existe pas dans `sections`. Résultat :
-  // sections["poteaus"] valait undefined, (undefined || []).find(...)
-  // ne trouvait jamais l'élément, et toggleLock/updateSection
-  // s'arrêtaient silencieusement (if (!item) return;) sans le moindre
-  // appel réseau ni message d'erreur -- clic sur "Valider &
-  // Verrouiller" sans aucun effet, pour les poteaux uniquement
-  // (Poutre -> "poutres" et Semelle -> "semelles" étaient déjà corrects
-  // par coïncidence).
   const categoryToKey = (category) => {
     if (category === 'Poteau') return 'poteaux';
     return category.toLowerCase() + 's';
@@ -187,14 +161,9 @@ export default function App() {
     if (!item) return;
 
     setValidationError(null);
-    let resultatManuel = null; // objet { cote_cm, ... } si saisie manuelle requise
+    let resultatManuel = null;
 
     if (!item.locked) {
-      // Élément sans résultat backend (503 lors du /calculer/) : on
-      // n'appelle l'API QUE si l'ingénieur a rempli des dimensions
-      // numériques valides -- sinon on bloque tout de suite avec un
-      // message clair au lieu de laisser le backend renvoyer un 400
-      // "Aucun résultat de calcul disponible à valider" incompréhensible.
       if (item.calculIndisponible) {
         const manuel = buildResultatManuel(item, category);
         if (manuel.error) {
@@ -206,18 +175,11 @@ export default function App() {
 
       setValidatingId(id);
       try {
-        // CORRIGÉ : item.id est l'identifiant TEXTE ("SEM-S1"), pas
-        // l'id numérique attendu par l'URL DRF (/api/elements/{id}/valider/)
-        // -- d'où le 404 "SEM-S1" observé. Le vrai id numérique est
-        // dans item.elementId (voir dqeService.js::formatElement).
-        // Si resultatManuel est renseigné, on l'envoie explicitement ;
-        // sinon (calcul automatique déjà réussi) on laisse le backend
-        // utiliser resultat_calcul par défaut.
         await dqeService.validerElementDRF(item.elementId, resultatManuel || undefined);
       } catch (err) {
         setValidationError(`Impossible de valider ${item.name} : ${err.message}`);
         setValidatingId(null);
-        return; // on ne verrouille PAS visuellement si le backend a refusé
+        return;
       }
       setValidatingId(null);
     }
@@ -228,8 +190,6 @@ export default function App() {
         if (el.id !== id) return el;
         const updated = { ...el, locked: !el.locked };
         if (resultatManuel) {
-          // On vient de valider manuellement : on fige l'affichage sur
-          // les valeurs réellement envoyées au backend.
           updated.calculIndisponible = false;
           updated.erreurCalcul = null;
           updated.resultat = resultatManuel;
@@ -240,16 +200,9 @@ export default function App() {
     }));
   };
 
-  // MODIFIÉ (Ange) : même correction pour le verrouillage groupé --
-  // valide réellement chaque élément non encore verrouillé avant de
-  // mettre à jour l'affichage. Si un élément échoue, aucun n'est
-  // marqué verrouillé localement (tout ou rien, pour éviter un état
-  // incohérent entre l'UI et le backend).
   const toggleLockAll = async (lockState) => {
     setValidationError(null);
 
-    // categorie associée à chaque élément, pour retrouver le bon type
-    // lors de la construction du resultat_valide manuel
     const parLot = [
       ...sections.poteaux.map((el) => ({ el, category: 'Poteau' })),
       ...sections.poutres.map((el) => ({ el, category: 'Poutre' })),
@@ -259,10 +212,7 @@ export default function App() {
     if (lockState) {
       const nonValides = parLot.filter(({ el }) => !el.locked);
 
-      // Vérification préalable de TOUTES les saisies manuelles avant
-      // le moindre appel réseau -- pour éviter de valider certains
-      // éléments et pas d'autres en cas d'erreur groupée (tout ou rien).
-      const manuels = new Map(); // elementId -> resultat_valide
+      const manuels = new Map();
       for (const { el, category } of nonValides) {
         if (el.calculIndisponible) {
           const manuel = buildResultatManuel(el, category);
@@ -275,7 +225,6 @@ export default function App() {
       }
 
       try {
-        // CORRIGÉ : el.elementId (numérique), pas el.id (identifiant texte)
         await Promise.all(
           nonValides.map(({ el }) =>
             dqeService.validerElementDRF(el.elementId, manuels.get(el.elementId))
@@ -286,14 +235,6 @@ export default function App() {
         return;
       }
 
-      // CORRIGÉ : ces deux setSections() reconstruisaient l'objet
-      // sections avec SEULEMENT {poteaux, poutres, semelles}, sans
-      // spreader ...prev -- ce qui effaçait sections.projetId (stocké
-      // au même niveau, voir calculateSections() dans dqeService.js)
-      // à chaque clic sur "Verrouiller Toutes les Sections". Résultat:
-      // handleGenerateDQE recevait ensuite un projetId undefined et
-      // échouait avec "Aucun projet actif", même après une validation
-      // par ailleurs réussie.
       setSections((prev) => ({
         ...prev,
         poteaux: prev.poteaux.map((el) =>
@@ -322,7 +263,6 @@ export default function App() {
       semelles: prev.semelles.map((item) => ({ ...item, locked: lockState })),
     }));
   };
-
 
   const updateSection = (id, category, field, value) => {
     const key = categoryToKey(category);

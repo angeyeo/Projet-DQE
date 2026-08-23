@@ -23,7 +23,7 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
       setPlanData(data);
     } catch (err) {
       console.warn("Impossible de récupérer le plan de fondation via API :", err.message);
-      setErrorMsg("Impossible de charger le plan depuis l'API backend (mode local).");
+      setErrorMsg("Impossible de charger le plan depuis l'API backend (Mode local actif).");
     } finally {
       setLoading(false);
     }
@@ -54,8 +54,8 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
       await dqeService.validerPlanFondation(projetId);
       onNext();
     } catch (err) {
-      alert("Erreur lors de la validation du plan : " + err.message);
-      onNext(); // permet de continuer même en mode hors-ligne
+      console.warn("Erreur validation plan :", err.message);
+      onNext();
     } finally {
       setValidating(false);
     }
@@ -68,15 +68,15 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
           <div className="badge badge-info" style={{ marginBottom: '0.4rem' }}>Étape 3bis — Plan de Fondation</div>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, fontFamily: 'var(--font-heading)' }}>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 700 }}>
             Plan de Fondation & Implantation de la Trame (.DXF)
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
             Positions en coordonnées réelles calculées selon la trame structurelle de l'ouvrage.
           </p>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: '#fffbeb', color: '#b45309', border: '1px solid #fef3c7', padding: '0.4rem 0.85rem', borderRadius: '8px', fontSize: '0.8rem', marginTop: '0.6rem', fontWeight: 500 }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(245, 158, 11, 0.1)', color: '#fcd34d', border: '1px solid rgba(245, 158, 11, 0.3)', padding: '0.4rem 0.85rem', borderRadius: '8px', fontSize: '0.8rem', marginTop: '0.6rem', fontWeight: 500 }}>
             <AlertTriangle size={15} />
-            <span>Les positions sont calculées depuis une trame régulière et symétrique — précisez le plan d'exécution pour les bâtiments très complexes.</span>
+            <span>Positions calculées depuis une trame régulière. Précisez le plan d'exécution pour les bâtiments complexes.</span>
           </div>
         </div>
 
@@ -93,18 +93,18 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
       </div>
 
       {errorMsg && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', padding: '0.75rem 1rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
+        <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', color: '#fca5a5', padding: '0.75rem 1rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
           {errorMsg}
         </div>
       )}
 
-      {/* Rendu Graphique SVG de la Trame */}
+      {/* Rendu Graphique SVG */}
       {listSemelles.length > 0 && (
         <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
           <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text-muted)' }}>
             Aperçu Graphique de l'Implantation des Semelles (Trame)
           </h4>
-          <svg viewBox="-30 -30 360 240" style={{ width: '100%', maxWidth: 480, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '0.5rem' }}>
+          <svg viewBox="-30 -30 360 240" style={{ width: '100%', maxWidth: 480, background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--core-border)', borderRadius: '12px', padding: '0.5rem' }}>
             {listSemelles.map((s, idx) => {
               const posX = (s.position_x !== undefined ? s.position_x * 40 : (idx % 3) * 80) + 40;
               const posY = (s.position_y !== undefined ? s.position_y * 40 : Math.floor(idx / 3) * 70) + 40;
@@ -115,10 +115,10 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
                   <rect
                     x={-size / 2} y={-size / 2}
                     width={size} height={size}
-                    fill="#dbeafe" stroke="#1e40af" strokeWidth="1.5" rx="3"
+                    fill="rgba(59, 130, 246, 0.2)" stroke="#3b82f6" strokeWidth="1.5" rx="3"
                   />
-                  <text x="0" y={-size / 2 - 4} fontSize="9" fontWeight="bold" fill="#1e3a8a" textAnchor="middle">
-                    {s.identifiant || s.id || `SEM-${idx + 1}`}
+                  <text x="0" y={-size / 2 - 4} fontSize="9" fontWeight="bold" fill="#93c5fd" textAnchor="middle">
+                    {s.identifiant || s.id || `S${idx + 1}`}
                   </text>
                 </g>
               );
@@ -127,7 +127,7 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
         </div>
       )}
 
-      {/* Tableau des semelles du plan */}
+      {/* Tableau des semelles */}
       <div style={{ marginBottom: '2rem' }}>
         <h3 style={{ fontSize: '1.05rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Grid size={18} color="var(--accent-primary)" />
@@ -151,12 +151,12 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
               {listSemelles.length > 0 ? (
                 listSemelles.map((sem, idx) => (
                   <tr key={idx}>
-                    <td style={{ fontWeight: 700, color: 'var(--accent-primary)' }}>{sem.identifiant || sem.id || `SEM-${idx + 1}`}</td>
+                    <td style={{ fontWeight: 700, color: '#93c5fd' }}>{sem.identifiant || sem.id || `S${idx + 1}`}</td>
                     <td>{sem.name || sem.designation || 'Semelle de fondation'}</td>
                     <td style={{ fontWeight: 600 }}>{sem.section || `${sem.largeur_m || 1.2} x ${sem.hauteur_m || 0.4} m`}</td>
                     <td>{sem.position_x !== undefined ? `(${sem.position_x} m, ${sem.position_y} m)` : 'Grille (0,0)'}</td>
                     <td>
-                      <span className="badge badge-success">
+                      <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
                         <CheckCircle size={14} />
                         <span>Implanté sur Grille</span>
                       </span>
@@ -166,7 +166,7 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
               ) : (
                 <tr>
                   <td colSpan="5" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
-                    Aucune semelle validée disponible.
+                    Aucune semelle disponible.
                   </td>
                 </tr>
               )}

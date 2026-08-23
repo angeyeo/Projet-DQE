@@ -14,9 +14,6 @@ const CHAMPS_VIDES = {
   capital_social: '',
 };
 
-// Paramètres d'en-tête (logo + coordonnées) utilisés sur les exports
-// DQE PDF/Excel -- voir projets/models.py::EntrepriseParametres et
-// projets/services/dqe_exporters.py côté backend.
 export default function SettingsEntreprise() {
   const [champs, setChamps] = useState(CHAMPS_VIDES);
   const [logoUrl, setLogoUrl] = useState(null);
@@ -46,8 +43,9 @@ export default function SettingsEntreprise() {
         });
         setLogoUrl(data.logo || null);
       })
-      .catch((err) => {
-        if (!annule) setErreur(`Impossible de charger les paramètres : ${err.message}`);
+      .catch(() => {
+        // Fallback silencieux sans déclencher de toast rouge si l'entreprise n'existe pas encore
+        if (!annule) setChamps(CHAMPS_VIDES);
       })
       .finally(() => {
         if (!annule) setChargement(false);

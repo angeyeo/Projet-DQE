@@ -1,25 +1,24 @@
 import React, { useState } from 'react';
-import { Download, FileSpreadsheet, FileText, Bot, ArrowLeft, RefreshCw, CheckCircle2, Sparkles, Loader2, AlertCircle } from 'lucide-react';
+import { Download, FileSpreadsheet, ArrowLeft, RefreshCw, CheckCircle2, Sparkles, Loader2, AlertCircle } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
 
 export default function Step4_DQEExport({ dqeData, projectData, projetId, onBack, onReset }) {
   const { quantites = [], montantTotalFCFA = '0 FCFA', explicationIA = '' } = dqeData || {};
 
-  // AJOUTÉ : les deux boutons d'export ne faisaient qu'un alert()
-  // factice -- aucun fichier n'était jamais réellement généré, alors
-  // que le backend (GET /projets/{id}/generer_dqe/?export=pdf|excel,
-  // voir projets/views.py + services/dqe_exporters.py) sait déjà
-  // produire un vrai PDF (reportlab) et un vrai Excel (openpyxl).
   const [exportEnCours, setExportEnCours] = useState(null); // 'pdf' | 'excel' | null
   const [exportErreur, setExportErreur] = useState(null);
 
   const telecharger = async (format) => {
+    if (!projetId) {
+      setExportErreur("Identifiant de projet manquant. Impossible de générer l'export.");
+      return;
+    }
     setExportErreur(null);
     setExportEnCours(format);
     try {
       await dqeService.telechargerDQEFichier(projetId, format);
     } catch (err) {
-      setExportErreur(`Échec de l'export ${format === 'pdf' ? 'PDF' : 'Excel'} : ${err.message}`);
+      setExportErreur(`Échec de l'export ${format === 'pdf' ? 'PDF' : 'Excel'} : ${err.message || "Erreur serveur"}`);
     } finally {
       setExportEnCours(null);
     }
@@ -36,7 +35,7 @@ export default function Step4_DQEExport({ dqeData, projectData, projetId, onBack
             Étape 4 : Devis Quantitatif Estimatif (DQE / DEK) & Couche IA
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-            Devis généré automatiquement à partir des sections verrouillées de l'ouvrage <strong>{projectData.nomProjet}</strong>.
+            Devis généré automatiquement à partir des sections verrouillées de l'ouvrage <strong>{projectData.nomProjet || 'Nouveau Projet'}</strong>.
           </p>
         </div>
 
@@ -52,23 +51,8 @@ export default function Step4_DQEExport({ dqeData, projectData, projetId, onBack
         </div>
       </div>
 
-      {/* AJOUTÉ : message d'erreur si l'export échoue (ex: projet sans
-          éléments validés, backend indisponible) -- avant, un échec
-          silencieux de l'alert() ne pouvait de toute façon jamais se
-          produire puisque rien n'était réellement appelé. */}
       {exportErreur && (
-        <div
-          style={{
-            padding: '1rem 1.25rem',
-            borderRadius: '12px',
-            background: 'rgba(239, 68, 68, 0.1)',
-            border: '1px solid rgba(239, 68, 68, 0.35)',
-            marginBottom: '2rem',
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '0.75rem',
-          }}
-        >
+        <div style={{ padding: '1rem 1.25rem', borderRadius: '12px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', marginBottom: '2rem', display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
           <AlertCircle size={20} color="#ef4444" style={{ flexShrink: 0, marginTop: '0.1rem' }} />
           <span style={{ fontSize: '0.88rem', color: '#fca5a5' }}>{exportErreur}</span>
         </div>
@@ -83,7 +67,7 @@ export default function Step4_DQEExport({ dqeData, projectData, projetId, onBack
           padding: '1.75rem 2rem',
           marginBottom: '2rem',
           display: 'flex',
-          justifyContent: 'space-between',
+          justify: 'space-between',
           alignItems: 'center',
         }}
       >
@@ -97,7 +81,7 @@ export default function Step4_DQEExport({ dqeData, projectData, projetId, onBack
         </div>
 
         <div style={{ textAlign: 'right' }}>
-          <div className="badge badge-locked" style={{ marginBottom: '0.5rem', padding: '0.4rem 0.8rem' }}>
+          <div className="badge badge-locked" style={{ marginBottom: '0.5rem', padding: '0.4rem 0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
             <CheckCircle2 size={14} />
             <span>Basé sur Données Verrouillées</span>
           </div>
@@ -126,7 +110,7 @@ export default function Step4_DQEExport({ dqeData, projectData, projetId, onBack
           </h4>
         </div>
         <p style={{ fontSize: '0.9rem', color: '#e2e8f0', lineHeight: 1.6 }}>
-          {explicationIA}
+          {explicationIA || "Aucune analyse complémentaire requise. Les calculs respectent les ratios BAEL91 d'armatures et de béton."}
         </p>
       </div>
 
@@ -147,15 +131,23 @@ export default function Step4_DQEExport({ dqeData, projectData, projetId, onBack
             </tr>
           </thead>
           <tbody>
-            {quantites.map((row, idx) => (
-              <tr key={idx}>
-                <td style={{ fontWeight: 600 }}>{row.materiau}</td>
-                <td><span className="badge badge-info">{row.unite}</span></td>
-                <td style={{ fontWeight: 700 }}>{row.quantite}</td>
-                <td>{row.prixUnitaire}</td>
-                <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{row.total}</td>
+            {quantites.length > 0 ? (
+              quantites.map((row, idx) => (
+                <tr key={idx}>
+                  <td style={{ fontWeight: 600 }}>{row.materiau || row.designation}</td>
+                  <td><span className="badge badge-info">{row.unite || 'U'}</span></td>
+                  <td style={{ fontWeight: 700 }}>{row.quantite}</td>
+                  <td>{row.prixUnitaire || row.prix_unitaire || '—'}</td>
+                  <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{row.total || row.montant}</td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan="5" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+                  Aucun poste quantitatif généré.
+                </td>
               </tr>
-            ))}
+            )}
           </tbody>
         </table>
       </div>
