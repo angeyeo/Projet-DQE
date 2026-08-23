@@ -31,6 +31,19 @@ class AssistantIAUnitTestCase(TestCase):
         client = get_ai_client()
         self.assertIsInstance(client, MockAIClient)
 
+    @mock.patch.dict(os.environ, {"LLM_PROVIDER": "gemini", "LLM_API_KEY": "testkey"})
+    def test_gemini_client_timeout_default(self):
+        os.environ.pop("LLM_TIMEOUT_SECONDS", None)
+        client = get_ai_client()
+        self.assertIsInstance(client, GeminiAIClient)
+        self.assertEqual(client.timeout, 60)
+
+    @mock.patch.dict(os.environ, {"LLM_PROVIDER": "gemini", "LLM_API_KEY": "testkey", "LLM_TIMEOUT_SECONDS": "75"})
+    def test_gemini_client_timeout_custom(self):
+        client = get_ai_client()
+        self.assertIsInstance(client, GeminiAIClient)
+        self.assertEqual(client.timeout, 75)
+
     def test_saisie_extraction_complete_r2_commerce(self):
         desc = "Je veux construire un bâtiment R+2 à usage commercial avec des portées de 6 mètres."
         res = structurer_description_projet(desc)
