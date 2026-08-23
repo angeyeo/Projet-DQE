@@ -83,7 +83,7 @@ LLM_PROVIDER=mock
 # Mode Production avec Gemini
 LLM_PROVIDER=gemini
 LLM_API_KEY=
-LLM_MODEL=gemini-1.5-flash
+LLM_MODEL=gemini-3.5-flash
 LLM_TIMEOUT_SECONDS=20
 LLM_MAX_RESPONSE_BYTES=65536
 ```

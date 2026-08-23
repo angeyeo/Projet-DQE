@@ -19,6 +19,17 @@ class BaseAIClient(ABC):
         """Envoie la requête brute au fournisseur LLM et retourne le texte brut."""
         pass
 
+    @abstractmethod
+    def appeler_llm_vision(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        forcer_json: bool = False,
+    ) -> str:
+        """Envoie une requête multimodale (texte + image) et retourne le texte brut."""
+        pass
+
 
 class MockAIClient(BaseAIClient):
     """
@@ -27,9 +38,53 @@ class MockAIClient(BaseAIClient):
     """
     def appeler_llm(self, prompt: str, forcer_json: bool = False) -> str:
         if forcer_json:
+            # ---- Détection du prompt de suggestion de poste ----
+            if "désignation normalisée" in prompt and "lot_suggere" in prompt:
+                description = prompt
+                parts = prompt.split("Description saisie par l'ingénieur :")
+                if len(parts) > 1:
+                    description = parts[-1].strip().strip('"')
+
+                desc_lower = description.lower()
+
+                # Déduction déterministe du lot
+                lot = "lot_00_generalites"
+                unite = "ens."
+                if "maçonnerie" in desc_lower or "agglo" in desc_lower:
+                    lot = "lot_02_gros_oeuvre_superstructure"
+                    unite = "m²"
+                elif "terrassement" in desc_lower or "fouille" in desc_lower:
+                    lot = "lot_01_terrassement"
+                    unite = "m³"
+                elif "étanchéité" in desc_lower:
+                    lot = "lot_03_etancheite"
+                    unite = "m²"
+                elif "plomberie" in desc_lower or "sanitaire" in desc_lower:
+                    lot = "lot_04_plomberie"
+                    unite = "ens."
+                elif "électricité" in desc_lower or "electri" in desc_lower:
+                    lot = "lot_06_electricite"
+                    unite = "ens."
+                elif "charpente" in desc_lower:
+                    lot = "lot_07_charpente"
+                    unite = "m²"
+                elif "couverture" in desc_lower or "toiture" in desc_lower or "tôle" in desc_lower:
+                    lot = "lot_08_couverture"
+                    unite = "m²"
+
+                data = {
+                    "designation": description.strip()[:80].title(),
+                    "unite": unite,
+                    "lot_suggere": lot,
+                    "confiance": "haute",
+                }
+                return json.dumps(data)
+
+            # ---- Prompt de structuration existant ----
             # Extraction de la description utilisateur depuis le prompt
             description = prompt
             parts = prompt.split("Description du projet :")
+
             if len(parts) > 1:
                 description = parts[-1].strip().strip('"')
 
@@ -113,35 +168,45 @@ class MockAIClient(BaseAIClient):
                 "Cette proposition doit être vérifiée et validée par l’ingénieur structure."
             )
 
+    def appeler_llm_vision(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        forcer_json: bool = False,
+    ) -> str:
+        # Validation défensive
+        if not isinstance(image_bytes, bytes):
+            raise ValueError("Les données de l'image doivent être de type bytes.")
+        if not image_bytes:
+            raise ValueError("L'image ne doit pas être vide.")
+        if mime_type not in {"image/jpeg", "image/png"}:
+            raise ValueError(f"Type MIME '{mime_type}' non supporté. Types autorisés : image/jpeg, image/png")
+
+        # Retour déterministe brut (Gemini Vision ne doit pas normaliser)
+        res = {
+            "annotations_lues": [
+                {
+                    "texte_lu": "S1(170x170x40)",
+                    "repere": "S1"
+                },
+                {
+                    "texte_lu": "P2",
+                    "repere": "P2"
+                }
+            ],
+            "textes_non_classes": []
+        }
+        return json.dumps(res)
+
 
 class GeminiAIClient(BaseAIClient):
-    def __init__(self, api_key: str, model: str = "gemini-1.5-flash", timeout: int = 20):
+    def __init__(self, api_key: str, model: str = "gemini-3.5-flash", timeout: int = 20):
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
 
-    def appeler_llm(self, prompt: str, forcer_json: bool = False) -> str:
-        # Sécurité : la clé d'API est transmise uniquement via l'en-tête HTTP x-goog-api-key (jamais dans l'URL)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }
-        if forcer_json:
-            payload["generationConfig"] = {"responseMimeType": "application/json"}
-
-        req_data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=req_data,
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": self.api_key
-            },
-            method="POST"
-        )
-
+    def _executer_requete(self, req: urllib.request.Request) -> str:
         max_bytes = int(os.getenv("LLM_MAX_RESPONSE_BYTES", "65536"))
 
         try:
@@ -196,6 +261,77 @@ class GeminiAIClient(BaseAIClient):
                 status_code=502
             ) from None
 
+    def appeler_llm(self, prompt: str, forcer_json: bool = False) -> str:
+        # Sécurité : la clé d'API est transmise uniquement via l'en-tête HTTP x-goog-api-key (jamais dans l'URL)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        payload = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
+        }
+        if forcer_json:
+            payload["generationConfig"] = {"responseMimeType": "application/json"}
+
+        req_data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=req_data,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.api_key
+            },
+            method="POST"
+        )
+        return self._executer_requete(req)
+
+    def appeler_llm_vision(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        forcer_json: bool = False,
+    ) -> str:
+        # Validation défensive
+        if not isinstance(image_bytes, bytes):
+            raise ValueError("Les données de l'image doivent être de type bytes.")
+        if not image_bytes:
+            raise ValueError("L'image ne doit pas être vide.")
+        if mime_type not in {"image/jpeg", "image/png"}:
+            raise ValueError(f"Type MIME '{mime_type}' non supporté. Types autorisés : image/jpeg, image/png")
+
+        import base64
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        encoded_data = base64.b64encode(image_bytes).decode("utf-8")
+
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inlineData": {
+                            "mimeType": mime_type,
+                            "data": encoded_data
+                        }
+                    }
+                ]
+            }]
+        }
+        if forcer_json:
+            payload["generationConfig"] = {"responseMimeType": "application/json"}
+
+        req_data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=req_data,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.api_key
+            },
+            method="POST"
+        )
+        return self._executer_requete(req)
+
 
 def get_ai_client() -> BaseAIClient:
     """Instancie le client LLM selon les variables d'environnement."""
@@ -204,9 +340,9 @@ def get_ai_client() -> BaseAIClient:
     model = os.getenv("LLM_MODEL", "").strip()
 
     try:
-        timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
+        timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
     except ValueError:
-        timeout = 20
+        timeout = 60
 
     if provider == "mock" or not provider:
         return MockAIClient()
@@ -215,7 +351,7 @@ def get_ai_client() -> BaseAIClient:
         raise ValueError(f"La clé API (LLM_API_KEY) est requise pour le fournisseur '{provider}'.")
 
     if provider == "gemini":
-        model_name = model if model else "gemini-1.5-flash"
+        model_name = model if model else "gemini-3.5-flash"
         return GeminiAIClient(api_key, model=model_name, timeout=timeout)
     else:
         raise ValueError(f"Fournisseur d'IA '{provider}' non supporté. Choisissez parmi: mock, gemini.")
