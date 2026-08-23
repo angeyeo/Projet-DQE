@@ -340,9 +340,9 @@ def get_ai_client() -> BaseAIClient:
     model = os.getenv("LLM_MODEL", "").strip()
 
     try:
-        timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
+        timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
     except ValueError:
-        timeout = 20
+        timeout = 60
 
     if provider == "mock" or not provider:
         return MockAIClient()
