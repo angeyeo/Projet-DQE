@@ -61,6 +61,38 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       planFileSize: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
     });
 
+    // Import IFC : aperçu Phase A -- détection des paramètres de trame,
+    // pré-remplissage du formulaire (aucun ElementStructurel créé ici).
+    if (isIfc) {
+      setAnalyzing(true);
+      setAnalysisError(null);
+      try {
+        let projetId = projectData.id;
+        if (!projetId) {
+          const projet = await dqeService.createProjet(projectData);
+          projetId = projet.id;
+          updateProjectData({ id: projetId });
+        }
+
+        const params = await dqeService.importerPlanIFC(projetId, file);
+        updateProjectData({
+          nbTraveesX: params.nb_travees_x ?? projectData.nbTraveesX,
+          nbTraveesY: params.nb_travees_y ?? projectData.nbTraveesY,
+          porteeX: params.portee_x ?? projectData.porteeX,
+          porteeY: params.portee_y ?? projectData.porteeY,
+          nombreNiveaux: params.nb_niveaux ?? projectData.nombreNiveaux,
+          hauteurEtage: params.hauteur_etage ?? projectData.hauteurEtage,
+          ifcImporte: true,
+        });
+        setAnalysisSuccess(true);
+      } catch (err) {
+        setAnalysisError(`Erreur d'import IFC : ${err.message || "Impossible d'extraire le plan"}`);
+      } finally {
+        setAnalyzing(false);
+      }
+      return;
+    }
+
     // Traitement Vision IA si c'est une image de plan
     if (isImage && projectData.id) {
       setAnalyzing(true);

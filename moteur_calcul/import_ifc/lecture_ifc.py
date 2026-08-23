@@ -26,6 +26,7 @@ from statistics import mean, pstdev
 import ifcopenshell
 import ifcopenshell.util.element as element_util
 import ifcopenshell.util.placement as placement_util
+import ifcopenshell.util.unit as unit_util
 
 # Tolérance (mètres) pour considérer deux poteaux comme alignés sur la
 # même "ligne" de grille -- les relevés réels ne sont jamais parfaitement
@@ -66,16 +67,34 @@ def ouvrir_ifc(chemin_fichier: str):
         ) from exc
 
 
+def _echelle_metres(model) -> float:
+    """
+    Facteur multiplicatif pour convertir les longueurs brutes du fichier
+    IFC (exprimées dans l'unité déclarée par le projet -- mm, cm, m...)
+    en mètres. Indispensable : de nombreux exports ArchiCAD/Revit
+    utilisent le millimètre comme unité de longueur, et les coordonnées
+    ObjectPlacement / Elevation sont toujours dans cette unité de
+    fichier, jamais implicitement en mètres.
+    """
+    try:
+        return unit_util.calculate_unit_scale(model)
+    except Exception:
+        # Défaut prudent : suppose déjà des mètres plutôt que de planter
+        # l'import sur un fichier dont l'unité n'est pas déclarable.
+        return 1.0
+
+
 def extraire_niveaux(model) -> list:
     """
     Retourne les IfcBuildingStorey du modèle, triés par élévation
     croissante : [{"nom": ..., "elevation_m": ..., "guid": ...}, ...].
     """
+    echelle = _echelle_metres(model)
     storeys = model.by_type("IfcBuildingStorey")
     niveaux = [
         {
             "nom": s.Name or f"Niveau {i}",
-            "elevation_m": float(s.Elevation) if s.Elevation is not None else 0.0,
+            "elevation_m": float(s.Elevation) * echelle if s.Elevation is not None else 0.0,
             "guid": s.GlobalId,
         }
         for i, s in enumerate(storeys)
@@ -86,7 +105,8 @@ def extraire_niveaux(model) -> list:
 def extraire_poteaux(model) -> list:
     """
     Retourne la liste des IfcColumn du modèle avec leur position réelle
-    et leur niveau d'appartenance :
+    (toujours convertie en mètres, quelle que soit l'unité de longueur
+    déclarée par le fichier IFC) et leur niveau d'appartenance :
         [{"nom", "guid", "x", "y", "z", "niveau_nom", "niveau_elevation_m"}, ...]
 
     Position exprimée dans le placement local de l'objet -- suffisant
@@ -94,16 +114,19 @@ def extraire_poteaux(model) -> list:
     absolues précises pour un import multi-bâtiment) pourra affiner en
     composant les placements parents si besoin.
     """
+    echelle = _echelle_metres(model)
     poteaux = []
     for col in model.by_type("IfcColumn"):
         if not col.ObjectPlacement:
             continue  # élément sans position exploitable -- ignoré, pas bloquant
         matrice = placement_util.get_local_placement(col.ObjectPlacement)
-        x, y, z = float(matrice[0][3]), float(matrice[1][3]), float(matrice[2][3])
+        x = float(matrice[0][3]) * echelle
+        y = float(matrice[1][3]) * echelle
+        z = float(matrice[2][3]) * echelle
 
         storey = element_util.get_container(col)
         niveau_nom = getattr(storey, "Name", None) or "Niveau inconnu"
-        niveau_elevation = float(getattr(storey, "Elevation", 0.0) or 0.0)
+        niveau_elevation = float(getattr(storey, "Elevation", 0.0) or 0.0) * echelle
 
         poteaux.append({
             "nom": col.Name or col.GlobalId,

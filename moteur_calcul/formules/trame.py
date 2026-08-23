@@ -349,6 +349,23 @@ def generer_poutre_depuis_positions_reelles(poteau_a, poteau_b, axe, voisins, ch
         ((perp_a_pos + perp_a_neg) / 2) + ((perp_b_pos + perp_b_neg) / 2)
     ) / 2
 
+    if largeur_influence <= 0:
+        # Aucun poteau perpendiculaire détecté à AUCUNE des deux
+        # extrémités (segment en bord de trame réelle sans dalle
+        # adjacente d'un côté ou de l'autre -- ex. aile en L, poteau
+        # isolé) : pas de largeur de dalle à reprendre, donc pas de
+        # charge linéaire calculable pour cette poutre. Erreur
+        # explicite plutôt que de laisser dimensionner_poutre échouer
+        # plus loin avec une charge nulle -- l'appelant (Phase B) doit
+        # l'attraper et ignorer ce segment (voir generer_poteau_depuis_
+        # position_reelle() pour le même principe côté poteaux).
+        raise ValueError(
+            f"Impossible de calculer la largeur d'influence de la poutre "
+            f"{poteau_a.get('guid', '?')}->{poteau_b.get('guid', '?')} : "
+            f"aucun poteau perpendiculaire détecté à une extrémité ou "
+            f"l'autre du segment (axe {axe})."
+        )
+
     resultat = generer_poutre_sur_grille(
         portee=portee, largeur_influence=largeur_influence, charge_exploitation=charge_exploitation
     )
@@ -370,8 +387,13 @@ def detecter_poutres_adjacentes(voisins, charge_exploitation):
     voisin, donc chaque segment du nuage de points n'est généré qu'une
     seule fois (pas de doublon).
 
+    Un segment dont la largeur d'influence est nulle (poteau en bord de
+    trame réelle sans dalle perpendiculaire d'un côté ou de l'autre --
+    aile en L, géométrie irrégulière) est ignoré plutôt que de faire
+    échouer tout l'import : voir generer_poutre_depuis_positions_reelles().
+
     Retour : liste de résultats de generer_poutre_depuis_positions_reelles(),
-    un par segment détecté.
+    un par segment détecté et exploitable.
     """
     poutres = []
     for poteau in voisins:
@@ -379,7 +401,10 @@ def detecter_poutres_adjacentes(voisins, charge_exploitation):
             voisin, _ = _trouver_voisin_direct(poteau, voisins, axe=axe, sens=+1)
             if voisin is None:
                 continue
-            poutres.append(
-                generer_poutre_depuis_positions_reelles(poteau, voisin, axe, voisins, charge_exploitation)
-            )
+            try:
+                poutres.append(
+                    generer_poutre_depuis_positions_reelles(poteau, voisin, axe, voisins, charge_exploitation)
+                )
+            except ValueError:
+                continue
     return poutres

@@ -43,53 +43,94 @@ export const dqeService = {
     return postJSON(`${API_BASE_URL}/projets/`, payload);
   },
 
-  // Crée les ElementStructurel du projet à partir des paramètres saisis,
-  // puis déclenche leur calcul.
-  createAndCalculateElements: async (projetId, projectData) => {
-    const porteeX = parseFloat(projectData.porteeX || projectData.porteeMax || 6.0);
-    const porteeY = parseFloat(projectData.porteeY || projectData.porteeMax || 6.0);
-    const portee = Math.max(porteeX, porteeY);
-    const chargeExploitation = parseFloat(projectData.chargeExploitation || 2.5);
-    const nbNiveaux = parseInt(projectData.nombreNiveaux || 1, 10);
-    const hauteurPoteau = parseFloat(projectData.hauteurEtage || 3.0);
-
-    const G = 5.0; // charge permanente forfaitaire (kN/m²)
-    const qELU = 1.35 * G + 1.5 * chargeExploitation;
-    const surfaceInfluence = (porteeX / 2) * (porteeY / 2);
-    const chargeCalculeePoteau = surfaceInfluence * qELU * nbNiveaux; // kN
-
-    const elementsACreer = [
-      { type_element: 'poteau', identifiant: 'POT-C1', charge_calculee: chargeCalculeePoteau, hauteur_poteau: hauteurPoteau },
-      { type_element: 'poteau', identifiant: 'POT-P1', charge_calculee: chargeCalculeePoteau * 0.6, hauteur_poteau: hauteurPoteau },
-      { type_element: 'poutre', identifiant: 'POU-PRINC', portee, charge_lineaire: qELU },
-      { type_element: 'poutre', identifiant: 'POU-SEC', portee: portee * 0.75, charge_lineaire: qELU * 0.8 },
-      { type_element: 'semelle', identifiant: 'SEM-S1', charge_calculee: chargeCalculeePoteau },
-    ];
-
-    const elements = [];
-    for (const base of elementsACreer) {
-      const created = await postJSON(`${API_BASE_URL}/elements/`, { projet: projetId, ...base });
-
-      try {
-        const calcule = await postJSON(`${API_BASE_URL}/elements/${created.id}/calculer/`, undefined);
-        elements.push(calcule);
-      } catch (calcErr) {
-        console.warn(`Calcul indisponible pour ${created.identifiant} :`, calcErr.message);
-        elements.push({
-          ...created,
-          resultat_calcul: null,
-          erreur_calcul: (calcErr.data && (calcErr.data.detail || calcErr.data.erreur)) || calcErr.message,
-        });
-      }
+  // Synchronise sur le projet les paramètres de trame éventuellement
+  // corrigés par l'utilisateur après le pré-remplissage (IFC ou saisie
+  // manuelle) -- generer_trame/ et importer_plan (confirmer) lisent ces
+  // champs directement sur le Projet, pas depuis la requête.
+  patchProjet: async (projetId, champs) => {
+    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(champs),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const err = new Error((data && (data.detail || JSON.stringify(data))) || `Erreur ${response.status}`);
+      err.status = response.status;
+      err.data = data;
+      throw err;
     }
-    return elements;
+    return data;
   },
 
-  // Calcule le pré-dimensionnement via le vrai backend DRF
+  // Génère la grille complète (poteaux + semelles + poutres) à partir
+  // de projet.nb_travees_x/y, portee_x/y -- chemin "saisie manuelle".
+  genererTrame: async (projetId) => {
+    return postJSON(`${API_BASE_URL}/projets/${projetId}/generer_trame/`, undefined);
+  },
+
+  // Calcule le pré-dimensionnement via le vrai backend DRF : synchronise
+  // d'abord les paramètres de trame sur le projet, puis génère les
+  // VRAIS éléments -- soit à partir des positions réelles de l'IFC
+  // importé (Phase B), soit sur une grille régulière (generer_trame)
+  // pour la saisie manuelle. Remplace l'ancien pipeline à 5 éléments
+  // fictifs qui ignorait complètement nb_travees_x/y et portee_x/y.
   calculateSections: async (projectData) => {
-    const projet = await dqeService.createProjet(projectData);
-    const elements = await dqeService.createAndCalculateElements(projet.id, projectData);
-    return { projetId: projet.id, ...parseDRFResponse(elements) };
+    const projetId = projectData.id || (await dqeService.createProjet(projectData)).id;
+
+    await dqeService.patchProjet(projetId, {
+      nb_niveaux: parseInt(projectData.nombreNiveaux || 1, 10),
+      usage_batiment: projectData.typeUsage || 'habitation',
+      numero_devis: projectData.numeroDevis || '',
+      nb_travees_x: parseInt(projectData.nbTraveesX || 1, 10),
+      nb_travees_y: parseInt(projectData.nbTraveesY || 1, 10),
+      portee_x: parseFloat(projectData.porteeX || 4.0),
+      portee_y: parseFloat(projectData.porteeY || 4.0),
+      hauteur_etage: parseFloat(projectData.hauteurEtage || 3.0),
+      charge_exploitation: parseFloat(projectData.chargeExploitation || 2.5),
+    });
+
+    let elements;
+    if (projectData.ifcImporte) {
+      const resultat = await dqeService.confirmerImportPlanIFC(projetId);
+      elements = resultat.elements || [];
+    } else {
+      elements = await dqeService.genererTrame(projetId);
+    }
+
+    return { projetId, ...parseDRFResponse(elements) };
+  },
+
+  // Aperçu Phase A -- envoie un fichier IFC pour détection des paramètres de
+  // trame (nb_travees_x/y, portee_x/y, nb_niveaux, hauteur_etage), sans créer
+  // aucun ElementStructurel. Voir projets/views.py::ProjetViewSet.importer_plan.
+  importerPlanIFC: async (projetId, file) => {
+    if (!projetId) {
+      throw new Error("Aucun projet actif -- impossible d'importer un plan IFC sans projetId.");
+    }
+    const formData = new FormData();
+    formData.append('fichier', file);
+    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
+      err.status = response.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  },
+
+  // Confirmation Phase B -- relit le fichier IFC déjà déposé et crée les
+  // vrais ElementStructurel à leurs positions réelles.
+  confirmerImportPlanIFC: async (projetId) => {
+    if (!projetId) {
+      throw new Error("Aucun projet actif -- impossible de confirmer un import sans projetId.");
+    }
+    return postJSON(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, { confirmer: true });
   },
 
   // Postes complémentaires (Jour 2.1)
