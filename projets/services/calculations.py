@@ -1,3 +1,4 @@
+from moteur_calcul.formules.descente_charges import calculer_descente_charges_complete
 from moteur_calcul.formules.dimensionnement_poteaux import dimensionner_poteau
 from moteur_calcul.formules.dimensionnement_poutres import dimensionner_poutre
 from moteur_calcul.formules.dimensionnement_semelles import dimensionner_semelle
@@ -19,9 +20,80 @@ def calculer_charge_permanente_totale(element: ElementStructurel) -> float:
     return getattr(element, "charge_lineaire", 0.0) or 0.0
 
 
+def degression_renseignee(element: ElementStructurel) -> bool:
+    """
+    Module 1 : dit si un POTEAU a assez d'information de trame pour
+    déclencher la descente de charges complète avec dégression
+    (calculer_descente_charges_complete()) plutôt que le comportement
+    historique (charge_calculee brute, sans dégression ni cumul réel
+    sur les niveaux).
+
+    Condition : les 4 portées ET nb_niveaux_charges doivent être
+    renseignées. Une portée à 0.0 est une valeur valide (poteau de
+    rive, par exemple) -- seul `None` signale "non renseigné". Le champ
+    avec_degression ne rentre PAS en jeu ici : il contrôle seulement si
+    la dégression est ACTIVÉE une fois la descente déclenchée (voir
+    calculer_element()), pas si elle doit l'être.
+
+    epaisseur_dalle n'est volontairement pas vérifiée ici : elle peut
+    être absente si des CoucheCharge (Module 2) existent déjà sur
+    l'élément -- calculer_element()/_couches_permanentes_pour_descente()
+    gèrent cette bascule, pas cette fonction, qui ne s'occupe que de la
+    trame (portées + niveaux).
+    """
+    portees = (element.portee_gauche, element.portee_droite, element.portee_avant, element.portee_arriere)
+    if any(p is None for p in portees):
+        return False
+    return element.nb_niveaux_charges is not None
+
+
+def _couches_permanentes_pour_descente(element: ElementStructurel) -> list | None:
+    """
+    Adapte les CoucheCharge (Module 2) liées à cet élément vers le
+    format attendu par calculer_descente_charges_complete()
+    (couches_permanentes) -- réutilise la propriété
+    poids_surfacique_kn_m2 déjà calculée sur le modèle plutôt que de
+    refaire epaisseur x poids volumique ici. None si aucune couche
+    n'est liée : l'appelant retombe alors sur epaisseur_dalle (dalle
+    béton seule).
+    """
+    couches = element.couches_charges.all()
+    if not couches.exists():
+        return None
+    return [
+        {"designation": couche.designation, "poids_surfacique_kn_m2": couche.poids_surfacique_kn_m2}
+        for couche in couches
+    ]
+
+
 def calculer_element(element: ElementStructurel) -> dict:
     try:
         if element.type_element == ElementStructurel.TypeElement.POTEAU:
+            if degression_renseignee(element):
+                # Module 1 : trame connue -- descente de charges
+                # complète (surface d'influence -> G -> Q -> ELU cumulé
+                # sur nb_niveaux_charges, avec dégression NF P06-001 si
+                # avec_degression=True) au lieu de la charge_calculee
+                # brute historique.
+                descente = calculer_descente_charges_complete(
+                    portee_gauche=element.portee_gauche,
+                    portee_droite=element.portee_droite,
+                    portee_avant=element.portee_avant,
+                    portee_arriere=element.portee_arriere,
+                    epaisseur_dalle=element.epaisseur_dalle,
+                    usage_batiment=element.projet.usage_batiment,
+                    nb_niveaux=element.nb_niveaux_charges,
+                    avec_degression=element.avec_degression,
+                    usage_toiture=element.usage_toiture or None,
+                    couches_permanentes=_couches_permanentes_pour_descente(element),
+                )
+                resultat = dimensionner_poteau(
+                    charge_calculee=descente["charge_elu_cumulee_kn"],
+                    hauteur_poteau=element.hauteur_poteau,
+                )
+                resultat["descente_charges"] = descente
+                return resultat
+
             return dimensionner_poteau(
                 charge_calculee=element.charge_calculee,
                 hauteur_poteau=element.hauteur_poteau,
@@ -50,6 +122,7 @@ def calculer_element(element: ElementStructurel) -> dict:
             return dimensionner_semelle(
                 charge_poteau=element.charge_calculee,
                 taux_travail_sol=element.taux_travail_sol,
+                cote_poteau_cm=cote_poteau,
             )
         elif element.type_element == getattr(ElementStructurel.TypeElement, "DALLE", "dalle"):
             # Module 7 : Import dynamique sécurisé si la formule Dev 1 n'est pas encore poussée

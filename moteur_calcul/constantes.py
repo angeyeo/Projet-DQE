@@ -262,3 +262,26 @@ HAUTEUR_CHAINAGE_CM_DEFAUT = 20.0
 # structurel, en l'absence d'un vrai plan de ferraillage -- hypothèse
 # grossière tant que le plan réel n'est pas disponible.
 ENDUIT_EPAISSEUR_FORFAITAIRE = "dosé à 350 kg/m³"  # libellé DQE, pas un ratio numérique
+
+# --- Compléments du plan de coffrage (Phase C -- voir
+# Feuille_de_route_Import_Plan_Automatique.md, §"3. Feuille de route par
+# développeur / Genius / Phase C") : dallage et joints de dilatation,
+# calculés géométriquement depuis l'emprise des semelles/poteaux. Voir
+# moteur_calcul/formules/complements_plan_coffrage.py.
+
+# Distance maximale entre joints de dilatation pour une structure en
+# béton armé courante, SANS disposition particulière (armatures de
+# retrait, joints de rupture partiels, etc.) -- pratique usuelle
+# France/Afrique de l'Ouest (cf. DTU 20.1 pour la maçonnerie chaînée et
+# usage courant BTP pour le béton armé, ~25 m). Valeur PAR DÉFAUT et
+# conservatrice pour un pré-dimensionnement automatique ; une étude
+# structurelle réelle peut justifier de s'en écarter (joints de rupture
+# structurelle, dilatation thermique différente selon climat/exposition).
+DISTANCE_MAX_JOINT_DILATATION_M = 25.0
+
+# Débord du dallage (dalle sur terre-plein / hérisson) au-delà de
+# l'emprise extérieure des semelles -- pratique constructive courante
+# pour couvrir la totalité du bâtiment y compris les débords de
+# soubassement, avant application d'un enduit/plinthe. Valeur forfaitaire
+# à ajuster selon le plan réel si le débord architectural diffère.
+MARGE_DALLAGE_M = 0.20

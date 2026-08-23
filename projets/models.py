@@ -128,6 +128,43 @@ class ElementStructurel(models.Model):
     longueur_m = models.FloatField("Longueur (m)", null=True, blank=True)
     surface_m2 = models.FloatField("Surface (m²)", null=True, blank=True)
 
+    # AJOUTÉ (Module 1 -- descente de charges complète, voir
+    # projets/services/calculations.py: degression_renseignee() et
+    # calculer_element()) : trame autour d'un POTEAU, nécessaire pour
+    # déclencher calculer_descente_charges_complete() (moteur_calcul/
+    # formules/descente_charges.py) au lieu de la charge_calculee brute
+    # historique. Sans objet pour les autres types d'éléments -- restent
+    # à None, jamais lus par calculer_element() en dehors du cas POTEAU.
+    portee_gauche = models.FloatField(
+        null=True, blank=True, help_text="mètres -- portée de la travée à gauche de ce poteau"
+    )
+    portee_droite = models.FloatField(
+        null=True, blank=True, help_text="mètres -- portée de la travée à droite de ce poteau"
+    )
+    portee_avant = models.FloatField(
+        null=True, blank=True, help_text="mètres -- portée de la travée à l'avant de ce poteau"
+    )
+    portee_arriere = models.FloatField(
+        null=True, blank=True, help_text="mètres -- portée de la travée à l'arrière de ce poteau"
+    )
+    epaisseur_dalle = models.FloatField(
+        null=True, blank=True,
+        help_text="mètres -- ignoré si des CoucheCharge sont liées à cet élément (Module 2)",
+    )
+    nb_niveaux_charges = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Nombre de niveaux (toiture comprise) dont la charge descend sur ce poteau",
+    )
+    avec_degression = models.BooleanField(
+        default=True,
+        help_text="Applique la loi de dégression NF P06-001 sur les charges d'exploitation cumulées",
+    )
+    usage_toiture = models.CharField(
+        max_length=100, null=True, blank=True,
+        help_text="Usage du niveau le plus haut si différent des étages courants "
+                   "(ex. 'toiture_terrasse') -- vide = même usage que le projet",
+    )
+
     # Résultats stockés au format JSON
     resultat_calcul = models.JSONField(null=True, blank=True)
     resultat_valide = models.JSONField(null=True, blank=True)
@@ -141,8 +178,15 @@ class ElementStructurel(models.Model):
 class CoucheCharge(models.Model):
     """Module 2 : Couches de charges permanentes composées (multi-couches)"""
 
+    # AJOUTÉ (Module 1, câblage dégression) : rendu optionnel. Une
+    # CoucheCharge liée à un `element` peut retrouver son projet via
+    # element.projet -- exiger `projet` en plus était redondant et
+    # empêchait de créer une couche uniquement avec `element` (cas
+    # d'usage réel : composition du plancher d'un poteau précis, voir
+    # projets/services/calculations.py: _couches_permanentes_pour_descente()).
     projet = models.ForeignKey(
-        Projet, on_delete=models.CASCADE, related_name="couches_charges"
+        Projet, on_delete=models.CASCADE, related_name="couches_charges",
+        null=True, blank=True,
     )
     element = models.ForeignKey(
         ElementStructurel,

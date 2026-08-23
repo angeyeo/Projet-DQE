@@ -114,3 +114,73 @@ class TestGenererPlanFondationDxf(SimpleTestCase):
     def test_liste_vide_leve_une_erreur(self):
         with self.assertRaises(ValueError):
             generer_plan_fondation_dxf([])
+
+
+class TestPhaseCDallageJointsCotations(SimpleTestCase):
+    """
+    Compléments Phase C (voir Feuille_de_route_Import_Plan_Automatique.md
+    §4) : dallage, joints de dilatation, cotations -- géométrie calculée
+    par moteur_calcul/formules/complements_plan_coffrage.py, tracé ici.
+    """
+
+    def test_dallage_trace_par_defaut(self):
+        semelles = _grille_2x1(avec_indices=True)
+        data = generer_plan_fondation_dxf(semelles)
+        self.assertIn(b"DALLAGE", data)
+        self.assertIn(b"BAEL 91", data)
+
+    def test_dallage_desactivable(self):
+        semelles = _grille_2x1(avec_indices=True)
+        data = generer_plan_fondation_dxf(semelles, dessiner_dallage=False)
+        self.assertNotIn(b"DALLAGE", data)
+
+    def test_pas_de_joint_dilatation_sur_petit_batiment(self):
+        """Trame 2x1 (10m x 4m) : tient largement sous les 25 m, aucun joint attendu."""
+        semelles = _grille_2x1(avec_indices=True)
+        data = generer_plan_fondation_dxf(semelles)
+        self.assertNotIn(b"JOINT DE DILATATION", data)
+
+    def test_joint_dilatation_trace_sur_grand_batiment(self):
+        """Trame 6 travées de 5 m (30 m) en X : dépasse 25 m, doit générer un joint."""
+        portee_x, portee_y = 5.0, 4.0
+        semelles = [
+            _semelle(f"S{i}{j}", i * portee_x, j * portee_y, i=i, j=j)
+            for i in range(7)  # 0..6 -> 30 m
+            for j in range(2)
+        ]
+        data = generer_plan_fondation_dxf(semelles)
+        self.assertIn(b"JOINT DE DILATATION", data)
+        self.assertIn(b"JOINTS_DILATATION", data)
+
+    def test_joints_dilatation_desactivables(self):
+        portee_x, portee_y = 5.0, 4.0
+        semelles = [
+            _semelle(f"S{i}{j}", i * portee_x, j * portee_y, i=i, j=j)
+            for i in range(7)
+            for j in range(2)
+        ]
+        data = generer_plan_fondation_dxf(semelles, dessiner_joints_dilatation=False)
+        self.assertNotIn(b"JOINT DE DILATATION", data)
+
+    def test_cotations_dxf_natives_presentes_par_defaut(self):
+        semelles = _grille_2x1(avec_indices=True)
+        data = generer_plan_fondation_dxf(semelles)
+        self.assertIn(b"DIMENSION", data)
+        self.assertIn(b"COTATIONS", data)
+
+    def test_cotations_desactivables(self):
+        semelles = _grille_2x1(avec_indices=True)
+        data = generer_plan_fondation_dxf(semelles, dessiner_cotations=False)
+        self.assertNotIn(b"COTATIONS", data)
+
+    def test_dxf_complet_toujours_valide_avec_tous_les_complements(self):
+        portee_x, portee_y = 5.0, 4.0
+        semelles = [
+            _semelle(f"S{i}{j}", i * portee_x, j * portee_y, i=i, j=j)
+            for i in range(7)
+            for j in range(2)
+        ]
+        data = generer_plan_fondation_dxf(semelles)
+        self.assertIn(b"SECTION", data)
+        self.assertIn(b"ENTITIES", data)
+        self.assertIn(b"EOF", data)
