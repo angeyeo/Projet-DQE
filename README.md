@@ -87,3 +87,40 @@ LLM_API_KEY=VOTRE_CLE_API_GOOGLE
 | `LLM_MODEL` | `gemini-3.5-flash` | Modèle Gemini à utiliser |
 | `LLM_TIMEOUT_SECONDS` | `20` | Timeout des appels LLM en secondes |
 | `LLM_MAX_RESPONSE_BYTES` | `65536` | Taille max de la réponse LLM |
+
+## 🚂 Déploiement Railway (React + Django)
+
+Le dépôt est organisé comme un monorepo avec un backend Django à la racine et un frontend React/Vite dans `frontend/`.
+
+### Services Railway
+
+- **Backend Django** : racine du dépôt (`/`), domaine conseillé `api.ivoireinnovationbtp.com`.
+- **Frontend React** : Root Directory `/frontend`, domaine conseillé `www.ivoireinnovationbtp.com`.
+- **PostgreSQL** : service PostgreSQL Railway.
+
+### Variables Backend
+
+```env
+SECRET_KEY=<secret Railway>
+DEBUG=False
+ALLOWED_HOSTS=api.ivoireinnovationbtp.com
+CORS_ALLOWED_ORIGINS=https://www.ivoireinnovationbtp.com
+CSRF_TRUSTED_ORIGINS=https://www.ivoireinnovationbtp.com
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+DATABASE_SSL_REQUIRE=True
+DEMO_MODE=False
+LLM_PROVIDER=gemini
+LLM_API_KEY=<clé Gemini>
+LLM_MODEL=gemini-3.5-flash
+LLM_TIMEOUT_SECONDS=60
+LLM_MAX_RESPONSE_BYTES=65536
+PLAN_IMAGE_MAX_BYTES=5242880
+```
+
+### Variable Frontend
+
+```env
+VITE_API_URL=https://api.ivoireinnovationbtp.com/api
+```
+
+Le fichier `frontend/Dockerfile` construit Vite puis sert `dist/` avec Caddy, avec fallback SPA vers `index.html`.

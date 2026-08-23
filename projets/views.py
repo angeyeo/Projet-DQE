@@ -87,94 +87,6 @@ def _empreinte_niveau_bas(poteaux: list) -> list:
     return [p for p in poteaux if p["niveau_elevation_m"] == elevation_min]
 
 
-# Tolérance (mètres) pour considérer deux IfcColumn comme le même poteau
-# physique. Constaté sur des exports ArchiCAD réels (ex. profil composite
-# noyau/habillage, ou entité dupliquée par erreur d'export) : plusieurs
-# IfcColumn peuvent coexister exactement à la même position (X,Y). Sans
-# déduplication, chaque doublon produit un poteau ET une semelle en plus,
-# superposés au même endroit -- illisible sur le plan (labels empilés) et
-# compté en double dans le DQE (surcoût fictif).
-TOLERANCE_DOUBLON_POTEAU_M = 0.10
-
-
-def _dedupliquer_poteaux_par_position(poteaux: list, tolerance: float = TOLERANCE_DOUBLON_POTEAU_M) -> list:
-    """
-    Regroupe les poteaux (déjà filtrés sur un seul niveau par
-    _empreinte_niveau_bas) quasi à la même position (X,Y) et n'en garde
-    qu'un par groupe -- voir TOLERANCE_DOUBLON_POTEAU_M pour la cause.
-    Algorithme volontairement simple (O(n^2)) : les empreintes réelles
-    restent de taille modeste (quelques dizaines à centaines de poteaux).
-    """
-    if not poteaux:
-        return []
-    restants = list(poteaux)
-    uniques = []
-    while restants:
-        base = restants.pop(0)
-        reste = []
-        for p in restants:
-            dx = p["x"] - base["x"]
-            dy = p["y"] - base["y"]
-            if (dx * dx + dy * dy) ** 0.5 > tolerance:
-                reste.append(p)
-        restants = reste
-        uniques.append(base)
-    return uniques
-
-
-def _grouper_par_classe_dimension(elements: list, tolerance_cm: float = 5.0) -> list:
-    """
-    Regroupe une liste d'ElementStructurel (poteaux ou semelles) par
-    classe de dimension proche (cote_cm dans resultat_calcul), à
-    tolerance_cm près, et renvoie les groupes triés du plus grand au
-    plus petit -- convention des plans de coffrage professionnels
-    (ex. S1 = la plus grande semelle, S2, S3... la plus petite ; même
-    repère réutilisé à chaque emplacement de taille identique).
-    Les éléments sans cote_cm exploitable (None) forment leur propre
-    groupe à part, placé en dernier.
-    """
-    avec_cote = []
-    sans_cote = []
-    for el in elements:
-        cote = (el.resultat_calcul or {}).get("cote_cm")
-        if cote is None:
-            sans_cote.append(el)
-        else:
-            avec_cote.append((el, float(cote)))
-
-    avec_cote.sort(key=lambda t: t[1], reverse=True)
-    groupes = []
-    for el, cote in avec_cote:
-        for groupe in groupes:
-            if abs(groupe["cote"] - cote) <= tolerance_cm:
-                groupe["elements"].append(el)
-                break
-        else:
-            groupes.append({"cote": cote, "elements": [el]})
-
-    resultat = [g["elements"] for g in groupes]
-    if sans_cote:
-        resultat.append(sans_cote)
-    return resultat
-
-
-def _renommer_par_classe_dimension(elements: list, prefixe: str) -> None:
-    """
-    Renomme en place (identifiant + save()) une liste d'ElementStructurel
-    du même type (tous poteaux, ou toutes semelles) selon leur classe de
-    dimension : prefixe+"1" pour la plus grande, prefixe+"2" la
-    suivante, etc. -- voir _grouper_par_classe_dimension(). Remplace
-    l'identifiant brut dérivé du GlobalId IFC (ex. "P_2izTjP2U",
-    illisible et sans rapport avec la taille réelle de l'élément) par
-    une convention proche des plans de coffrage professionnels.
-    """
-    for idx, groupe in enumerate(_grouper_par_classe_dimension(elements), start=1):
-        nom = f"{prefixe}{idx}"
-        for el in groupe:
-            el.identifiant = nom
-        ElementStructurel.objects.bulk_update(groupe, ["identifiant"])
-
-
 _TYPES_OUVRAGES_LINEAIRES = {
     ElementStructurel.TypeElement.POUTRE: "poutres",
     ElementStructurel.TypeElement.LONGRINE: "longrines",
@@ -515,23 +427,12 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        nb_avant_dedup = len(empreinte)
-        empreinte = _dedupliquer_poteaux_par_position(empreinte)
-        avertissements = list(resultat.get("avertissements", []))
-        nb_doublons = nb_avant_dedup - len(empreinte)
-        if nb_doublons:
-            avertissements.append(
-                f"{nb_doublons} poteau(x) ignoré(s) car quasi superposé(s) "
-                f"(< {TOLERANCE_DOUBLON_POTEAU_M * 100:.0f} cm) à un autre poteau déjà "
-                f"détecté -- export IFC contenant probablement des colonnes "
-                f"dupliquées (profil composite ou entité en double)."
-            )
-
         projet.elements.all().delete()
 
         charge_exp = projet.charge_exploitation or 1.5
         elements_crees = []
         poteau_par_guid = {}
+        avertissements = list(resultat.get("avertissements", []))
 
         for p in empreinte:
             try:
@@ -571,17 +472,6 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 resultat_calcul=donnees["resultat_semelle"],
             )
             elements_crees.append(semelle)
-
-        # Renommage par classe de dimension (S1 = plus grande semelle, S2...,
-        # idem P1... pour les poteaux) -- remplace les identifiants bruts
-        # dérivés du GlobalId IFC par une convention proche des plans de
-        # coffrage professionnels. Fait ici, avant la génération des
-        # poutres, pour que leurs noms (ex. "PX_P1_P3") reflètent déjà les
-        # nouveaux repères plutôt que les GUID tronqués.
-        poteaux_crees = [poteau_par_guid[guid] for guid in poteau_par_guid]
-        semelles_crees = [el for el in elements_crees if el.type_element == ElementStructurel.TypeElement.SEMELLE]
-        _renommer_par_classe_dimension(poteaux_crees, "P")
-        _renommer_par_classe_dimension(semelles_crees, "S")
 
         for pd in detecter_poutres_adjacentes(empreinte, charge_exp):
             origine = poteau_par_guid.get(pd["poteau_origine_guid"])
