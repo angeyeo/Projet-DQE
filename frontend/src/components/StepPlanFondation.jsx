@@ -63,6 +63,50 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
 
   const listSemelles = (planData && planData.semelles) || (sections && sections.semelles) || [];
 
+  // Calcul de l'échelle d'affichage du plan SVG.
+  // Les coordonnées (position_x/position_y) sont des coordonnées réelles en
+  // mètres (ex. issues d'un import IFC), potentiellement très éloignées de
+  // (0,0) et sur une grande amplitude (ex. -234.18, -44.29). Un facteur fixe
+  // (ancien code : position_x * 40) plaçait donc les semelles à des milliers
+  // de pixels hors du viewBox -- rien ne se dessinait. On normalise ici les
+  // positions dans le cadre disponible, quelle que soit leur amplitude.
+  const VB_W = 600;
+  const VB_H = 420;
+  const PAD = 55;
+  const drawW = VB_W - PAD * 2;
+  const drawH = VB_H - PAD * 2;
+
+  const semellesPositionnees = listSemelles.filter(
+    (s) => typeof s.position_x === 'number' && typeof s.position_y === 'number'
+      && !Number.isNaN(s.position_x) && !Number.isNaN(s.position_y)
+  );
+
+  let projeter = (x, y) => [VB_W / 2, VB_H / 2];
+  let echellePxParM = 20;
+
+  if (semellesPositionnees.length > 0) {
+    const xs = semellesPositionnees.map((s) => s.position_x);
+    const ys = semellesPositionnees.map((s) => s.position_y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const spanX = maxX - minX || 1;
+    const spanY = maxY - minY || 1;
+
+    const scale = Math.min(drawW / spanX, drawH / spanY);
+    echellePxParM = scale;
+    const offsetX = PAD + (drawW - spanX * scale) / 2;
+    const offsetY = PAD + (drawH - spanY * scale) / 2;
+
+    projeter = (x, y) => {
+      const px = offsetX + (x - minX) * scale;
+      // Axe Y inversé : Y croissant (nord) vers le haut du plan.
+      const py = offsetY + (drawH - (y - minY) * scale);
+      return [px, py];
+    };
+  }
+
   return (
     <div className="glass-panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
@@ -104,12 +148,18 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
           <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text-muted)' }}>
             Aperçu Graphique de l'Implantation des Semelles (Trame)
           </h4>
-          <svg viewBox="-30 -30 360 240" style={{ width: '100%', maxWidth: 480, background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--core-border)', borderRadius: '12px', padding: '0.5rem' }}>
+          <svg viewBox={`0 0 ${VB_W} ${VB_H}`} style={{ width: '100%', maxWidth: 480, background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--core-border)', borderRadius: '12px', padding: '0.5rem' }}>
             {listSemelles.map((s, idx) => {
-              const posX = (s.position_x !== undefined ? s.position_x * 40 : (idx % 3) * 80) + 40;
-              const posY = (s.position_y !== undefined ? s.position_y * 40 : Math.floor(idx / 3) * 70) + 40;
-              const cote = (parseFloat(s.cote_cm) || 120) / 100;
-              const size = Math.max(16, cote * 20);
+              const positionConnue = typeof s.position_x === 'number' && typeof s.position_y === 'number'
+                && !Number.isNaN(s.position_x) && !Number.isNaN(s.position_y);
+              const [posX, posY] = positionConnue
+                ? projeter(s.position_x, s.position_y)
+                // Repli en grille si la position réelle est indisponible (ex. saisie manuelle).
+                : [PAD + (idx % 4) * (drawW / 4) + drawW / 8, PAD + Math.floor(idx / 4) * 50 + 20];
+              const cote = (parseFloat(s.cote_cm) || 120) / 100; // mètres
+              const size = Math.max(10, Math.min(45, cote * echellePxParM));
+              const label = s.identifiant || s.id || `S${idx + 1}`;
+              const labelW = Math.max(18, label.length * 5.4 + 6);
               return (
                 <g key={s.identifiant || idx} transform={`translate(${posX}, ${posY})`}>
                   <rect
@@ -117,8 +167,15 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
                     width={size} height={size}
                     fill="rgba(59, 130, 246, 0.2)" stroke="#3b82f6" strokeWidth="1.5" rx="3"
                   />
-                  <text x="0" y={-size / 2 - 4} fontSize="9" fontWeight="bold" fill="#93c5fd" textAnchor="middle">
-                    {s.identifiant || s.id || `S${idx + 1}`}
+                  {/* Fond derrière l'étiquette : évite qu'elle se fonde dans un
+                      texte voisin quand deux semelles sont proches sur le plan. */}
+                  <rect
+                    x={-labelW / 2} y={-size / 2 - 15}
+                    width={labelW} height={12}
+                    fill="rgba(15, 23, 42, 0.85)" rx="2"
+                  />
+                  <text x="0" y={-size / 2 - 6} fontSize="9" fontWeight="bold" fill="#93c5fd" textAnchor="middle">
+                    {label}
                   </text>
                 </g>
               );

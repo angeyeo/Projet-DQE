@@ -207,7 +207,10 @@ export const dqeService = {
     if (!projetId) {
       throw new Error("Aucun projet actif -- impossible de télécharger le plan sans projetId.");
     }
-    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?format=dxf`);
+    // Le paramètre s'appelle "export" côté backend (et non "format" --
+    // "format" est réservé par la négociation de contenu de DRF, voir
+    // ProjetViewSet.plan_fondation dans projets/views.py).
+    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?export=dxf`);
     if (!response.ok) {
       const data = await response.json().catch(() => null);
       throw new Error((data && data.erreur) || `Erreur ${response.status}`);
@@ -365,6 +368,25 @@ function formatElement(e) {
     name: e.identifiant,
     section: calculIndisponible ? 'Calcul manuel requis' : formatSection(e.type_element, res),
     armatures: calculIndisponible ? '—' : formatArmatures(e.type_element, res),
+    // Hauteur réelle (semelles/poutres) -- auparavant absente de l'objet
+    // formaté : Step2_Calculs.jsx retombait donc systématiquement sur son
+    // fallback codé en dur ("35 cm") quel que soit le calcul réel.
+    hauteur: calculIndisponible
+      ? '—'
+      : (res.hauteur_cm !== undefined && res.hauteur_cm !== null ? `${res.hauteur_cm} cm` : 'n/d'),
+    // Contrainte du sol réelle (taux_travail_sol, champ direct sur
+    // l'élément -- pas dans resultat_calcul) -- même problème que
+    // hauteur ci-dessus (fallback "0.20 MPa" systématique auparavant).
+    contrainteSol: (e.taux_travail_sol !== undefined && e.taux_travail_sol !== null)
+      ? `${e.taux_travail_sol} MPa` : 'n/d',
+    // Effort axial (poteaux) / charge linéaire (poutres) -- champ direct
+    // charge_calculee sur l'élément.
+    charge: (e.charge_calculee !== undefined && e.charge_calculee !== null)
+      ? `${Math.round(e.charge_calculee)} kN` : 'n/d',
+    effort_axial: (e.charge_calculee !== undefined && e.charge_calculee !== null)
+      ? `${Math.round(e.charge_calculee)} kN` : 'n/d',
+    // Portée réelle (poutres) -- champ direct sur l'élément.
+    portee: (e.portee !== undefined && e.portee !== null) ? `${e.portee} m` : 'n/d',
     resultat: res,
     calculIndisponible,
     erreurCalcul: e.erreur_calcul || null,
@@ -378,8 +400,18 @@ function formatSection(typeElement, res) {
     const cote = res.cote_cm ?? res.largeur_cm;
     return cote ? `${cote} x ${cote} cm` : 'n/d';
   }
-  if (typeElement === 'poutre' || typeElement === 'semelle') {
+  if (typeElement === 'poutre') {
     if (res.largeur_cm && res.hauteur_cm) return `${res.largeur_cm} x ${res.hauteur_cm} cm`;
+    return 'n/d';
+  }
+  if (typeElement === 'semelle') {
+    // Semelle carrée : le backend (dimensionner_semelle()) renvoie
+    // "cote_cm" (un seul côté, valable pour A et B) + "hauteur_cm" --
+    // jamais "largeur_cm". L'ancien test (res.largeur_cm && res.hauteur_cm)
+    // ne matchait donc jamais et retombait toujours sur 'n/d'.
+    const cote = res.cote_cm;
+    if (cote) return `${cote} x ${cote} cm`;
+    return 'n/d';
   }
   return 'n/d';
 }
