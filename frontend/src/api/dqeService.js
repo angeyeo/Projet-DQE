@@ -207,7 +207,11 @@ export const dqeService = {
     if (!projetId) {
       throw new Error("Aucun projet actif -- impossible de télécharger le plan sans projetId.");
     }
-    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?format=dxf`);
+    // IMPORTANT : le paramètre s'appelle "export" et non "format" -- "format" est
+    // réservé par la négociation de contenu de DRF et déclenche un Http404 avant
+    // même d'atteindre la vue (voir projets/views.py::plan_fondation). C'était la
+    // cause du bouton de téléchargement DXF qui ne fonctionnait pas.
+    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?export=dxf`);
     if (!response.ok) {
       const data = await response.json().catch(() => null);
       throw new Error((data && data.erreur) || `Erreur ${response.status}`);
