@@ -434,6 +434,16 @@ class ProjetViewSet(viewsets.ModelViewSet):
         poteau_par_guid = {}
         avertissements = list(resultat.get("avertissements", []))
 
+        # Numérotation séquentielle simple (P1, S1, P2, S2...) plutôt que
+        # les 8 premiers caractères du GUID IFC (ex. "P_2izTjP2U") : ces
+        # GUID tronqués sont illisibles pour un utilisateur et, pire, se
+        # concaténaient dans l'identifiant des poutres ci-dessous
+        # ("PX_P_2izTjP2U_P_1dABuTm0"), doublant le problème. Le GUID IFC
+        # d'origine reste consultable si besoin (resultat_calcul le
+        # conserve déjà indirectement via les données de calcul), mais ne
+        # doit plus servir de nom d'affichage.
+        compteur_poteau = 0
+
         for p in empreinte:
             try:
                 donnees = generer_poteau_depuis_position_reelle(
@@ -444,7 +454,8 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 avertissements.append(str(exc))
                 continue
 
-            identifiant_poteau = f"P_{p.get('guid', '')[:8] or len(poteau_par_guid)}"
+            compteur_poteau += 1
+            identifiant_poteau = f"P{compteur_poteau}"
             poteau = ElementStructurel.objects.create(
                 projet=projet,
                 identifiant=identifiant_poteau,
@@ -461,7 +472,7 @@ class ProjetViewSet(viewsets.ModelViewSet):
 
             semelle = ElementStructurel.objects.create(
                 projet=projet,
-                identifiant=f"S_{identifiant_poteau}",
+                identifiant=f"S{compteur_poteau}",
                 type_element=ElementStructurel.TypeElement.SEMELLE,
                 position=ElementStructurel.Position.INFRASTRUCTURE,
                 position_x=donnees["x"],
@@ -473,16 +484,18 @@ class ProjetViewSet(viewsets.ModelViewSet):
             )
             elements_crees.append(semelle)
 
+        compteur_poutre = 0
         for pd in detecter_poutres_adjacentes(empreinte, charge_exp):
             origine = poteau_par_guid.get(pd["poteau_origine_guid"])
             destination = poteau_par_guid.get(pd["poteau_destination_guid"])
             if origine is None or destination is None:
                 continue  # un des deux poteaux a été écarté ci-dessus (surface invalide)
 
+            compteur_poutre += 1
             prefixe = "PX" if pd["axe"] == "x" else "PY"
             poutre = ElementStructurel.objects.create(
                 projet=projet,
-                identifiant=f"{prefixe}_{origine.identifiant}_{destination.identifiant}",
+                identifiant=f"{prefixe}{compteur_poutre}",
                 type_element=ElementStructurel.TypeElement.POUTRE,
                 position=ElementStructurel.Position.SUPERSTRUCTURE,
                 position_x=(origine.position_x + destination.position_x) / 2,
