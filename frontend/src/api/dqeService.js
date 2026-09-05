@@ -207,7 +207,11 @@ export const dqeService = {
     if (!projetId) {
       throw new Error("Aucun projet actif -- impossible de télécharger le plan sans projetId.");
     }
-    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?format=dxf`);
+    // IMPORTANT : le paramètre s'appelle "export" et non "format" -- "format" est
+    // réservé par la négociation de contenu de DRF et déclenche un Http404 avant
+    // même d'atteindre la vue (voir projets/views.py::plan_fondation). C'était la
+    // cause du bouton de téléchargement DXF qui ne fonctionnait pas.
+    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?export=dxf`);
     if (!response.ok) {
       const data = await response.json().catch(() => null);
       throw new Error((data && data.erreur) || `Erreur ${response.status}`);
@@ -365,6 +369,17 @@ function formatElement(e) {
     name: e.identifiant,
     section: calculIndisponible ? 'Calcul manuel requis' : formatSection(e.type_element, res),
     armatures: calculIndisponible ? '—' : formatArmatures(e.type_element, res),
+    // Champs bruts du modèle Django (ElementStructurel), sérialisés tels
+    // quels par DRF (fields = "__all__") -- ils existaient déjà dans la
+    // réponse API mais n'étaient jamais lus ici. Résultat : Step2_Calculs.jsx
+    // (item.charge / item.effort_axial / item.portee / item.contrainteSol)
+    // ne trouvait jamais ces propriétés et retombait systématiquement sur
+    // ses valeurs par défaut codées en dur ("150 kN", "5.0 m", "0.20 MPa"...)
+    // pour CHAQUE élément, quelle que soit sa charge réelle.
+    charge: e.charge_calculee != null ? `${Math.round(e.charge_calculee * 10) / 10} kN` : null,
+    portee: e.portee != null ? `${e.portee.toFixed(2)} m` : null,
+    contrainteSol: e.taux_travail_sol != null ? `${e.taux_travail_sol.toFixed(2)} MPa` : null,
+    hauteur: res.hauteur_cm != null ? `${res.hauteur_cm} cm` : null,
     resultat: res,
     calculIndisponible,
     erreurCalcul: e.erreur_calcul || null,
@@ -378,8 +393,20 @@ function formatSection(typeElement, res) {
     const cote = res.cote_cm ?? res.largeur_cm;
     return cote ? `${cote} x ${cote} cm` : 'n/d';
   }
-  if (typeElement === 'poutre' || typeElement === 'semelle') {
+  if (typeElement === 'poutre') {
     if (res.largeur_cm && res.hauteur_cm) return `${res.largeur_cm} x ${res.hauteur_cm} cm`;
+  }
+  if (typeElement === 'semelle') {
+    // dimensionner_semelle() (semelle isolée carrée) renvoie "cote_cm", pas
+    // "largeur_cm"/"hauteur_cm" -- seule dimensionner_semelle_affinee()
+    // (grand_cote_cm/petit_cote_cm, rectangulaire) et dimensionner_semelle_filante()
+    // (largeur_cm) utilisent d'autres noms. Sans ce cas, la colonne "Dimensions
+    // (A x B)" affichait "n/d" pour toutes les semelles carrées, alors que
+    // cote_cm était bien calculé et affiché correctement dans le tableau du
+    // Plan de Fondation (StepPlanFondation.jsx, qui lit une autre source).
+    if (res.grand_cote_cm && res.petit_cote_cm) return `${res.grand_cote_cm} x ${res.petit_cote_cm} cm`;
+    if (res.largeur_cm && res.hauteur_cm) return `${res.largeur_cm} x ${res.hauteur_cm} cm`;
+    if (res.cote_cm) return `${res.cote_cm} x ${res.cote_cm} cm`;
   }
   return 'n/d';
 }

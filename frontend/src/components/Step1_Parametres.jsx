@@ -30,6 +30,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
   const [analysisSuccess, setAnalysisSuccess] = useState(false);
+  const [analysisWarnings, setAnalysisWarnings] = useState([]);
 
   useEffect(() => {
     if (!projectData.chargeExploitation && projectData.typeUsage) {
@@ -56,6 +57,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
 
     setAnalysisError(null);
     setAnalysisSuccess(false);
+    setAnalysisWarnings([]);
     updateProjectData({
       planFileName: file.name,
       planFileSize: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
@@ -84,6 +86,14 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           hauteurEtage: params.hauteur_etage ?? projectData.hauteurEtage,
           ifcImporte: true,
         });
+        // Le backend (detecter_parametres_trame) calcule des avertissements
+        // explicites quand la grille détectée est irrégulière (nb de poteaux
+        // incohérent avec une grille parfaite, portées ou hauteurs d'étage trop
+        // variables...). Ils existaient déjà côté API mais n'étaient jamais
+        // affichés : l'utilisateur voyait "575 poteaux" comme une donnée fiable
+        // alors que le fichier n'en contenait réellement que 72, sans aucune
+        // indication que la grille était une approximation.
+        setAnalysisWarnings(params.avertissements || []);
         setAnalysisSuccess(true);
       } catch (err) {
         setAnalysisError(`Erreur d'import IFC : ${err.message || "Impossible d'extraire le plan"}`);
@@ -157,7 +167,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
             </div>
             {analysisSuccess && (
               <p style={{ fontSize: '0.85rem', color: '#6ee7b7', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
-                <CheckCircle2 size={16} /> Paramètres extraits avec succès par l'IA !
+                <CheckCircle2 size={16} /> Paramètres extraits automatiquement, à vérifier ci-dessous !
               </p>
             )}
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
@@ -184,6 +194,20 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fca5a5', fontSize: '0.88rem' }}>
           <AlertCircle size={18} color="#ef4444" />
           <span>{analysisError}</span>
+        </div>
+      )}
+
+      {analysisWarnings.length > 0 && (
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.35)', marginBottom: '1.5rem', color: '#fcd34d', fontSize: '0.85rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+            <AlertCircle size={18} color="#f59e0b" />
+            <span>Trame détectée approximative -- à vérifier avant de continuer</span>
+          </div>
+          <ul style={{ margin: 0, paddingLeft: '1.4rem' }}>
+            {analysisWarnings.map((w, idx) => (
+              <li key={idx} style={{ marginBottom: '0.3rem' }}>{w}</li>
+            ))}
+          </ul>
         </div>
       )}
 

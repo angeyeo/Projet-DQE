@@ -96,8 +96,18 @@ export default function App() {
       setActiveView('step2');
     } catch (err) {
       console.error("Erreur lors du calcul :", err);
-      // Fallback vers l'écran 2 même si les données sont partielles
-      setActiveView('step2');
+      // Ancien comportement : on avançait quand même vers step2 malgré l'échec.
+      // Problème : sections.projetId n'est alors jamais renseigné (sections
+      // garde sa valeur initiale {poteaux:[], poutres:[], semelles:[]}), ce qui
+      // fait échouer silencieusement StepPlanFondation plus loin dans le
+      // parcours (chargerPlanFondation() ne se déclenche jamais sans projetId,
+      // et le téléchargement DXF échoue aussi) -- sans qu'aucun message n'aide
+      // à comprendre pourquoi. On informe maintenant l'utilisateur et on reste
+      // sur l'étape courante plutôt que d'avancer vers un état cassé.
+      alert(
+        "Impossible de lancer le calcul : " + (err.message || "erreur inconnue") +
+        "\n\nVous êtes maintenu sur cette étape -- corrigez le problème (ou réessayez) avant de continuer."
+      );
     }
   };
 

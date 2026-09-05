@@ -38,6 +38,7 @@ import io
 import math
 
 import ezdxf
+from ezdxf.enums import TextEntityAlignment
 
 from moteur_calcul.formules.complements_plan_coffrage import (
     calculer_contour_dallage,
@@ -318,6 +319,151 @@ def _dessiner_cotations(doc, msp, segments):
         dim.render()
 
 
+def _clusteriser_axe(valeurs, tolerance):
+    """Regroupe des coordonnées proches en axes de repère -- même principe
+    que _clusteriser_1d() de moteur_calcul/import_ifc/lecture_ifc.py, mais
+    dupliqué ici en petit (pas de dépendance croisée entre les deux
+    modules) avec une tolérance dédiée, plus large : on veut un repère
+    par alignement visuellement significatif du plan, pas par alignement
+    structurel strict (voir docstring de _dessiner_axes_reperes)."""
+    if not valeurs:
+        return []
+    valeurs_triees = sorted(valeurs)
+    groupes = [[valeurs_triees[0]]]
+    for v in valeurs_triees[1:]:
+        if v - groupes[-1][-1] <= tolerance:
+            groupes[-1].append(v)
+        else:
+            groupes.append([v])
+    return [sum(g) / len(g) for g in groupes]
+
+
+def _lettre_repere(index_zero_based):
+    """0->A, 1->B, ..., 25->Z, 26->AA, 27->AB... (convention des plans BTP
+    pour numéroter les axes au-delà de 26)."""
+    n = index_zero_based + 1
+    lettres = ""
+    while n > 0:
+        n, reste = divmod(n - 1, 26)
+        lettres = chr(65 + reste) + lettres
+    return lettres
+
+
+def _dessiner_axes_reperes(doc, msp, positions_semelles, tolerance_axe_m=0.4, marge_m=1.5):
+    """
+    Trace un système d'axes de repère (lignes de grille numérotées 1, 2,
+    3... et lettrées A, B, C...) autour du bâtiment, avec des bulles aux
+    extrémités -- la convention standard des plans de coffrage BTP (voir
+    l'exemple de plan professionnel fourni par Ange : axes A à O et 1 à
+    11 en bordure du plan).
+
+    Contrairement à detecter_parametres_trame() (Phase A, import_ifc/
+    lecture_ifc.py), qui utilise une tolérance stricte de 15 cm pour
+    détecter des alignements structurels fiables, ce tracé est purement
+    visuel/annotatif : la tolérance par défaut est volontairement plus
+    large (40 cm) pour limiter le nombre d'axes sur un bâtiment réel à
+    trame irrégulière (sinon on obtient un axe par poteau ou presque, ce
+    qui charge le plan sans le rendre plus lisible). À ajuster projet par
+    projet si besoin -- exposé en paramètre de generer_plan_fondation_dxf().
+
+    Retourne un dict de diagnostic (nombre d'axes tracés dans chaque
+    sens), utile pour avertir l'utilisateur si le nombre d'axes est très
+    élevé (bâtiment très irrégulier, tolérance à revoir).
+    """
+    if not positions_semelles:
+        return {"nb_reperes_numeriques": 0, "nb_reperes_lettres": 0}
+
+    if not doc.layers.has_entry("AXES_REPERES"):
+        doc.layers.add(name="AXES_REPERES", color=9)  # gris clair, discret
+
+    xs = [p[0] for p in positions_semelles]
+    ys = [p[1] for p in positions_semelles]
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+
+    axes_x = sorted(_clusteriser_axe(xs, tolerance_axe_m))  # repères numériques (colonnes, verticaux)
+    axes_y = sorted(_clusteriser_axe(ys, tolerance_axe_m))  # repères lettrés (lignes, horizontaux)
+
+    rayon_bulle = max(0.25, min(0.4, marge_m * 0.3))
+
+    for idx, x in enumerate(axes_x, start=1):
+        y_bas, y_haut = y_min - marge_m, y_max + marge_m
+        msp.add_line((x, y_bas), (x, y_haut), dxfattribs={"layer": "AXES_REPERES"})
+        for y_centre in (y_bas - rayon_bulle, y_haut + rayon_bulle):
+            centre = (x, y_centre)
+            msp.add_circle(centre, rayon_bulle, dxfattribs={"layer": "AXES_REPERES"})
+            texte = msp.add_text(
+                str(idx), dxfattribs={"layer": "AXES_REPERES", "height": rayon_bulle}
+            )
+            texte.set_placement(centre, align=TextEntityAlignment.MIDDLE_CENTER)
+
+    for idx, y in enumerate(axes_y, start=0):
+        x_gauche, x_droite = x_min - marge_m, x_max + marge_m
+        msp.add_line((x_gauche, y), (x_droite, y), dxfattribs={"layer": "AXES_REPERES"})
+        lettre = _lettre_repere(idx)
+        for x_centre in (x_gauche - rayon_bulle, x_droite + rayon_bulle):
+            centre = (x_centre, y)
+            msp.add_circle(centre, rayon_bulle, dxfattribs={"layer": "AXES_REPERES"})
+            texte = msp.add_text(
+                lettre, dxfattribs={"layer": "AXES_REPERES", "height": rayon_bulle}
+            )
+            texte.set_placement(centre, align=TextEntityAlignment.MIDDLE_CENTER)
+
+    return {"nb_reperes_numeriques": len(axes_x), "nb_reperes_lettres": len(axes_y)}
+
+
+def _arrondir_taille_superieure(valeur_cm, pas_cm=5):
+    """Arrondit une dimension au pas supérieur (5 cm par défaut) -- jamais
+    vers le bas, pour ne jamais sous-dimensionner un ouvrage réel en le
+    faisant entrer dans une classe de taille standardisée. C'est la même
+    logique qu'un bureau d'études : les coffrages sont fabriqués à des
+    dimensions rondes, pas à la valeur théorique exacte du calcul."""
+    return math.ceil(float(valeur_cm) / pas_cm) * pas_cm
+
+
+def _grouper_par_type(elements, cle_taille, prefixe, pas_cm=5):
+    """
+    Regroupe une liste d'éléments (semelles ou poteaux) par taille
+    standardisée et attribue un label court (S1, S2, S3... ou P1, P2,
+    P3...) à chaque classe, la plus grande en premier -- convention des
+    plans de coffrage professionnels (voir l'exemple fourni par Ange :
+    S1(170x170x40) en plus grand, jusqu'à S5(80x80x25) en plus petit).
+
+    Retourne un dict {identifiant_element: (type_label, taille_arrondie_cm)}.
+    Les identifiants uniques générés automatiquement (GUID) restent
+    disponibles ailleurs (tableau de coordonnées de l'app, export DQE)
+    pour la traçabilité -- ce label court n'est utilisé QUE pour
+    l'annotation visuelle du plan, qui doit rester lisible.
+    """
+    tailles_arrondies = {
+        el["identifiant"]: _arrondir_taille_superieure(cle_taille(el), pas_cm) for el in elements
+    }
+    classes = sorted(set(tailles_arrondies.values()), reverse=True)
+    label_par_taille = {taille: f"{prefixe}{i + 1}" for i, taille in enumerate(classes)}
+    return {
+        identifiant: (label_par_taille[taille], taille)
+        for identifiant, taille in tailles_arrondies.items()
+    }
+
+
+def _dessiner_legende_types(msp, x_insert, y_insert, titre, types_comptes, layer="ANNOTATIONS"):
+    """Petit tableau texte (nomenclature) listant chaque type standardisé,
+    ses dimensions et le nombre d'éléments concernés -- équivalent
+    simplifié de la nomenclature d'un vrai plan de coffrage. Les
+    identifiants individuels (GUID) ne sont volontairement pas listés ici
+    pour ne pas surcharger le plan ; ils restent dans le tableau de
+    coordonnées de l'application."""
+    msp.add_text(
+        titre, dxfattribs={"layer": layer, "height": 0.3, "insert": (x_insert, y_insert)}
+    )
+    for i, (label, taille, hauteur, nb) in enumerate(types_comptes, start=1):
+        msp.add_text(
+            f"{label} ({taille:.0f}x{taille:.0f}x{hauteur:.0f} cm) : {nb} élément(s)",
+            dxfattribs={"layer": layer, "height": 0.22, "insert": (x_insert, y_insert - 0.4 * i)},
+        )
+
+
+
 def generer_plan_fondation_dxf(
     semelles,
     tolerance_position_m: float = 0.01,
@@ -327,6 +473,10 @@ def generer_plan_fondation_dxf(
     dessiner_dallage: bool = True,
     dessiner_joints_dilatation: bool = True,
     dessiner_cotations: bool = True,
+    dessiner_axes_reperes: bool = True,
+    tolerance_axe_reperes_m: float = 0.4,
+    pas_cm_regroupement_semelles: float = 5,
+    pas_cm_regroupement_poteaux: float = 5,
 ) -> bytes:
     """
     semelles : liste de dicts {identifiant, position_x, position_y, cote_cm,
@@ -364,6 +514,24 @@ def generer_plan_fondation_dxf(
     encombrant sur un plan avec beaucoup de semelles, sans dupliquer la
     fonction.
 
+    dessiner_axes_reperes (True par défaut) : trace un système d'axes de
+    repère numérotés/lettrés (calque AXES_REPERES) façon plan de
+    coffrage professionnel -- voir _dessiner_axes_reperes(). Sur un
+    bâtiment réel à trame irrégulière, ajuster tolerance_axe_reperes_m
+    (0.4 m par défaut) si le nombre d'axes générés est trop élevé pour
+    rester lisible.
+
+    pas_cm_regroupement_semelles / pas_cm_regroupement_poteaux (5 cm par
+    défaut) : les semelles/poteaux sont annotés avec un label court
+    standardisé (S1, S2... / P1, P2...) plutôt que leur identifiant
+    unique généré automatiquement -- voir _grouper_par_type(). Sur un
+    bâtiment à charges très variées, un pas de 5 cm peut produire une
+    dizaine de types différents (matériellement optimal mais visuellement
+    chargé) ; augmenter le pas (ex. 15 ou 20 cm) réduit le nombre de
+    types en acceptant un léger surdimensionnement de certains éléments
+    -- c'est un choix de compromis matière/simplicité de chantier à faire
+    avec un technicien, pas une valeur universelle.
+
     Lève ValueError si une semelle n'a pas de poteau_associe -- une
     semelle orpheline dans un lot généré signale une régression Module 6
     (cf. Jour 5 de la feuille de route) : mieux vaut un échec explicite
@@ -395,7 +563,25 @@ def generer_plan_fondation_dxf(
     if dessiner_dallage:
         dallage_x_min, dallage_y_min = _dessiner_dallage(doc, msp, positions_semelles)
 
+    if dessiner_axes_reperes:
+        diagnostic_axes = _dessiner_axes_reperes(
+            doc, msp, positions_semelles, tolerance_axe_m=tolerance_axe_reperes_m
+        )
+
     xs, ys = [], []
+
+    # Regroupement par taille standardisée (S1, S2, S3... / P1, P2, P3...),
+    # la plus grande en premier -- même convention que l'exemple de plan
+    # professionnel fourni par Ange. Les identifiants complets (GUID)
+    # restent la clé de vérité pour la traçabilité (tableau de
+    # coordonnées de l'app) ; ce label court n'est utilisé QUE pour
+    # l'annotation visuelle du dessin, qui devient illisible avec des
+    # identifiants générés automatiquement dès qu'on dépasse une dizaine
+    # d'éléments.
+    types_semelles = _grouper_par_type(semelles, lambda s: s["cote_cm"], "S", pas_cm=pas_cm_regroupement_semelles)
+    types_poteaux = _grouper_par_type(
+        [s["poteau_associe"] for s in semelles], lambda p: p["cote_cm"], "P", pas_cm=pas_cm_regroupement_poteaux
+    )
 
     for semelle in semelles:
         cx, cy = semelle["position_x"], semelle["position_y"]
@@ -415,12 +601,24 @@ def generer_plan_fondation_dxf(
             dxfattribs={"layer": "POTEAUX"},
         )
 
+        label_semelle, taille_semelle = types_semelles[semelle["identifiant"]]
+        hauteur_semelle_cm = _arrondir_taille_superieure(semelle.get("hauteur_cm", 40), pas_cm=5)
         msp.add_text(
-            str(semelle["identifiant"]),
+            f"{label_semelle}({taille_semelle:.0f}x{taille_semelle:.0f}x{hauteur_semelle_cm:.0f})",
             dxfattribs={
                 "layer": "ANNOTATIONS",
                 "height": max(cote_semelle_m * 0.3, 0.1),
                 "insert": (cx + cote_semelle_m / 2 + 0.1, cy),
+            },
+        )
+
+        label_poteau, _ = types_poteaux[poteau["identifiant"]]
+        msp.add_text(
+            label_poteau,
+            dxfattribs={
+                "layer": "POTEAUX",
+                "height": max(cote_poteau_m * 0.4, 0.08),
+                "insert": (cx - cote_poteau_m / 2 - 0.05, cy + cote_poteau_m / 2 + 0.05),
             },
         )
 
@@ -442,6 +640,48 @@ def generer_plan_fondation_dxf(
             "insert": (x_min, y_min - 1.5),
         },
     )
+
+    # Nomenclature des types standardisés (S1, S2... / P1, P2...) : compte
+    # combien d'éléments de chaque taille, pour que le plan reste lisible
+    # avec des labels courts (voir _grouper_par_type()) tout en gardant
+    # une trace de ce que chaque type représente concrètement.
+    def _compter_par_type(types_dict, hauteur_par_id=None):
+        comptage = {}
+        for identifiant, (label, taille) in types_dict.items():
+            hauteur = hauteur_par_id.get(identifiant, 0) if hauteur_par_id else 0
+            cle = (label, taille, hauteur)
+            comptage[cle] = comptage.get(cle, 0) + 1
+        return sorted(
+            [(label, taille, hauteur, nb) for (label, taille, hauteur), nb in comptage.items()],
+            key=lambda t: -t[1],
+        )
+
+    hauteur_semelle_par_id = {
+        s["identifiant"]: _arrondir_taille_superieure(s.get("hauteur_cm", 40), pas_cm=5) for s in semelles
+    }
+    _dessiner_legende_types(
+        msp, x_min, y_min - 2.3, "Nomenclature semelles :",
+        _compter_par_type(types_semelles, hauteur_semelle_par_id),
+    )
+    poteaux_uniques = {s["poteau_associe"]["identifiant"]: s["poteau_associe"]["cote_cm"] for s in semelles}
+    comptage_poteaux = {}
+    for identifiant in poteaux_uniques:
+        label, taille = types_poteaux[identifiant]
+        comptage_poteaux[(label, taille)] = comptage_poteaux.get((label, taille), 0) + 1
+    msp.add_text(
+        "Nomenclature poteaux :",
+        dxfattribs={"layer": "ANNOTATIONS", "height": 0.3, "insert": (x_min + 4.5, y_min - 2.3)},
+    )
+    for i, ((label, taille), nb) in enumerate(
+        sorted(comptage_poteaux.items(), key=lambda t: -t[0][1]), start=1
+    ):
+        msp.add_text(
+            f"{label} ({taille:.0f}x{taille:.0f} cm) : {nb} élément(s)",
+            dxfattribs={
+                "layer": "ANNOTATIONS", "height": 0.22,
+                "insert": (x_min + 4.5, y_min - 2.3 - 0.4 * i),
+            },
+        )
 
     _dessiner_ouvrages_lineaires(doc, msp, poutres, "POUTRES", COULEUR_POUTRES)
     _dessiner_ouvrages_lineaires(doc, msp, longrines, "LONGRINES", COULEUR_LONGRINES)

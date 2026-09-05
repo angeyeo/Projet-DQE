@@ -99,33 +99,59 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
       )}
 
       {/* Rendu Graphique SVG */}
-      {listSemelles.length > 0 && (
-        <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
-          <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text-muted)' }}>
-            Aperçu Graphique de l'Implantation des Semelles (Trame)
-          </h4>
-          <svg viewBox="-30 -30 360 240" style={{ width: '100%', maxWidth: 480, background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--core-border)', borderRadius: '12px', padding: '0.5rem' }}>
-            {listSemelles.map((s, idx) => {
-              const posX = (s.position_x !== undefined ? s.position_x * 40 : (idx % 3) * 80) + 40;
-              const posY = (s.position_y !== undefined ? s.position_y * 40 : Math.floor(idx / 3) * 70) + 40;
-              const cote = (parseFloat(s.cote_cm) || 120) / 100;
-              const size = Math.max(16, cote * 20);
-              return (
-                <g key={s.identifiant || idx} transform={`translate(${posX}, ${posY})`}>
-                  <rect
-                    x={-size / 2} y={-size / 2}
-                    width={size} height={size}
-                    fill="rgba(59, 130, 246, 0.2)" stroke="#3b82f6" strokeWidth="1.5" rx="3"
-                  />
-                  <text x="0" y={-size / 2 - 4} fontSize="9" fontWeight="bold" fill="#93c5fd" textAnchor="middle">
-                    {s.identifiant || s.id || `S${idx + 1}`}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-      )}
+      {listSemelles.length > 0 && (() => {
+        // Les positions réelles issues de l'IFC peuvent être exprimées dans un
+        // repère de site avec de grands offsets (ex. -234 m, -44 m -- géoréférencement
+        // ArchiCAD/Revit), pas forcément proches de (0,0). L'ancien code multipliait
+        // position_x/position_y bruts par un facteur fixe (x40) sans normaliser par
+        // rapport au bâtiment : le dessin entier sortait alors du viewBox et l'aperçu
+        // restait vide, quelle que soit la trame réelle. On normalise ici par rapport
+        // au rectangle englobant des semelles, puis on choisit une échelle qui fait
+        // tenir tout le bâtiment dans le viewBox.
+        const avecPosition = listSemelles.filter(
+          (s) => s.position_x !== undefined && s.position_y !== undefined
+        );
+        const xs = avecPosition.map((s) => parseFloat(s.position_x));
+        const ys = avecPosition.map((s) => parseFloat(s.position_y));
+        const minX = xs.length ? Math.min(...xs) : 0;
+        const minY = ys.length ? Math.min(...ys) : 0;
+        const spanX = xs.length ? Math.max(...xs) - minX : 0;
+        const spanY = ys.length ? Math.max(...ys) - minY : 0;
+        const LARGEUR_DESSIN = 300; // zone utile dans le viewBox (-30 -30 360 240)
+        const HAUTEUR_DESSIN = 180;
+        const echelle = Math.min(
+          spanX > 0 ? LARGEUR_DESSIN / spanX : 40,
+          spanY > 0 ? HAUTEUR_DESSIN / spanY : 40,
+          40 // ne jamais zoomer plus que l'ancien facteur fixe sur un petit bâtiment
+        );
+
+        return (
+          <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
+            <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text-muted)' }}>
+              Aperçu Graphique de l'Implantation des Semelles (Trame)
+            </h4>
+            <svg viewBox="-30 -30 360 240" style={{ width: '100%', maxWidth: 480, background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--core-border)', borderRadius: '12px', padding: '0.5rem' }}>
+              {listSemelles.map((s, idx) => {
+                const posX = (s.position_x !== undefined ? (parseFloat(s.position_x) - minX) * echelle : (idx % 3) * 80) + 20;
+                const posY = (s.position_y !== undefined ? (parseFloat(s.position_y) - minY) * echelle : Math.floor(idx / 3) * 70) + 20;
+                const size = 14; // taille de repère fixe et lisible -- la vraie dimension (cote_cm) est déjà donnée dans le tableau ci-dessous, pas nécessaire de la reproduire à l'échelle du bâtiment ici
+                return (
+                  <g key={s.identifiant || idx} transform={`translate(${posX}, ${posY})`}>
+                    <rect
+                      x={-size / 2} y={-size / 2}
+                      width={size} height={size}
+                      fill="rgba(59, 130, 246, 0.2)" stroke="#3b82f6" strokeWidth="1.5" rx="3"
+                    />
+                    <text x="0" y={-size / 2 - 4} fontSize="9" fontWeight="bold" fill="#93c5fd" textAnchor="middle">
+                      {s.identifiant || s.id || `S${idx + 1}`}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+        );
+      })()}
 
       {/* Tableau des semelles */}
       <div style={{ marginBottom: '2rem' }}>
