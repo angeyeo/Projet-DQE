@@ -393,3 +393,68 @@ def analyser_element_coherence(element):
         "message_local": message_local,
         "validation_humaine_requise": True,
     }
+
+
+def analyser_projet_coherence(projet) -> dict:
+    """
+    Exécute l'analyse de cohérence déterministe sur tous les éléments d'un projet.
+
+    Règles :
+    - Strictement déterministe et locale (aucun appel LLM).
+    - Lecture seule (aucune écriture DB, aucun recalcul moteur).
+    - Agrégation par statut_analyse des éléments (compte des éléments par statut).
+    - Ordre des éléments garanti par `.order_by("id")`.
+    """
+    if projet is None:
+        raise ValueError("Le projet ne peut pas être None.")
+
+    projet_id = getattr(projet, "id", None) or getattr(projet, "pk", None)
+    nom_projet = getattr(projet, "nom", "")
+
+    # Extraction des éléments dans un ordre strictement déterministe
+    elements_qs = projet.elements.all().order_by("id")
+
+    elements_analyses = []
+    critiques = 0
+    attentions = 0
+    informations = 0
+    aucun_signal = 0
+    calculs_a_valider = 0
+    calculs_a_refaire = 0
+    calculs_non_disponibles = 0
+
+    for element in elements_qs:
+        res_elem = analyser_element_coherence(element)
+        elements_analyses.append(res_elem)
+
+        statut = res_elem.get("statut_analyse")
+        if statut == "CRITIQUE":
+            critiques += 1
+        elif statut == "ATTENTION":
+            attentions += 1
+        elif statut == "INFORMATION":
+            informations += 1
+        elif statut == "AUCUN_SIGNAL":
+            aucun_signal += 1
+        elif statut == "CALCUL_A_VALIDER":
+            calculs_a_valider += 1
+        elif statut == "CALCUL_A_REFAIRE":
+            calculs_a_refaire += 1
+        elif statut == "CALCUL_NON_DISPONIBLE":
+            calculs_non_disponibles += 1
+
+    return {
+        "projet_id": projet_id,
+        "nom_projet": nom_projet,
+        "resume": {
+            "total_elements": len(elements_analyses),
+            "critiques": critiques,
+            "attentions": attentions,
+            "informations": informations,
+            "aucun_signal": aucun_signal,
+            "calculs_a_valider": calculs_a_valider,
+            "calculs_a_refaire": calculs_a_refaire,
+            "calculs_non_disponibles": calculs_non_disponibles,
+        },
+        "elements": elements_analyses,
+    }
