@@ -39,11 +39,6 @@ def _semelles_pour_dxf(semelles) -> list:
     plat attendu par generer_plan_fondation_dxf() (projets/services/plan_fondation.py) :
     {identifiant, position_x, position_y, cote_cm, hauteur_cm,
     poteau_associe: {identifiant, cote_cm}, [indice_i, indice_j]}.
-
-    indice_i/indice_j sont extraits de l'identifiant "S_<i>_<j>" généré
-    par ProjetViewSet.generer_trame -- absents pour toute semelle créée
-    autrement (ex. saisie manuelle), auquel cas generer_plan_fondation_dxf
-    retombe sur la méthode d'adjacence par position (voir sa docstring).
     """
     resultat = []
     for semelle in semelles:
@@ -75,11 +70,7 @@ def _semelles_pour_dxf(semelles) -> list:
 def _empreinte_niveau_bas(poteaux: list) -> list:
     """
     Filtre extraire_poteaux()/analyser_fichier_ifc() sur le niveau de plus
-    basse élévation (typiquement le RDC) : hypothèse simplificatrice du
-    moteur de trame (voir moteur_calcul/formules/trame.py) selon laquelle
-    tous les niveaux partagent la même empreinte -- la charge multi-niveaux
-    est cumulée séparément via nb_niveaux (dégression, Module 1), pas en
-    créant un jeu d'éléments par étage.
+    basse élévation (typiquement le RDC).
     """
     if not poteaux:
         return []
@@ -97,16 +88,7 @@ _TYPES_OUVRAGES_LINEAIRES = {
 def _ouvrages_lineaires_pour_dxf(elements) -> dict:
     """
     Adapte les ElementStructurel de type poutre/longrine/chaînage
-    identifié (voir Phase C de la feuille de route) vers le format plat
-    attendu par generer_plan_fondation_dxf() :
-    {"poutres": [...], "longrines": [...], "chainages_identifies": [...]}
-    où chaque item est {identifiant, x1, y1, x2, y2, largeur_cm, hauteur_cm}.
-
-    Un ouvrage sans poteau_origine/poteau_destination renseigné (créé
-    avant l'ajout de ces champs, ex. donnée historique) est ignoré ici
-    plutôt que de faire planter tout l'export DXF -- il continue
-    d'exister normalement partout ailleurs (DQE, validation...), juste
-    absent du tracé linéaire du plan de coffrage.
+    identifié vers le format plat attendu par generer_plan_fondation_dxf().
     """
     resultat = {"poutres": [], "longrines": [], "chainages_identifies": []}
     for element in elements:
@@ -131,8 +113,7 @@ def _ouvrages_lineaires_pour_dxf(elements) -> dict:
 
 
 def _entreprise_export_dict(entreprise: "EntrepriseParametres") -> dict:
-    """Convertit le modèle EntrepriseParametres en dict simple pour les
-    exporters (découplés de Django), avec le chemin disque du logo."""
+    """Convertit le modèle EntrepriseParametres en dict simple pour les exporters."""
     logo_path = None
     if entreprise.logo and hasattr(entreprise.logo, "path"):
         try:
@@ -191,8 +172,8 @@ class ProjetViewSet(viewsets.ModelViewSet):
             )
         except (ImportError, ModuleNotFoundError, AttributeError):
             longueur = 2 * (
-                projet.nb_travees_x * projet.portee_x
-                + projet.nb_travees_y * projet.portee_y
+                (projet.nb_travees_x or 2) * (projet.portee_x or 5.0)
+                + (projet.nb_travees_y or 2) * (projet.portee_y or 5.0)
             )
         return Response({"longueur_m": longueur}, status=status.HTTP_200_OK)
 
@@ -200,13 +181,9 @@ class ProjetViewSet(viewsets.ModelViewSet):
     def generer_trame(self, request, pk=None):
         """
         Génère la grille complète de l'ouvrage (poteaux + semelles à
-        chaque nœud, poutres entre nœuds adjacents) à partir de
-        projet.nb_travees_x/y, portee_x/y et hauteur_etage -- toutes déjà
-        calculées (resultat_calcul rempli), en un seul appel.
-
-        Idempotent : régénérer la trame (ex. après modification des
-        paramètres à l'Étape 1) repart d'une grille vierge pour ce
-        projet, plutôt que d'empiler les éléments à chaque appel.
+        chaque nœud, poutres entre nœuds adjacents) à partir des paramètres du projet.
+        
+        Sécurisé contre les valeurs nulles ou manquantes.
         """
         projet = self.get_object()
         projet.elements.all().delete()
@@ -222,13 +199,19 @@ class ProjetViewSet(viewsets.ModelViewSet):
             generer_poteau_sur_grille = None
             generer_poutre_sur_grille = None
 
-        charge_exp = projet.charge_exploitation or 1.5
-        nb_x, nb_y = projet.nb_travees_x, projet.nb_travees_y
-        portee_x, portee_y = projet.portee_x, projet.portee_y
+        # --- Extrait et sécurise les paramètres fondamentaux du projet ---
+        charge_exp = float(projet.charge_exploitation or 1.5)
+        nb_x = int(projet.nb_travees_x or 2)
+        nb_y = int(projet.nb_travees_y or 2)
+        portee_x = float(projet.portee_x or 5.0)
+        portee_y = float(projet.portee_y or 5.0)
+        hauteur_etage = float(projet.hauteur_etage or 3.0)
+        nb_niveaux = int(projet.nb_niveaux or 1)
+        usage_batiment = projet.usage_batiment or "habitations"
 
         poteaux_par_noeud = {}
 
-        # 1. Poteaux + semelles à chaque nœud (i, j) de la grille.
+        # 1. Poteaux + semelles à chaque nœud (i, j)
         for i in range(nb_x + 1):
             for j in range(nb_y + 1):
                 x = i * portee_x
@@ -236,12 +219,12 @@ class ProjetViewSet(viewsets.ModelViewSet):
 
                 if generer_poteau_sur_grille:
                     donnees = generer_poteau_sur_grille(
-                        i, j, portee_x, portee_y, nb_x, nb_y, charge_exp, projet.hauteur_etage,
-                        nb_niveaux=projet.nb_niveaux, usage_batiment=projet.usage_batiment,
+                        i, j, portee_x, portee_y, nb_x, nb_y, charge_exp, hauteur_etage,
+                        nb_niveaux=nb_niveaux, usage_batiment=usage_batiment,
                     )
                     charge_elu = donnees.get("charge_elu_kn", 100.0)
-                    res_poteau = donnees.get("resultat_poteau")
-                    res_semelle = donnees.get("resultat_semelle")
+                    res_poteau = donnees.get("resultat_poteau") or {"cote_cm": 25, "acier_cm2": 4.5}
+                    res_semelle = donnees.get("resultat_semelle") or {"cote_cm": 120, "hauteur_cm": 30}
                 else:
                     charge_elu = 150.0
                     res_poteau = {"cote_cm": 25, "acier_cm2": 4.5}
@@ -254,7 +237,7 @@ class ProjetViewSet(viewsets.ModelViewSet):
                     position=ElementStructurel.Position.SUPERSTRUCTURE,
                     position_x=x,
                     position_y=y,
-                    hauteur_poteau=projet.hauteur_etage,
+                    hauteur_poteau=hauteur_etage,
                     charge_calculee=charge_elu,
                     resultat_calcul=res_poteau,
                 )
@@ -275,17 +258,14 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 )
                 elements_crees.append(semelle)
 
-        # 2. Poutres entre nœuds adjacents (méthode des largeurs
-        #    d'influence : une poutre "intérieure", encadrée par une
-        #    dalle de chaque côté, reprend la portée perpendiculaire
-        #    complète ; une poutre de rive n'en reprend que la moitié).
+        # 2. Poutres selon l'axe X
         for j in range(nb_y + 1):
             for i in range(nb_x):
                 largeur_influence = portee_y if 0 < j < nb_y else portee_y / 2
                 if generer_poutre_sur_grille:
                     donnees = generer_poutre_sur_grille(portee_x, largeur_influence, charge_exp)
-                    charge_lineaire = donnees["charge_lineaire_kn_m"]
-                    res_poutre = donnees["resultat_poutre"]
+                    charge_lineaire = donnees.get("charge_lineaire_kn_m", 20.0)
+                    res_poutre = donnees.get("resultat_poutre") or {"largeur_cm": 20, "hauteur_cm": 40}
                 else:
                     charge_lineaire = 20.0
                     res_poutre = {"largeur_cm": 20, "hauteur_cm": 40}
@@ -305,13 +285,14 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 )
                 elements_crees.append(poutre)
 
+        # 3. Poutres selon l'axe Y
         for i in range(nb_x + 1):
             for j in range(nb_y):
                 largeur_influence = portee_x if 0 < i < nb_x else portee_x / 2
                 if generer_poutre_sur_grille:
                     donnees = generer_poutre_sur_grille(portee_y, largeur_influence, charge_exp)
-                    charge_lineaire = donnees["charge_lineaire_kn_m"]
-                    res_poutre = donnees["resultat_poutre"]
+                    charge_lineaire = donnees.get("charge_lineaire_kn_m", 20.0)
+                    res_poutre = donnees.get("resultat_poutre") or {"largeur_cm": 20, "hauteur_cm": 40}
                 else:
                     charge_lineaire = 20.0
                     res_poutre = {"largeur_cm": 20, "hauteur_cm": 40}
@@ -336,27 +317,6 @@ class ProjetViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser, JSONParser])
     def importer_plan(self, request, pk=None):
-        """
-        Import de plan (Phases A + B -- voir Feuille_de_route_Import_Plan_Automatique.md).
-
-        Deux usages du même endpoint, distingués par le contenu de la requête :
-
-        1) Aperçu (Phase A) -- multipart avec un fichier "fichier" (IFC) :
-           analyse le fichier via Genius (moteur_calcul.import_ifc), stocke le
-           fichier sur le projet (audit + réutilisation en Phase B) et renvoie
-           les paramètres de trame détectés SANS créer aucun ElementStructurel.
-           C'est le frontend (Yves) qui affiche ces valeurs, pré-remplies mais
-           modifiables, dans le formulaire de l'Étape 1.
-
-        2) Confirmation (Phase B) -- JSON {"confirmer": true}, sans fichier :
-           relit le fichier IFC déjà déposé à l'étape 1) et crée les VRAIS
-           éléments (poteaux + semelles + poutres) à leurs positions réelles
-           détectées, en réutilisant projet.hauteur_etage/nb_niveaux/
-           usage_batiment/charge_exploitation tels que corrigés entre-temps
-           par l'utilisateur. Remplace generer_trame/ pour ce chemin --
-           idempotent comme lui (vide les éléments existants avant de
-           recréer).
-        """
         projet = self.get_object()
         fichier = request.FILES.get("fichier")
         confirmer = str(request.data.get("confirmer", "")).strip().lower() in (
@@ -386,7 +346,6 @@ class ProjetViewSet(viewsets.ModelViewSet):
             )
 
         if fichier is not None:
-            # --- Phase A : aperçu, aucun élément créé --------------------
             projet.fichier_import_origine = fichier
             projet.save(update_fields=["fichier_import_origine"])
             try:
@@ -394,10 +353,9 @@ class ProjetViewSet(viewsets.ModelViewSet):
             except (FichierIFCInvalide, AucunPoteauDetecte) as exc:
                 return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-            parametres.pop("poteaux", None)  # détail interne, pas utile côté aperçu
+            parametres.pop("poteaux", None)
             return Response(parametres, status=status.HTTP_200_OK)
 
-        # --- Phase B : confirmation, création réelle ---------------------
         if not projet.fichier_import_origine:
             return Response(
                 {"erreur": "Aucun plan importé au préalable pour ce projet : "
@@ -434,14 +392,6 @@ class ProjetViewSet(viewsets.ModelViewSet):
         poteau_par_guid = {}
         avertissements = list(resultat.get("avertissements", []))
 
-        # Numérotation séquentielle simple (P1, S1, P2, S2...) plutôt que
-        # les 8 premiers caractères du GUID IFC (ex. "P_2izTjP2U") : ces
-        # GUID tronqués sont illisibles pour un utilisateur et, pire, se
-        # concaténaient dans l'identifiant des poutres ci-dessous
-        # ("PX_P_2izTjP2U_P_1dABuTm0"), doublant le problème. Le GUID IFC
-        # d'origine reste consultable si besoin (resultat_calcul le
-        # conserve déjà indirectement via les données de calcul), mais ne
-        # doit plus servir de nom d'affichage.
         compteur_poteau = 0
 
         for p in empreinte:
@@ -489,7 +439,7 @@ class ProjetViewSet(viewsets.ModelViewSet):
             origine = poteau_par_guid.get(pd["poteau_origine_guid"])
             destination = poteau_par_guid.get(pd["poteau_destination_guid"])
             if origine is None or destination is None:
-                continue  # un des deux poteaux a été écarté ci-dessus (surface invalide)
+                continue
 
             compteur_poutre += 1
             prefixe = "PX" if pd["axe"] == "x" else "PY"
@@ -516,10 +466,6 @@ class ProjetViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser])
     def analyser_plan_image(self, request, pk=None):
-        """
-        POST /api/projets/{id}/analyser_plan_image/
-        Analyse de plan 2D au format image (JPEG/PNG) en mode APERÇU uniquement (Phase A).
-        """
         projet = self.get_object()
 
         fichier = request.FILES.get("fichier")
@@ -529,7 +475,6 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Validation de la taille maximale du fichier avant lecture en mémoire
         max_bytes = getattr(settings, "PLAN_IMAGE_MAX_BYTES", 5 * 1024 * 1024)
         if fichier.size > max_bytes:
             return Response(
@@ -559,15 +504,6 @@ class ProjetViewSet(viewsets.ModelViewSet):
     def plan_fondation(self, request, pk=None):
         """
         GET /api/projets/{id}/plan_fondation/[?export=dxf]
-
-        Note : le paramètre s'appelle "export" (et non "format") --
-        "format" est réservé par la négociation de contenu de DRF : une
-        valeur ne correspondant à aucun renderer enregistré (json, api)
-        y déclenche un Http404 avant même d'atteindre ce code (bug
-        pré-existant, découvert en testant l'endpoint réel plutôt que la
-        seule fonction generer_plan_fondation_dxf() -- voir test_dqe.py
-        pour generer_dqe/, qui utilisait déjà "export" et n'avait donc
-        pas le problème).
         """
         projet = self.get_object()
         export_format = request.query_params.get("export")
@@ -601,6 +537,7 @@ class ProjetViewSet(viewsets.ModelViewSet):
             response["Content-Disposition"] = (
                 f'attachment; filename="Plan_fondation_{projet.id}.dxf"'
             )
+            response["Access-Control-Expose-Headers"] = "Content-Disposition"
             return response
 
         serializer = ElementStructurelSerializer(semelles, many=True)
@@ -756,13 +693,6 @@ class PosteComplementaireViewSet(viewsets.ModelViewSet):
 
 
 class EntrepriseParametresView(APIView):
-    """
-    Paramètres d'en-tête (logo + coordonnées) utilisés sur les exports DQE.
-    Un seul jeu de paramètres par installation (singleton) : GET le crée
-    à la volée s'il n'existe pas encore, PUT/PATCH le met à jour.
-    Envoyer en multipart/form-data pour inclure un fichier "logo".
-    """
-
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
