@@ -28,6 +28,11 @@ from .services.assistant_ia.explanations import expliquer_resultat_element
 from .services.assistant_ia.postes import suggerer_poste_complementaire
 from .services.assistant_ia.client import LLMServiceError
 from .services.assistant_ia.vision import analyser_plan_2d
+from .services.assistant_ia import (
+    analyser_projet_coherence,
+    analyser_element_coherence,
+    expliquer_analyse_coherence,
+)
 from moteur_calcul.validators import EntreeInvalide
 
 logger = logging.getLogger(__name__)
@@ -140,7 +145,7 @@ class ProjetViewSet(viewsets.ModelViewSet):
     serializer_class = ProjetSerializer
 
     def get_permissions(self):
-        if self.action == "analyser_plan_image":
+        if self.action in ("analyser_plan_image", "analyse_coherence"):
             if os.getenv("DEMO_MODE", "False").lower() == "true":
                 return [AllowAny()]
             return [IsAuthenticated()]
@@ -151,6 +156,19 @@ class ProjetViewSet(viewsets.ModelViewSet):
             self.throttle_scope = "assistant_vision"
             return [ScopedRateThrottle()]
         return super().get_throttles()
+
+    @action(detail=True, methods=["get"], url_path="analyse-coherence", url_name="analyse-coherence")
+    def analyse_coherence(self, request, pk=None):
+        projet = self.get_object()
+        try:
+            resultat = analyser_projet_coherence(projet)
+            return Response(resultat, status=status.HTTP_200_OK)
+        except Exception as exc:
+            logger.exception("Erreur lors de l'analyse de cohérence du projet")
+            return Response(
+                {"detail": "Une erreur interne est survenue lors de l'analyse de cohérence."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=["post"])
     def recalculer(self, request, pk=None):
@@ -618,6 +636,33 @@ class ProjetViewSet(viewsets.ModelViewSet):
 class ElementStructurelViewSet(viewsets.ModelViewSet):
     queryset = ElementStructurel.objects.all()
     serializer_class = ElementStructurelSerializer
+
+    def get_permissions(self):
+        if self.action == "expliquer_coherence":
+            if os.getenv("DEMO_MODE", "False").lower() == "true":
+                return [AllowAny()]
+            return [IsAuthenticated()]
+        return super().get_permissions()
+
+    def get_throttles(self):
+        if self.action == "expliquer_coherence":
+            self.throttle_scope = "assistant_coherence"
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
+
+    @action(detail=True, methods=["post"], url_path="expliquer-coherence", url_name="expliquer-coherence")
+    def expliquer_coherence(self, request, pk=None):
+        element = self.get_object()
+        try:
+            analyse = analyser_element_coherence(element)
+            resultat = expliquer_analyse_coherence(analyse)
+            return Response(resultat, status=status.HTTP_200_OK)
+        except Exception as exc:
+            logger.exception("Erreur lors de l'explication de cohérence de l'élément")
+            return Response(
+                {"detail": "Une erreur interne est survenue lors de l'explication de cohérence."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=["post"])
     def calculer(self, request, pk=None):
