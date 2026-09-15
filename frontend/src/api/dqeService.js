@@ -179,6 +179,14 @@ export const dqeService = {
     return data;
   },
 
+  // Explication d'une alerte de cohérence par Gemini IA (Partie B2)
+  expliquerCoherenceElement: async (elementId) => {
+    if (!elementId) {
+      throw new Error("elementId manquant -- impossible d'expliquer la cohérence sans elementId.");
+    }
+    return postJSON(`${API_BASE_URL}/elements/${elementId}/expliquer-coherence/`, undefined);
+  },
+
   // Postes complémentaires (Jour 2.1)
   listerPostesComplementaires: async (projetId) => {
     if (!projetId) return [];

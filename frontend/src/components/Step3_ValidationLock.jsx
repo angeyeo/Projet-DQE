@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, Unlock, ShieldAlert, ArrowLeft, ArrowRight, Edit3, ShieldCheck, HardHat, Plus, Trash2, Activity, Loader2, AlertTriangle, CheckCircle2, Info, RefreshCw } from 'lucide-react';
+import { Lock, Unlock, ShieldAlert, ArrowLeft, ArrowRight, Edit3, ShieldCheck, HardHat, Plus, Trash2, Activity, Loader2, AlertTriangle, CheckCircle2, Info, RefreshCw, Sparkles } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
+
+const STATUTS_AVEC_EXPLICATION_IA = ['CRITIQUE', 'ATTENTION', 'INFORMATION'];
 
 const STATUT_ANALYSIS_MAP = {
   CRITIQUE: { label: 'CRITIQUE', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.15)', border: 'rgba(239, 68, 68, 0.4)' },
@@ -66,6 +68,29 @@ export default function Step3_ValidationLock({
     const ok = await toggleLockAll(targetState);
     if (ok && activeProjetId) {
       await fetchCoherence();
+    }
+  };
+
+  const [explicationsMap, setExplicationsMap] = useState({});
+  const [loadingExplications, setLoadingExplications] = useState({});
+  const [errorExplications, setErrorExplications] = useState({});
+
+  const handleExpliquerElement = async (elementId) => {
+    if (!elementId || loadingExplications[elementId]) return;
+
+    setLoadingExplications((prev) => ({ ...prev, [elementId]: true }));
+    setErrorExplications((prev) => ({ ...prev, [elementId]: null }));
+
+    try {
+      const res = await dqeService.expliquerCoherenceElement(elementId);
+      setExplicationsMap((prev) => ({ ...prev, [elementId]: res }));
+    } catch (err) {
+      setErrorExplications((prev) => ({
+        ...prev,
+        [elementId]: "Impossible d'obtenir l'explication IA pour le moment."
+      }));
+    } finally {
+      setLoadingExplications((prev) => ({ ...prev, [elementId]: false }));
     }
   };
 
@@ -312,6 +337,10 @@ export default function Step3_ValidationLock({
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 {coherenceData.elements.map((el) => {
                   const styleCfg = STATUT_ANALYSIS_MAP[el.statut_analyse] || STATUT_ANALYSIS_MAP.CALCUL_NON_DISPONIBLE;
+                  const canExplain = STATUTS_AVEC_EXPLICATION_IA.includes(el.statut_analyse);
+                  const explicationResult = explicationsMap[el.element_id];
+                  const isLoadingExpl = !!loadingExplications[el.element_id];
+                  const errExpl = errorExplications[el.element_id];
                   return (
                     <div key={el.element_id} style={{ padding: '1rem 1.25rem', borderRadius: '12px', background: 'rgba(30, 41, 59, 0.7)', border: `1px solid ${styleCfg.border}` }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -354,10 +383,87 @@ export default function Step3_ValidationLock({
                         </div>
                       )}
 
-                      {el.validation_humaine_requise && (
+                      {el.validation_humaine_requise && !explicationResult && (
                         <div style={{ marginTop: '0.75rem', fontSize: '0.78rem', color: '#94a3b8', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                           <Info size={14} color="#60a5fa" />
                           <span>Une vérification humaine par l’ingénieur structure est requise.</span>
+                        </div>
+                      )}
+
+                      {/* Section Explication IA (si éligible : CRITIQUE, ATTENTION, INFORMATION) */}
+                      {canExplain && (
+                        <div style={{ marginTop: '0.75rem' }}>
+                          {!explicationResult && (
+                            <button
+                              className="btn btn-secondary"
+                              style={{
+                                padding: '0.4rem 0.85rem',
+                                fontSize: '0.8rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.4rem',
+                                border: '1px solid rgba(99, 102, 241, 0.4)',
+                                background: 'rgba(99, 102, 241, 0.15)',
+                                color: '#a5b4fc',
+                              }}
+                              disabled={isLoadingExpl}
+                              onClick={() => handleExpliquerElement(el.element_id)}
+                            >
+                              {isLoadingExpl ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} color="#818cf8" />}
+                              <span>{isLoadingExpl ? 'Explication en cours...' : 'Expliquer avec l’IA'}</span>
+                            </button>
+                          )}
+
+                          {errExpl && (
+                            <div style={{ marginTop: '0.5rem', padding: '0.6rem 0.85rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', fontSize: '0.82rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                              <span>{errExpl}</span>
+                              <button
+                                className="btn btn-secondary"
+                                style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
+                                onClick={() => handleExpliquerElement(el.element_id)}
+                              >
+                                Réessayer
+                              </button>
+                            </div>
+                          )}
+
+                          {explicationResult && (
+                            <div style={{ marginTop: '0.75rem', padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.85)', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#c7d2fe', fontWeight: 700, fontSize: '0.85rem' }}>
+                                  <Sparkles size={16} color="#818cf8" />
+                                  <span>Explication IA</span>
+                                </div>
+                                {explicationResult.source_explication === 'GEMINI' && (
+                                  <span style={{ fontSize: '0.72rem', fontWeight: 600, padding: '0.15rem 0.5rem', borderRadius: '10px', background: 'rgba(16, 185, 129, 0.15)', color: '#6ee7b7', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                                    Source : Gemini
+                                  </span>
+                                )}
+                                {explicationResult.source_explication === 'MOCK' && (
+                                  <span style={{ fontSize: '0.72rem', fontWeight: 600, padding: '0.15rem 0.5rem', borderRadius: '10px', background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+                                    Source : Simulation locale
+                                  </span>
+                                )}
+                              </div>
+
+                              {explicationResult.explication_ia ? (
+                                <p style={{ fontSize: '0.85rem', color: '#e2e8f0', lineHeight: '1.45', margin: '0 0 0.5rem 0' }}>
+                                  {explicationResult.explication_ia}
+                                </p>
+                              ) : (
+                                <p style={{ fontSize: '0.83rem', color: '#94a3b8', fontStyle: 'italic', margin: '0 0 0.5rem 0' }}>
+                                  L'explication IA n'est pas disponible pour le moment. Le contrôle de cohérence reste disponible ci-dessus.
+                                </p>
+                              )}
+
+                              {explicationResult.validation_humaine_requise && (
+                                <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: '#94a3b8', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                  <Info size={14} color="#60a5fa" />
+                                  <span>{explicationResult.message_validation || "Cette analyse nécessite une vérification humaine par l’ingénieur structure."}</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
