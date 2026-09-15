@@ -206,6 +206,7 @@ class TestPressionSolSmelleFilante(_BaseCoherenceTest):
             resultat_valide={
                 "condition_respectee": False,
                 "pression_reelle_kn_m2": 220.0,
+                "contrainte_sol": 180.0,
                 "hypothese_sol": False,
             },
         )
@@ -214,6 +215,24 @@ class TestPressionSolSmelleFilante(_BaseCoherenceTest):
         signal = [s for s in result["signaux"]
                   if s["code"] == "PRESSION_SOL_DEPASSEE"][0]
         self.assertEqual(signal["valeur_mesuree"], 220.0)
+        self.assertEqual(signal["valeur_limite"], 180.0)
+        self.assertEqual(signal["unite"], "kN/m²")
+
+    def test_semelle_filante_contrainte_sol_absente(self):
+        """Semelle filante : contrainte_sol absente → valeur_limite is None."""
+        el = self._creer_element(
+            "semelle_filante",
+            resultat_valide={
+                "condition_respectee": False,
+                "pression_reelle_kn_m2": 220.0,
+                "hypothese_sol": False,
+            },
+        )
+        result = analyser_element_coherence(el)
+        signal = [s for s in result["signaux"]
+                  if s["code"] == "PRESSION_SOL_DEPASSEE"][0]
+        self.assertEqual(signal["valeur_mesuree"], 220.0)
+        self.assertIsNone(signal["valeur_limite"])
         self.assertEqual(signal["unite"], "kN/m²")
 
     def test_semelle_filante_hypothese_sol(self):

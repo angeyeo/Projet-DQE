@@ -141,7 +141,9 @@ def _verifier_pression_sol_semelle(resultat):
             )
             if pression_kn is not None:
                 valeur_mesuree = pression_kn
-                # contrainte_sol n'est pas dans le dict retourné par le moteur
+                valeur_limite = _valeur_numerique_ou_none(
+                    resultat, "contrainte_sol"
+                )
                 unite = "kN/m²"
 
         signaux.append({

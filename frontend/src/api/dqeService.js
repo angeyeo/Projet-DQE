@@ -133,6 +133,60 @@ export const dqeService = {
     return postJSON(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, { confirmer: true });
   },
 
+  // Analyse de plan par Vision IA (Gemini Vision)
+  analyserPlanImage: async (projetId, file) => {
+    if (!projetId) {
+      throw new Error("Aucun projet actif -- impossible d'analyser une image sans projetId.");
+    }
+    const formData = new FormData();
+    formData.append('fichier', file);
+    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/analyser_plan_image/`, {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const msg = (data && (data.erreur || data.detail)) || (
+        response.status === 413
+          ? "L'image envoyée est trop volumineuse."
+          : response.status === 429
+          ? "Trop de requêtes effectuées. Veuillez patienter avant de réessayer."
+          : response.status === 400
+          ? "Fichier ou format d'image non supporté."
+          : `Erreur ${response.status}`
+      );
+      const err = new Error(msg);
+      err.status = response.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  },
+
+  // Analyse de cohérence globale du projet (Partie B1 - Déterministe)
+  analyserCoherenceProjet: async (projetId) => {
+    if (!projetId) {
+      throw new Error("Aucun projet actif -- impossible d'analyser la cohérence sans projetId.");
+    }
+    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/analyse-coherence/`);
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
+      err.status = response.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  },
+
+  // Explication d'une alerte de cohérence par Gemini IA (Partie B2)
+  expliquerCoherenceElement: async (elementId) => {
+    if (!elementId) {
+      throw new Error("elementId manquant -- impossible d'expliquer la cohérence sans elementId.");
+    }
+    return postJSON(`${API_BASE_URL}/elements/${elementId}/expliquer-coherence/`, undefined);
+  },
+
   // Postes complémentaires (Jour 2.1)
   listerPostesComplementaires: async (projetId) => {
     if (!projetId) return [];

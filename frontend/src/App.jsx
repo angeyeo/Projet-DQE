@@ -168,7 +168,7 @@ export default function App() {
   const toggleLock = async (id, category) => {
     const key = categoryToKey(category);
     const item = (sections[key] || []).find((el) => el.id === id);
-    if (!item) return;
+    if (!item) return false;
 
     setValidationError(null);
     let resultatManuel = null;
@@ -178,7 +178,7 @@ export default function App() {
         const manuel = buildResultatManuel(item, category);
         if (manuel.error) {
           setValidationError(`${item.name} : ${manuel.error}`);
-          return;
+          return false;
         }
         resultatManuel = manuel.value;
       }
@@ -189,7 +189,7 @@ export default function App() {
       } catch (err) {
         setValidationError(`Impossible de valider ${item.name} : ${err.message}`);
         setValidatingId(null);
-        return;
+        return false;
       }
       setValidatingId(null);
     }
@@ -208,6 +208,7 @@ export default function App() {
         return updated;
       }),
     }));
+    return true;
   };
 
   const toggleLockAll = async (lockState) => {
@@ -228,7 +229,7 @@ export default function App() {
           const manuel = buildResultatManuel(el, category);
           if (manuel.error) {
             setValidationError(`${el.name} : ${manuel.error}`);
-            return;
+            return false;
           }
           manuels.set(el.elementId, manuel.value);
         }
@@ -242,7 +243,7 @@ export default function App() {
         );
       } catch (err) {
         setValidationError(`Erreur lors de la validation groupée : ${err.message}`);
-        return;
+        return false;
       }
 
       setSections((prev) => ({
@@ -263,7 +264,7 @@ export default function App() {
             : { ...el, locked: true }
         ),
       }));
-      return;
+      return true;
     }
 
     setSections((prev) => ({
@@ -272,6 +273,7 @@ export default function App() {
       poutres: prev.poutres.map((item) => ({ ...item, locked: lockState })),
       semelles: prev.semelles.map((item) => ({ ...item, locked: lockState })),
     }));
+    return true;
   };
 
   const updateSection = (id, category, field, value) => {
@@ -350,6 +352,7 @@ export default function App() {
           {activeView === 'step3' && (
             <Step3_ValidationLock
               sections={sections}
+              projetId={sections?.projetId || projectData?.id}
               toggleLock={toggleLock}
               toggleLockAll={toggleLockAll}
               updateSection={updateSection}
