@@ -163,6 +163,22 @@ export const dqeService = {
     return data;
   },
 
+  // Analyse de cohérence globale du projet (Partie B1 - Déterministe)
+  analyserCoherenceProjet: async (projetId) => {
+    if (!projetId) {
+      throw new Error("Aucun projet actif -- impossible d'analyser la cohérence sans projetId.");
+    }
+    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/analyse-coherence/`);
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
+      err.status = response.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  },
+
   // Postes complémentaires (Jour 2.1)
   listerPostesComplementaires: async (projetId) => {
     if (!projetId) return [];
