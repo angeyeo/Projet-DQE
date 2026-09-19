@@ -30,6 +30,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
   const [analysisSuccess, setAnalysisSuccess] = useState(false);
+  const [analysisWarnings, setAnalysisWarnings] = useState([]);
 
   useEffect(() => {
     if (!projectData.chargeExploitation && projectData.typeUsage) {
@@ -45,7 +46,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
 
     const file = files[0];
     const ext = file.name.split('.').pop().toLowerCase();
-    const isImage = ['jpg', 'jpeg', 'png', 'webp'].includes(ext);
+    const isImage = ['jpg', 'jpeg', 'png'].includes(ext);
     const isIfc = ext === 'ifc';
     const isCAD = ['pln', 'pl', 'pdf'].includes(ext);
 
@@ -56,6 +57,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
 
     setAnalysisError(null);
     setAnalysisSuccess(false);
+    setAnalysisWarnings([]);
     updateProjectData({
       planFileName: file.name,
       planFileSize: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
@@ -84,6 +86,14 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           hauteurEtage: params.hauteur_etage ?? projectData.hauteurEtage,
           ifcImporte: true,
         });
+        // Le backend (detecter_parametres_trame) calcule des avertissements
+        // explicites quand la grille détectée est irrégulière (nb de poteaux
+        // incohérent avec une grille parfaite, portées ou hauteurs d'étage trop
+        // variables...). Ils existaient déjà côté API mais n'étaient jamais
+        // affichés : l'utilisateur voyait "575 poteaux" comme une donnée fiable
+        // alors que le fichier n'en contenait réellement que 72, sans aucune
+        // indication que la grille était une approximation.
+        setAnalysisWarnings(params.avertissements || []);
         setAnalysisSuccess(true);
       } catch (err) {
         setAnalysisError(`Erreur d'import IFC : ${err.message || "Impossible d'extraire le plan"}`);
@@ -93,22 +103,21 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       return;
     }
 
-    // Traitement Vision IA si c'est une image de plan
-    if (isImage && projectData.id) {
+    // Traitement Vision IA si c'est une image de plan (Aperçu uniquement, aucune mutation des paramètres du projet)
+    if (isImage) {
       setAnalyzing(true);
+      setAnalysisError(null);
       try {
-        const result = await dqeService.analyserPlanImage(projectData.id, file);
-        if (result && result.parametres_detectes) {
-          const params = result.parametres_detectes;
-          updateProjectData({
-            nbTraveesX: params.nb_travees_x || projectData.nbTraveesX,
-            nbTraveesY: params.nb_travees_y || projectData.nbTraveesY,
-            porteeX: params.portee_x || projectData.porteeX,
-            porteeY: params.portee_y || projectData.porteeY,
-            nombreNiveaux: params.nombre_niveaux || projectData.nombreNiveaux,
-          });
-          setAnalysisSuccess(true);
+        let projetId = projectData.id;
+        if (!projetId) {
+          const projet = await dqeService.createProjet(projectData);
+          projetId = projet.id;
+          updateProjectData({ id: projetId });
         }
+
+        const result = await dqeService.analyserPlanImage(projetId, file);
+        updateProjectData({ visionResult: result });
+        setAnalysisSuccess(true);
       } catch (err) {
         setAnalysisError(`Erreur d'analyse IA : ${err.message || "Impossible d'extraire le plan"}`);
       } finally {
@@ -116,6 +125,8 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       }
     }
   };
+
+  const vision = projectData.visionResult;
 
   return (
     <div className="glass-panel">
@@ -157,7 +168,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
             </div>
             {analysisSuccess && (
               <p style={{ fontSize: '0.85rem', color: '#6ee7b7', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
-                <CheckCircle2 size={16} /> Paramètres extraits avec succès par l'IA !
+                <CheckCircle2 size={16} /> Annotations du plan détectées automatiquement — vérification humaine requise.
               </p>
             )}
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
@@ -174,7 +185,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
             </p>
             <label className="btn btn-secondary">
               Parcourir les fichiers
-              <input type="file" accept="image/*,.ifc,.pln,.pl,.pdf" onChange={handleFileUpload} style={{ display: 'none' }} />
+              <input type="file" accept="image/png,image/jpeg,.ifc,.pln,.pl,.pdf" onChange={handleFileUpload} style={{ display: 'none' }} />
             </label>
           </div>
         )}
@@ -184,6 +195,89 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fca5a5', fontSize: '0.88rem' }}>
           <AlertCircle size={18} color="#ef4444" />
           <span>{analysisError}</span>
+        </div>
+      )}
+
+      {/* Gemini Vision Results Panel */}
+      {vision && (
+        <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(59, 130, 246, 0.3)', marginBottom: '2rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <FileText size={20} color="#60a5fa" />
+              <h4 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
+                Éléments détectés sur le plan (Aperçu Vision)
+              </h4>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: vision.source === 'GEMINI' ? 'rgba(99, 102, 241, 0.2)' : 'rgba(245, 158, 11, 0.2)', color: vision.source === 'GEMINI' ? '#a5b4fc' : '#fcd34d', border: vision.source === 'GEMINI' ? '1px solid rgba(99, 102, 241, 0.4)' : '1px solid rgba(245, 158, 11, 0.4)' }}>
+                Source : {vision.source || 'GEMINI'}
+              </span>
+              {vision.validation_humaine_requise && (
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                  Une vérification humaine est requise.
+                </span>
+              )}
+            </div>
+          </div>
+
+          {vision.source === 'FALLBACK_LOCAL' && (
+            <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', marginBottom: '1rem', color: '#fcd34d', fontSize: '0.85rem' }}>
+              L'analyse automatique du plan n'est pas disponible pour le moment.
+            </div>
+          )}
+
+          {/* Annotations lues */}
+          {Array.isArray(vision.annotations_lues) && vision.annotations_lues.length > 0 ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+              {vision.annotations_lues.map((ann, idx) => (
+                <div key={idx} style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                    <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#38bdf8' }}>{ann.repere || ann.texte_lu}</span>
+                    <span style={{ fontSize: '0.75rem', textTransform: 'capitalize', padding: '0.15rem 0.4rem', borderRadius: '4px', background: 'rgba(56, 189, 248, 0.15)', color: '#7dd3fc' }}>
+                      {ann.type_normalise || 'Élément'}
+                    </span>
+                  </div>
+                  {ann.dimensions_parsees && Array.isArray(ann.dimensions_parsees.valeurs) && ann.dimensions_parsees.valeurs.length > 0 && (
+                    <div style={{ fontSize: '0.8rem', color: '#cbd5e1', marginTop: '0.25rem' }}>
+                      Dimensions : {ann.dimensions_parsees.valeurs.join(' × ')} {ann.dimensions_parsees.unite || ''}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ fontSize: '0.85rem', color: '#94a3b8', margin: 0 }}>Aucun élément reconnu avec certitude sur ce plan.</p>
+          )}
+
+          {/* Textes non classés */}
+          {Array.isArray(vision.textes_non_classes) && vision.textes_non_classes.length > 0 && (
+            <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(148, 163, 184, 0.15)' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#94a3b8', marginBottom: '0.5rem' }}>
+                Textes détectés non classés :
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                {vision.textes_non_classes.map((txt, idx) => (
+                  <span key={idx} style={{ fontSize: '0.75rem', background: 'rgba(51, 65, 85, 0.6)', color: '#cbd5e1', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(148, 163, 184, 0.2)' }}>
+                    {txt}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {analysisWarnings.length > 0 && (
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.35)', marginBottom: '1.5rem', color: '#fcd34d', fontSize: '0.85rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+            <AlertCircle size={18} color="#f59e0b" />
+            <span>Trame détectée approximative -- à vérifier avant de continuer</span>
+          </div>
+          <ul style={{ margin: 0, paddingLeft: '1.4rem' }}>
+            {analysisWarnings.map((w, idx) => (
+              <li key={idx} style={{ marginBottom: '0.3rem' }}>{w}</li>
+            ))}
+          </ul>
         </div>
       )}
 

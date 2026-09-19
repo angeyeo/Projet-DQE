@@ -96,8 +96,18 @@ export default function App() {
       setActiveView('step2');
     } catch (err) {
       console.error("Erreur lors du calcul :", err);
-      // Fallback vers l'écran 2 même si les données sont partielles
-      setActiveView('step2');
+      // Ancien comportement : on avançait quand même vers step2 malgré l'échec.
+      // Problème : sections.projetId n'est alors jamais renseigné (sections
+      // garde sa valeur initiale {poteaux:[], poutres:[], semelles:[]}), ce qui
+      // fait échouer silencieusement StepPlanFondation plus loin dans le
+      // parcours (chargerPlanFondation() ne se déclenche jamais sans projetId,
+      // et le téléchargement DXF échoue aussi) -- sans qu'aucun message n'aide
+      // à comprendre pourquoi. On informe maintenant l'utilisateur et on reste
+      // sur l'étape courante plutôt que d'avancer vers un état cassé.
+      alert(
+        "Impossible de lancer le calcul : " + (err.message || "erreur inconnue") +
+        "\n\nVous êtes maintenu sur cette étape -- corrigez le problème (ou réessayez) avant de continuer."
+      );
     }
   };
 
@@ -158,7 +168,7 @@ export default function App() {
   const toggleLock = async (id, category) => {
     const key = categoryToKey(category);
     const item = (sections[key] || []).find((el) => el.id === id);
-    if (!item) return;
+    if (!item) return false;
 
     setValidationError(null);
     let resultatManuel = null;
@@ -168,7 +178,7 @@ export default function App() {
         const manuel = buildResultatManuel(item, category);
         if (manuel.error) {
           setValidationError(`${item.name} : ${manuel.error}`);
-          return;
+          return false;
         }
         resultatManuel = manuel.value;
       }
@@ -179,7 +189,7 @@ export default function App() {
       } catch (err) {
         setValidationError(`Impossible de valider ${item.name} : ${err.message}`);
         setValidatingId(null);
-        return;
+        return false;
       }
       setValidatingId(null);
     }
@@ -198,6 +208,7 @@ export default function App() {
         return updated;
       }),
     }));
+    return true;
   };
 
   const toggleLockAll = async (lockState) => {
@@ -218,7 +229,7 @@ export default function App() {
           const manuel = buildResultatManuel(el, category);
           if (manuel.error) {
             setValidationError(`${el.name} : ${manuel.error}`);
-            return;
+            return false;
           }
           manuels.set(el.elementId, manuel.value);
         }
@@ -232,7 +243,7 @@ export default function App() {
         );
       } catch (err) {
         setValidationError(`Erreur lors de la validation groupée : ${err.message}`);
-        return;
+        return false;
       }
 
       setSections((prev) => ({
@@ -253,7 +264,7 @@ export default function App() {
             : { ...el, locked: true }
         ),
       }));
-      return;
+      return true;
     }
 
     setSections((prev) => ({
@@ -262,6 +273,7 @@ export default function App() {
       poutres: prev.poutres.map((item) => ({ ...item, locked: lockState })),
       semelles: prev.semelles.map((item) => ({ ...item, locked: lockState })),
     }));
+    return true;
   };
 
   const updateSection = (id, category, field, value) => {
@@ -340,6 +352,7 @@ export default function App() {
           {activeView === 'step3' && (
             <Step3_ValidationLock
               sections={sections}
+              projetId={sections?.projetId || projectData?.id}
               toggleLock={toggleLock}
               toggleLockAll={toggleLockAll}
               updateSection={updateSection}
