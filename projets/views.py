@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -32,6 +33,7 @@ from .services.assistant_ia import (
     analyser_projet_coherence,
     analyser_element_coherence,
     expliquer_analyse_coherence,
+    enregistrer_appel_ia,
 )
 from moteur_calcul.validators import EntreeInvalide
 
@@ -502,17 +504,39 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             )
 
+        t0 = time.time()
         try:
             image_bytes = fichier.read()
             mime_type = fichier.content_type
 
             resultat = analyser_plan_2d(image_bytes, mime_type)
             resultat["mode_import"] = "VISION"
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint=f"/api/projets/{pk}/analyser-plan/",
+                source=resultat.get("source", "MOCK"),
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(resultat, status=status.HTTP_200_OK)
         except ValueError as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint=f"/api/projets/{pk}/analyser-plan/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as exc:
             logger.exception("Erreur inattendue lors de l'analyse de l'image du plan")
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint=f"/api/projets/{pk}/analyser-plan/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(
                 {"detail": "Une erreur interne est survenue lors du traitement de l'image."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -653,12 +677,29 @@ class ElementStructurelViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="expliquer-coherence", url_name="expliquer-coherence")
     def expliquer_coherence(self, request, pk=None):
         element = self.get_object()
+        t0 = time.time()
         try:
             analyse = analyser_element_coherence(element)
             resultat = expliquer_analyse_coherence(analyse)
+            duree_ms = int((time.time() - t0) * 1000)
+            raw_src = resultat.get("source_explication", "LOCAL")
+            source = "FALLBACK_LOCAL" if raw_src == "LOCAL" else raw_src
+            enregistrer_appel_ia(
+                endpoint=f"/api/elements/{pk}/expliquer-coherence/",
+                source=source,
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(resultat, status=status.HTTP_200_OK)
         except Exception as exc:
             logger.exception("Erreur lors de l'explication de cohérence de l'élément")
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint=f"/api/elements/{pk}/expliquer-coherence/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(
                 {"detail": "Une erreur interne est survenue lors de l'explication de cohérence."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -782,15 +823,37 @@ class AssistantStructurerView(APIView):
                 {"detail": "La description ne doit pas dépasser 1000 caractères."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        t0 = time.time()
         try:
             res = structurer_description_projet(description)
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/structurer-projet/",
+                source=res.get("source", "MOCK"),
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(res, status=status.HTTP_200_OK)
         except LLMServiceError as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/structurer-projet/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(
                 {"detail": str(exc), "code": exc.code},
                 status=exc.status_code,
             )
         except Exception as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/structurer-projet/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -816,6 +879,7 @@ class AssistantExpliquerView(APIView):
                 {"detail": "Cet élément n'a aucun calcul disponible à expliquer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        t0 = time.time()
         try:
             elem_payload = {
                 "repere": element.identifiant,
@@ -830,13 +894,34 @@ class AssistantExpliquerView(APIView):
                 "resultats": element.resultat_calcul or {},
             }
             res = expliquer_resultat_element(elem_payload)
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/expliquer-element/",
+                source=res.get("source", "MOCK"),
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(res, status=status.HTTP_200_OK)
         except LLMServiceError as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/expliquer-element/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(
                 {"detail": str(exc), "code": exc.code},
                 status=exc.status_code,
             )
         except Exception as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/expliquer-element/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -861,18 +946,47 @@ class AssistantSuggererPosteView(APIView):
                 {"detail": "La description ne doit pas dépasser 500 caractères."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        t0 = time.time()
         try:
             res = suggerer_poste_complementaire(description)
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/suggerer-poste/",
+                source=res.get("source", "MOCK"),
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(res, status=status.HTTP_200_OK)
         except LLMServiceError as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/suggerer-poste/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(
                 {"detail": str(exc), "code": exc.code},
                 status=exc.status_code,
             )
         except ValueError as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/suggerer-poste/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as exc:
             logger.exception("Erreur inattendue dans AssistantSuggererPosteView")
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/suggerer-poste/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(
                 {"detail": "Erreur interne du service d'assistance IA."},
                 status=status.HTTP_502_BAD_GATEWAY,
