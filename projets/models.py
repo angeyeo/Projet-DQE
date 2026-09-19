@@ -297,35 +297,3 @@ class EntrepriseParametres(models.Model):
 
     def __str__(self):
         return self.nom or "Paramètres entreprise"
-
-
-class JournalAppelIA(models.Model):
-    """
-    Journal de traçabilité des appels aux services IA (Gemini, Mock, Fallback Local).
-    """
-
-    class Source(models.TextChoices):
-        MOCK = "MOCK", "Mock Client"
-        GEMINI = "GEMINI", "Gemini AI"
-        FALLBACK_LOCAL = "FALLBACK_LOCAL", "Fallback Local"
-
-    utilisateur = models.ForeignKey(
-        "auth.User",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="appels_ia",
-    )
-    endpoint = models.CharField(max_length=255)
-    source = models.CharField(max_length=30, choices=Source.choices)
-    duree_ms = models.IntegerField(null=True, blank=True)
-    date_appel = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        verbose_name = "Journal d'appel IA"
-        verbose_name_plural = "Journaux d'appels IA"
-        ordering = ["-date_appel"]
-
-    def __str__(self):
-        user_str = self.utilisateur.username if self.utilisateur else "Anonyme"
-        return f"[{self.source}] {self.endpoint} par {user_str} le {self.date_appel:%Y-%m-%d %H:%M:%S}"

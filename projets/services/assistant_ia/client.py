@@ -151,13 +151,6 @@ class MockAIClient(BaseAIClient):
             return json.dumps(data)
 
         else:
-            if "Signaux détectés" in prompt:
-                repere = "E1"
-                match_rep = re.search(r"Identifiant : ([^\n]+)", prompt)
-                if match_rep:
-                    repere = match_rep.group(1).strip()
-                return f"L'analyse de cohérence pour l'élément {repere} fait état de signaux nécessitant l'attention de l'ingénieur."
-
             # Simulation d'explication
             repere = "E1"
             match_rep = re.search(r"Repère : (\w+)", prompt)

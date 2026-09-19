@@ -70,20 +70,3 @@ Règles de sécurité absolues :
 4. N'essaye pas de normaliser les types ou de parser les dimensions. Retourne uniquement les textes bruts et les repères.
 5. Réponds uniquement avec le JSON. Pas de texte explicatif avant ou après.
 """
-
-PROMPT_COHERENCE = """Tu es un assistant ingénieur en structure BTP. Ton rôle est de rédiger une explication technique synthétique (1 à 2 phrases maximum) en français concernant les signaux de cohérence détectés sur un élément structurel.
-
-Voici les données de l'analyse :
-- Identifiant : {identifiant}
-- Type d'élément : {type_element}
-- Statut d'analyse : {statut_analyse}
-- Signaux détectés : {signaux}
-
-Consignes strictes pour la rédaction :
-1. Rédige un texte court (1 à 2 phrases maximum) en français clair.
-2. Explique uniquement les signaux fournis dans les données.
-3. Ne recalculer aucune donnée, ne déduire et n'inventer AUCUN nombre, AUCUNE dimension, AUCUNE norme ou section d'acier non présente dans les signaux fournis.
-4. N'utilise JAMAIS les termes "conforme", "validé", "sûr", "optimal" ou "respecte toutes les normes".
-5. Ne modifie pas la catégorie des signaux et n'ajoute aucun nouveau signal.
-6. Ne conclus pas sur la conformité globale de l'ouvrage.
-"""
