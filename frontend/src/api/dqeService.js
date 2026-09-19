@@ -12,6 +12,8 @@
 // - GET|POST|DELETE /api/postes-complementaires/
 // - POST /api/assistant/structurer-projet/
 // - POST /api/assistant/expliquer-element/
+// - POST /api/assistant/suggerer-poste/
+// - POST /api/projets/{id}/analyser_plan_image/ (Vision IA)
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
 
@@ -133,7 +135,14 @@ export const dqeService = {
     return postJSON(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, { confirmer: true });
   },
 
-  // Analyse de plan par Vision IA (Gemini Vision)
+  // Vision IA -- envoie une image de plan (JPG/PNG) à l'endpoint Gemini
+  // Vision pour lecture OCR des annotations (repères + dimensions entre
+  // parenthèses, ex: "S1(170x170x40)"). Ne pré-remplit PAS nb_travees_x/y
+  // (le backend ne renvoie pas ce format pour cet endpoint) -- il renvoie
+  // une liste d'annotations lues à vérifier manuellement par l'ingénieur.
+  // Cette fonction n'existait pas alors qu'elle était déjà appelée par
+  // Step1_Parametres.jsx, ce qui provoquait un crash ("dqeService.analyserPlanImage
+  // is not a function") dès qu'un utilisateur déposait une image de plan.
   analyserPlanImage: async (projetId, file) => {
     if (!projetId) {
       throw new Error("Aucun projet actif -- impossible d'analyser une image sans projetId.");
@@ -146,6 +155,7 @@ export const dqeService = {
     });
     const data = await response.json().catch(() => null);
     if (!response.ok) {
+      const err = new Error((data && (data.detail || data.erreur)) || `Erreur ${response.status}`);
       const msg = (data && (data.erreur || data.detail)) || (
         response.status === 413
           ? "L'image envoyée est trop volumineuse."
@@ -161,30 +171,6 @@ export const dqeService = {
       throw err;
     }
     return data;
-  },
-
-  // Analyse de cohérence globale du projet (Partie B1 - Déterministe)
-  analyserCoherenceProjet: async (projetId) => {
-    if (!projetId) {
-      throw new Error("Aucun projet actif -- impossible d'analyser la cohérence sans projetId.");
-    }
-    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/analyse-coherence/`);
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
-      err.status = response.status;
-      err.data = data;
-      throw err;
-    }
-    return data;
-  },
-
-  // Explication d'une alerte de cohérence par Gemini IA (Partie B2)
-  expliquerCoherenceElement: async (elementId) => {
-    if (!elementId) {
-      throw new Error("elementId manquant -- impossible d'expliquer la cohérence sans elementId.");
-    }
-    return postJSON(`${API_BASE_URL}/elements/${elementId}/expliquer-coherence/`, undefined);
   },
 
   // Postes complémentaires (Jour 2.1)
@@ -310,6 +296,15 @@ export const dqeService = {
   expliquerElementIA: async (elementId) => {
     return postJSON(`${API_BASE_URL}/assistant/expliquer-element/`, {
       element_id: elementId,
+    });
+  },
+
+  // Suggestion de poste complémentaire par Assistant IA -- l'ingénieur décrit
+  // le poste en langage naturel, l'IA propose designation/unite/lot/confiance.
+  // Cette fonction n'existait pas du tout : appel jamais câblé côté service.
+  suggererPosteIA: async (descriptionText) => {
+    return postJSON(`${API_BASE_URL}/assistant/suggerer-poste/`, {
+      description: descriptionText,
     });
   },
 
@@ -484,7 +479,12 @@ function parseDQEResponse(data) {
       total: `${Number(l.montant).toLocaleString()} FCFA`,
     })),
     montantTotalFCFA: `${Number(data.total_general).toLocaleString()} FCFA`,
-    explicationIA:
+    // NB : ce champ n'est PAS généré par l'assistant IA -- c'est une phrase
+    // fixe décrivant le moteur de calcul. Il s'appelait "explicationIA" et
+    // était affiché sous un badge "Sparkles / DKE IA" dans Step4_DQEExport.jsx,
+    // ce qui laissait croire à tort qu'une IA avait produit ce texte alors
+    // qu'aucun appel à /assistant/expliquer-element/ n'était jamais fait ici.
+    syntheseCalcul:
       'Devis calculé par le moteur de calcul (BAEL 91) à partir des sections validées et verrouillées.',
   };
 }

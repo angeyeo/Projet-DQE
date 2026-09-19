@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle, Sparkles, Check } from 'lucide-react';
+import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
 
 const CHARGE_EXPLOITATION_PAR_USAGE = {
@@ -32,12 +32,18 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   const [analysisSuccess, setAnalysisSuccess] = useState(false);
   const [analysisWarnings, setAnalysisWarnings] = useState([]);
 
-  // État de l'analyse en langage naturel (Assistant IA)
+  // Vision IA -- résultat brut renvoyé par /projets/{id}/analyser_plan_image/ :
+  // une liste d'annotations OCR lues sur l'image (pas des nb_travees_x/y).
+  const [visionAnnotations, setVisionAnnotations] = useState([]);
+  const [visionMessage, setVisionMessage] = useState(null);
+  const [visionSource, setVisionSource] = useState(null);
+
+  // Structuration NLP -- description libre du projet analysée par l'IA
+  // (POST /assistant/structurer-projet/), jamais câblée à aucune UI avant.
   const [nlpDescription, setNlpDescription] = useState('');
-  const [nlpAnalyzing, setNlpAnalyzing] = useState(false);
+  const [nlpLoading, setNlpLoading] = useState(false);
   const [nlpError, setNlpError] = useState(null);
   const [nlpResult, setNlpResult] = useState(null);
-  const [nlpApplied, setNlpApplied] = useState(false);
 
   useEffect(() => {
     if (!projectData.chargeExploitation && projectData.typeUsage) {
@@ -110,26 +116,60 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       return;
     }
 
-    // Traitement Vision IA si c'est une image de plan (Aperçu uniquement, aucune mutation des paramètres du projet)
-    if (isImage) {
+    // Traitement Vision IA si c'est une image de plan.
+    // Le backend (projets/services/assistant_ia/vision.py::analyser_plan_2d)
+    // ne renvoie PAS de nb_travees_x/y : il renvoie une lecture OCR brute des
+    // annotations visibles sur l'image (repère + dimensions entre parenthèses,
+    // ex: "S1(170x170x40)"), à charge pour l'ingénieur de les reporter
+    // manuellement. L'ancien code attendait `result.parametres_detectes`, un
+    // champ qui n'existe pas dans la réponse -- la condition ne se déclenchait
+    // donc jamais et rien ne s'affichait, en plus du crash sur la fonction
+    // manquante.
+    if (isImage && projectData.id) {
       setAnalyzing(true);
-      setAnalysisError(null);
+      setVisionAnnotations([]);
+      setVisionMessage(null);
+      setVisionSource(null);
       try {
-        let projetId = projectData.id;
-        if (!projetId) {
-          const projet = await dqeService.createProjet(projectData);
-          projetId = projet.id;
-          updateProjectData({ id: projetId });
-        }
-
-        const result = await dqeService.analyserPlanImage(projetId, file);
-        updateProjectData({ visionResult: result });
-        setAnalysisSuccess(true);
+        const result = await dqeService.analyserPlanImage(projectData.id, file);
+        setVisionAnnotations(result?.annotations_lues || []);
+        setVisionMessage(result?.message || null);
+        setVisionSource(result?.source || null);
+        setAnalysisSuccess((result?.annotations_lues || []).length > 0);
       } catch (err) {
         setAnalysisError(`Erreur d'analyse IA : ${err.message || "Impossible d'extraire le plan"}`);
       } finally {
         setAnalyzing(false);
       }
+    }
+  };
+
+  const handleStructurerIA = async () => {
+    if (!nlpDescription.trim()) return;
+    setNlpLoading(true);
+    setNlpError(null);
+    setNlpResult(null);
+    try {
+      const res = await dqeService.structurerProjetIA(nlpDescription.trim());
+      setNlpResult(res);
+
+      const usageMap = { HABITATION: 'habitation', BUREAU: 'bureau', COMMERCE: 'commercial' };
+      const patch = {};
+      if (res.nombre_niveaux != null) patch.nombreNiveaux = res.nombre_niveaux;
+      if (res.usage && usageMap[res.usage]) {
+        patch.typeUsage = usageMap[res.usage];
+        patch.chargeExploitation = CHARGE_EXPLOITATION_PAR_USAGE[usageMap[res.usage]];
+      }
+      if (res.portee_m != null) {
+        patch.porteeX = res.portee_m;
+        patch.porteeY = res.portee_m;
+      }
+      if (res.hauteur_niveau_m != null) patch.hauteurEtage = res.hauteur_niveau_m;
+      updateProjectData(patch);
+    } catch (err) {
+      setNlpError(err.message || "Impossible de structurer la description.");
+    } finally {
+      setNlpLoading(false);
     }
   };
 
@@ -394,6 +434,96 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         </div>
       )}
 
+      {visionAnnotations.length > 0 && (
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.25)', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, marginBottom: '0.5rem', color: '#a5b4fc' }}>
+            <Sparkles size={18} />
+            <span>Vision IA -- annotations lues sur l'image ({visionSource === 'MOCK' ? 'mode démo' : 'Gemini'})</span>
+          </div>
+          <table className="custom-table">
+            <thead>
+              <tr>
+                <th>Repère</th>
+                <th>Texte lu</th>
+                <th>Type</th>
+                <th>Dimensions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visionAnnotations.map((a, idx) => (
+                <tr key={idx}>
+                  <td>{a.repere || '—'}</td>
+                  <td>{a.texte_lu}</td>
+                  <td>{a.type_normalise || 'n/d'}</td>
+                  <td>
+                    {a.dimensions_parsees?.valeurs
+                      ? a.dimensions_parsees.valeurs.join(' x ')
+                      : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p style={{ color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+            Ces lectures doivent être vérifiées par l'ingénieur avant report dans les champs ci-dessous.
+          </p>
+        </div>
+      )}
+
+      {visionMessage && (
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.35)', marginBottom: '1.5rem', color: '#fcd34d', fontSize: '0.85rem' }}>
+          {visionMessage}
+        </div>
+      )}
+
+      {/* Structuration NLP -- Assistant IA */}
+      <div style={{ background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: '14px', padding: '1.25rem', marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+          <Sparkles size={18} color="#a5b4fc" />
+          <h4 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#a5b4fc' }}>
+            Décrire le projet en langage naturel (Assistant IA)
+          </h4>
+        </div>
+        <textarea
+          className="form-control"
+          rows={3}
+          placeholder="ex : Bâtiment R+2 commercial avec des portées de 6 mètres."
+          value={nlpDescription}
+          onChange={(e) => setNlpDescription(e.target.value)}
+          style={{ marginBottom: '0.75rem', resize: 'vertical' }}
+        />
+        <button
+          className="btn btn-secondary"
+          disabled={nlpLoading || !nlpDescription.trim()}
+          onClick={handleStructurerIA}
+        >
+          {nlpLoading ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
+          <span>{nlpLoading ? 'Analyse en cours...' : 'Structurer avec l\'IA'}</span>
+        </button>
+
+        {nlpError && (
+          <p style={{ color: '#fca5a5', fontSize: '0.85rem', marginTop: '0.75rem' }}>{nlpError}</p>
+        )}
+
+        {nlpResult && (
+          <div style={{ marginTop: '1rem', fontSize: '0.85rem' }}>
+            <p style={{ color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              <CheckCircle2 size={16} /> Paramètres détectés et pré-remplis ci-dessous ({nlpResult.source === 'MOCK' ? 'mode démo' : 'Gemini'}).
+            </p>
+            {nlpResult.contrainte_sol_kn_m2 != null && (
+              <p style={{ color: 'var(--text-muted)' }}>
+                Contrainte de sol évoquée : {nlpResult.contrainte_sol_kn_m2} kN/m² (aucun champ dédié -- à noter manuellement).
+              </p>
+            )}
+            {nlpResult.donnees_manquantes?.length > 0 && (
+              <p style={{ color: '#fcd34d' }}>
+                Données manquantes à compléter : {nlpResult.donnees_manquantes.join(', ')}
+              </p>
+            )}
+            {nlpResult.avertissements?.length > 0 && (
+              <ul style={{ margin: '0.3rem 0 0', paddingLeft: '1.4rem', color: '#fcd34d' }}>
+                {nlpResult.avertissements.map((w, idx) => <li key={idx}>{w}</li>)}
+              </ul>
       {/* Section : Description du projet en langage naturel (Assistant IA) */}
       <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'rgba(15, 23, 42, 0.5)', border: '1px solid rgba(148, 163, 184, 0.2)', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>

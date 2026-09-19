@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Download, FileSpreadsheet, ArrowLeft, RefreshCw, CheckCircle2, Sparkles, Loader2, AlertCircle } from 'lucide-react';
+import { Download, FileSpreadsheet, ArrowLeft, RefreshCw, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
 
 export default function Step4_DQEExport({ dqeData, projectData, projetId, onBack, onReset }) {
-  const { quantites = [], montantTotalFCFA = '0 FCFA', explicationIA = '' } = dqeData || {};
+  const { quantites = [], montantTotalFCFA = '0 FCFA', syntheseCalcul = '' } = dqeData || {};
 
   const [exportEnCours, setExportEnCours] = useState(null); // 'pdf' | 'excel' | null
   const [exportErreur, setExportErreur] = useState(null);
@@ -91,26 +91,26 @@ export default function Step4_DQEExport({ dqeData, projectData, projetId, onBack
         </div>
       </div>
 
-      {/* Module Assistant IA */}
+      {/* Synthèse du moteur de calcul -- NB : ce bloc affichait auparavant un
+          badge "Sparkles / Explication par IA (DKE IA)" alors que le texte
+          est une phrase fixe du moteur de calcul, jamais générée par l'IA.
+          Aucun appel à /assistant/expliquer-element/ n'était fait ici.
+          L'explication réelle par IA est désormais disponible élément par
+          élément à l'Étape 2 (bouton "Expliquer (IA)"). */}
       <div
         style={{
-          background: 'rgba(99, 102, 241, 0.08)',
-          border: '1px solid rgba(99, 102, 241, 0.25)',
+          background: 'rgba(16, 185, 129, 0.08)',
+          border: '1px solid rgba(16, 185, 129, 0.25)',
           borderRadius: '16px',
           padding: '1.5rem',
           marginBottom: '2rem',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-          <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'var(--accent-indigo)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
-            <Sparkles size={18} />
-          </div>
-          <h4 style={{ fontSize: '1rem', fontWeight: 600, color: '#a5b4fc' }}>
-            Explication & Validation par IA (DKE IA)
-          </h4>
-        </div>
+        <h4 style={{ fontSize: '1rem', fontWeight: 600, color: '#6ee7b7', marginBottom: '0.75rem' }}>
+          Synthèse du Moteur de Calcul
+        </h4>
         <p style={{ fontSize: '0.9rem', color: '#e2e8f0', lineHeight: 1.6 }}>
-          {explicationIA || "Aucune analyse complémentaire requise. Les calculs respectent les ratios BAEL91 d'armatures et de béton."}
+          {syntheseCalcul || "Aucune analyse complémentaire requise. Les calculs respectent les ratios BAEL91 d'armatures et de béton."}
         </p>
       </div>
 
