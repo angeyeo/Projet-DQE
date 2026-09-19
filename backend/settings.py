@@ -59,6 +59,7 @@ REST_FRAMEWORK = {
         'assistant_expliquer': '20/min',
         'assistant_suggerer_poste': '15/min',
         'assistant_vision': '5/min',
+        'assistant_coherence': '10/min',
     },
 }
 
