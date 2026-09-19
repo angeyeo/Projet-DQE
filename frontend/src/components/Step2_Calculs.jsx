@@ -29,14 +29,14 @@ function ElementRow({ item, columns, colSpan, explication, onExpliquer }) {
       </tr>
       {isOpen && (
         <tr>
-          <td colSpan={colSpan} style={{ background: 'rgba(99, 102, 241, 0.06)', borderTop: 'none' }}>
+          <td colSpan={colSpan} style={{ background: 'var(--accent-soft)', borderTop: 'none' }}>
             {explication.error ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fca5a5', fontSize: '0.85rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--status-critical)', fontSize: '0.85rem' }}>
                 <AlertCircle size={16} />
                 <span>{explication.error}</span>
               </div>
             ) : (
-              <div style={{ fontSize: '0.85rem', color: '#e2e8f0' }}>
+              <div style={{ fontSize: '0.85rem', color: 'var(--ink-900)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.35rem' }}>
                   <span className="badge badge-info" style={{ fontSize: '0.7rem' }}>
                     {explication.source === 'MOCK' ? 'MODE DÉMO' : explication.source === 'FALLBACK_LOCAL' ? 'FALLBACK LOCAL' : 'GEMINI'}
@@ -106,8 +106,8 @@ export default function Step2_Calculs({ sections, projectData, onBack, onNext })
 
       {/* Cartes de synthèse */}
       <div className="grid-3" style={{ marginBottom: '2rem' }}>
-        <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', padding: '1.25rem', borderRadius: '14px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#93c5fd', marginBottom: '0.5rem' }}>
+        <div style={{ background: 'var(--accent-soft)', border: '1px solid var(--accent-soft-border)', padding: '1.25rem', borderRadius: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent)', marginBottom: '0.5rem' }}>
             <Layers size={18} />
             <h4 style={{ fontSize: '0.9rem', fontWeight: 600 }}>Combinaison ELU</h4>
           </div>
@@ -119,8 +119,8 @@ export default function Step2_Calculs({ sections, projectData, onBack, onNext })
           </div>
         </div>
 
-        <div style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '1.25rem', borderRadius: '14px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#6ee7b7', marginBottom: '0.5rem' }}>
+        <div style={{ background: 'var(--status-ok-soft)', border: '1px solid var(--status-ok-soft)', padding: '1.25rem', borderRadius: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--status-ok)', marginBottom: '0.5rem' }}>
             <Box size={18} />
             <h4 style={{ fontSize: '0.9rem', fontWeight: 600 }}>Nombre d'Éléments</h4>
           </div>
@@ -132,8 +132,8 @@ export default function Step2_Calculs({ sections, projectData, onBack, onNext })
           </div>
         </div>
 
-        <div style={{ background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.2)', padding: '1.25rem', borderRadius: '14px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fcd34d', marginBottom: '0.5rem' }}>
+        <div style={{ background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', padding: '1.25rem', borderRadius: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--status-warn)', marginBottom: '0.5rem' }}>
             <Shield size={18} />
             <h4 style={{ fontSize: '0.9rem', fontWeight: 600 }}>Validation Humaine</h4>
           </div>
@@ -180,7 +180,7 @@ export default function Step2_Calculs({ sections, projectData, onBack, onNext })
                     onExpliquer={handleExpliquer}
                     columns={
                       <>
-                        <td style={{ fontWeight: 600, color: '#93c5fd' }}>{item.id || `P${idx + 1}`}</td>
+                        <td style={{ fontWeight: 600, color: 'var(--accent)' }}>{item.id || `P${idx + 1}`}</td>
                         <td>{item.name || `Poteau P${idx + 1}`}</td>
                         <td><span className="badge badge-info">{item.charge || item.effort_axial || '150 kN'}</span></td>
                         <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{item.section || '20 x 20 cm'}</td>
@@ -219,7 +219,7 @@ export default function Step2_Calculs({ sections, projectData, onBack, onNext })
                     onExpliquer={handleExpliquer}
                     columns={
                       <>
-                        <td style={{ fontWeight: 600, color: '#93c5fd' }}>{item.id || `R${idx + 1}`}</td>
+                        <td style={{ fontWeight: 600, color: 'var(--accent)' }}>{item.id || `R${idx + 1}`}</td>
                         <td>{item.name || `Poutre R${idx + 1}`}</td>
                         <td>{item.portee || '5.0 m'}</td>
                         <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{item.section || '20 x 40 cm'}</td>
@@ -258,7 +258,7 @@ export default function Step2_Calculs({ sections, projectData, onBack, onNext })
                     onExpliquer={handleExpliquer}
                     columns={
                       <>
-                        <td style={{ fontWeight: 600, color: '#93c5fd' }}>{item.id || `S${idx + 1}`}</td>
+                        <td style={{ fontWeight: 600, color: 'var(--accent)' }}>{item.id || `S${idx + 1}`}</td>
                         <td>{item.name || `Semelle S${idx + 1}`}</td>
                         <td>{item.contrainteSol || '0.20 MPa'}</td>
                         <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{item.section || '120 x 120 cm'}</td>

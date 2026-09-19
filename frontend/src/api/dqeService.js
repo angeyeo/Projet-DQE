@@ -14,6 +14,8 @@
 // - POST /api/assistant/expliquer-element/
 // - POST /api/assistant/suggerer-poste/
 // - POST /api/projets/{id}/analyser_plan_image/ (Vision IA)
+// - GET  /api/projets/{id}/analyse-coherence/ (Contrôle de cohérence)
+// - POST /api/elements/{id}/expliquer-coherence/ (Explication IA d'un signal)
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
 
@@ -23,6 +25,18 @@ async function postJSON(url, body) {
     headers: { 'Content-Type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
+    err.status = response.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+async function getJSON(url) {
+  const response = await fetch(url);
   const data = await response.json().catch(() => null);
   if (!response.ok) {
     const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
@@ -155,7 +169,6 @@ export const dqeService = {
     });
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      const err = new Error((data && (data.detail || data.erreur)) || `Erreur ${response.status}`);
       const msg = (data && (data.erreur || data.detail)) || (
         response.status === 413
           ? "L'image envoyée est trop volumineuse."
@@ -306,6 +319,19 @@ export const dqeService = {
     return postJSON(`${API_BASE_URL}/assistant/suggerer-poste/`, {
       description: descriptionText,
     });
+  },
+
+  // Contrôle de cohérence structurelle -- analyse tous les éléments validés
+  // d'un projet et remonte des signaux (CRITIQUE/ATTENTION/INFORMATION/...).
+  // Appelée par Step3_ValidationLock.jsx mais n'existait pas encore ici.
+  analyserCoherenceProjet: async (projetId) => {
+    return getJSON(`${API_BASE_URL}/projets/${projetId}/analyse-coherence/`);
+  },
+
+  // Explication IA d'un signal de cohérence pour un élément donné.
+  // Appelée par Step3_ValidationLock.jsx mais n'existait pas encore ici.
+  expliquerCoherenceElement: async (elementId) => {
+    return postJSON(`${API_BASE_URL}/elements/${elementId}/expliquer-coherence/`);
   },
 
   // Paramètres entreprise (logo + coordonnées) utilisés en en-tête des

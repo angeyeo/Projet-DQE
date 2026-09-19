@@ -1,4 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import LandingPage from './components/LandingPage';
+import LoginPage from './components/LoginPage';
+import RegisterPage from './components/RegisterPage';
+import ForgotPasswordPage from './components/ForgotPasswordPage';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import DashboardView from './components/DashboardView';
@@ -14,7 +18,7 @@ import { dqeService } from './api/dqeService';
 export default function App() {
   // Persistence de la vue active au rafraîchissement (F5)
   const [activeView, setActiveView] = useState(() => {
-    return localStorage.getItem('dqe_active_view') || 'dashboard';
+    return localStorage.getItem('dqe_active_view') || 'landing';
   });
 
   useEffect(() => {
@@ -56,6 +60,23 @@ export default function App() {
   // Verrouillage et validation
   const [validationError, setValidationError] = useState(null);
   const [validatingId, setValidatingId] = useState(null);
+
+  // Entreprise réelle (dqeService.getEntreprise) -- affichée dans la Sidebar
+  // à la place d'un nom de personne codé en dur. Pas de donnée inventée :
+  // si l'entreprise n'est pas encore configurée, entreprise reste null et
+  // la Sidebar l'indique honnêtement.
+  const [entreprise, setEntreprise] = useState(null);
+  const [entrepriseLoading, setEntrepriseLoading] = useState(true);
+
+  useEffect(() => {
+    let annule = false;
+    dqeService.getEntreprise()
+      .then((data) => { if (!annule) setEntreprise(data || null); })
+      .catch(() => { if (!annule) setEntreprise(null); })
+      .finally(() => { if (!annule) setEntrepriseLoading(false); });
+    return () => { annule = true; };
+  }, []);
+
 
   // Postes de main d'œuvre saisis manuellement
   const [postesMainDoeuvre, setPostesMainDoeuvre] = useState([]);
@@ -293,6 +314,45 @@ export default function App() {
   ];
   const lockedCount = allElements.filter((e) => e.locked).length;
 
+  if (activeView === 'landing') {
+    return (
+      <LandingPage
+        onGetStarted={() => setActiveView('dashboard')}
+        onLogin={() => setActiveView('login')}
+      />
+    );
+  }
+
+  if (activeView === 'login') {
+    return (
+      <LoginPage
+        onEnterApp={() => setActiveView('dashboard')}
+        onBackToLanding={() => setActiveView('landing')}
+        onGoToRegister={() => setActiveView('register')}
+        onGoToForgotPassword={() => setActiveView('forgot-password')}
+      />
+    );
+  }
+
+  if (activeView === 'register') {
+    return (
+      <RegisterPage
+        onEnterApp={() => setActiveView('dashboard')}
+        onBackToLanding={() => setActiveView('landing')}
+        onGoToLogin={() => setActiveView('login')}
+      />
+    );
+  }
+
+  if (activeView === 'forgot-password') {
+    return (
+      <ForgotPasswordPage
+        onBackToLanding={() => setActiveView('landing')}
+        onGoToLogin={() => setActiveView('login')}
+      />
+    );
+  }
+
   return (
     <div className="app-layout">
       <Sidebar
@@ -302,6 +362,8 @@ export default function App() {
         setIsCollapsed={setIsCollapsed}
         lockedCount={lockedCount}
         totalCount={allElements.length}
+        entreprise={entreprise}
+        entrepriseLoading={entrepriseLoading}
       />
 
       <div className="main-wrapper">
