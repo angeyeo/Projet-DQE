@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Lock, Unlock, ShieldAlert, ArrowLeft, ArrowRight, Edit3, ShieldCheck, HardHat, Plus, Trash2 } from 'lucide-react';
+import { Lock, Unlock, ShieldAlert, ArrowLeft, ArrowRight, Edit3, ShieldCheck, HardHat, Plus, Trash2, Sparkles, Loader2, AlertCircle } from 'lucide-react';
+import { dqeService } from '../api/dqeService';
 
 export default function Step3_ValidationLock({
   sections,
@@ -28,6 +29,35 @@ export default function Step3_ValidationLock({
     valeurGeometrie: '',
   });
   const [posteEnCours, setPosteEnCours] = useState(false);
+
+  // Suggestion de poste par Assistant IA (POST /assistant/suggerer-poste/) --
+  // n'existait ni côté service ni côté UI avant.
+  const [posteIADescription, setPosteIADescription] = useState('');
+  const [posteIALoading, setPosteIALoading] = useState(false);
+  const [posteIAError, setPosteIAError] = useState(null);
+  const [posteIAConfiance, setPosteIAConfiance] = useState(null);
+
+  const handleSuggererPoste = async () => {
+    if (!posteIADescription.trim()) return;
+    setPosteIALoading(true);
+    setPosteIAError(null);
+    setPosteIAConfiance(null);
+    try {
+      const res = await dqeService.suggererPosteIA(posteIADescription.trim());
+      setNouveauPoste((p) => ({
+        ...p,
+        mode: 'simple',
+        designation: res.designation,
+        unite: res.unite,
+        lot: res.lot_suggere,
+      }));
+      setPosteIAConfiance(res.confiance);
+    } catch (err) {
+      setPosteIAError(err.message || "Impossible de suggérer ce poste.");
+    } finally {
+      setPosteIALoading(false);
+    }
+  };
 
   const handleAjouterPoste = async () => {
     if (nouveauPoste.mode === 'simple') {
@@ -272,6 +302,43 @@ export default function Step3_ValidationLock({
           </table>
         )}
 
+        {/* Suggestion IA -- décrire le poste en langage naturel */}
+        <div style={{ background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: '12px', padding: '1.1rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.6rem' }}>
+            <Sparkles size={16} color="#a5b4fc" />
+            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#a5b4fc' }}>Suggestion IA du poste</span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              className="form-control"
+              style={{ flex: 1, minWidth: '240px' }}
+              placeholder="ex : installation et repli de chantier pour la durée des travaux"
+              value={posteIADescription}
+              onChange={(e) => setPosteIADescription(e.target.value)}
+            />
+            <button
+              className="btn btn-secondary"
+              disabled={posteIALoading || !posteIADescription.trim()}
+              onClick={handleSuggererPoste}
+            >
+              {posteIALoading ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
+              <span>{posteIALoading ? 'Analyse...' : 'Suggérer avec l\'IA'}</span>
+            </button>
+          </div>
+          {posteIAError && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#fca5a5', fontSize: '0.82rem', marginTop: '0.5rem' }}>
+              <AlertCircle size={14} />
+              <span>{posteIAError}</span>
+            </div>
+          )}
+          {posteIAConfiance && (
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+              Désignation, unité et lot pré-remplis ci-dessous (confiance IA : {posteIAConfiance}). Complétez quantité et prix unitaire, puis vérifiez avant ajout.
+            </p>
+          )}
+        </div>
+
         {/* Formulaire Bi-mode */}
         <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--core-border)', borderRadius: '12px', padding: '1.25rem' }}>
           <div className="grid-2" style={{ marginBottom: '1rem' }}>
@@ -282,15 +349,16 @@ export default function Step3_ValidationLock({
                 value={nouveauPoste.lot}
                 onChange={(e) => setNouveauPoste((p) => ({ ...p, lot: e.target.value }))}
               >
-                <option value="lot_00_generalites">Lot 00 — Généralités & Installation</option>
-                <option value="lot_01_terrassement">Lot 01 — Terrassement & Fouilles</option>
+                <option value="lot_00_generalites">Lot 00 — Généralités</option>
+                <option value="lot_01_terrassement">Lot 01 — Terrassement</option>
                 <option value="lot_02_gros_oeuvre_infrastructure">Lot 02a — Gros Œuvre Infrastructure</option>
                 <option value="lot_02_gros_oeuvre_superstructure">Lot 02b — Gros Œuvre Superstructure</option>
-                <option value="lot_03_etancheite">Lot 03 — Étanchéité & Isolation</option>
-                <option value="lot_04_revêtements">Lot 04 — Revêtements Sols & Murs</option>
-                <option value="lot_05_menuiserie">Lot 05 — Menuiserie & Serrurerie</option>
-                <option value="lot_06_plomberie_electricite">Lot 06 — Plomberie & Électricité</option>
-                <option value="lot_07_peinture_finitions">Lot 07 — Peinture & Finitions</option>
+                <option value="lot_03_etancheite">Lot 03 — Étanchéité</option>
+                <option value="lot_04_plomberie">Lot 04 — Plomberie</option>
+                <option value="lot_05_assainissement">Lot 05 — Assainissement</option>
+                <option value="lot_06_electricite">Lot 06 — Électricité</option>
+                <option value="lot_07_charpente">Lot 07 — Charpente</option>
+                <option value="lot_08_couverture">Lot 08 — Couverture</option>
               </select>
             </div>
 
@@ -327,11 +395,14 @@ export default function Step3_ValidationLock({
                   onChange={(e) => setNouveauPoste((p) => ({ ...p, unite: e.target.value }))}
                 >
                   <option value="forfait">Forfait</option>
+                  <option value="ens.">Ensemble (ens.)</option>
                   <option value="m²">m²</option>
                   <option value="m³">m³</option>
                   <option value="kg">kg</option>
+                  <option value="ml">Mètre linéaire (ml)</option>
                   <option value="jour">Jour</option>
                   <option value="unité">Unité</option>
+                  <option value="u">Unité (u)</option>
                 </select>
               </div>
               <div>

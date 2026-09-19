@@ -1,9 +1,91 @@
-import React from 'react';
-import { ArrowLeft, ArrowRight, Shield, Layers, Box, Cpu } from 'lucide-react';
+import React, { useState } from 'react';
+import { ArrowLeft, ArrowRight, Shield, Layers, Box, Cpu, Sparkles, Loader2, AlertCircle } from 'lucide-react';
+import { dqeService } from '../api/dqeService';
+
+// Ligne de tableau générique + bouton "Expliquer (IA)" -- branché sur
+// POST /assistant/expliquer-element/ (jamais appelé depuis aucune UI avant).
+// L'explication n'est demandée qu'à la demande de l'ingénieur (pas
+// automatiquement pour chaque élément) pour respecter le throttling
+// backend (assistant_expliquer: 20/min).
+function ElementRow({ item, columns, colSpan, explication, onExpliquer }) {
+  const isOpen = !!explication;
+
+  return (
+    <>
+      <tr>
+        {columns}
+        <td>
+          <button
+            className="btn btn-secondary"
+            style={{ padding: '0.35rem 0.7rem', fontSize: '0.78rem' }}
+            disabled={explication?.loading || item.calculIndisponible}
+            onClick={() => onExpliquer(item)}
+            title={item.calculIndisponible ? 'Aucun calcul disponible à expliquer' : "Demander une explication à l'IA"}
+          >
+            {explication?.loading ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+            <span>{explication?.loading ? '...' : 'Expliquer (IA)'}</span>
+          </button>
+        </td>
+      </tr>
+      {isOpen && (
+        <tr>
+          <td colSpan={colSpan} style={{ background: 'rgba(99, 102, 241, 0.06)', borderTop: 'none' }}>
+            {explication.error ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fca5a5', fontSize: '0.85rem' }}>
+                <AlertCircle size={16} />
+                <span>{explication.error}</span>
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.85rem', color: '#e2e8f0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.35rem' }}>
+                  <span className="badge badge-info" style={{ fontSize: '0.7rem' }}>
+                    {explication.source === 'MOCK' ? 'MODE DÉMO' : explication.source === 'FALLBACK_LOCAL' ? 'FALLBACK LOCAL' : 'GEMINI'}
+                  </span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                    Validation humaine requise avant toute utilisation.
+                  </span>
+                </div>
+                <p style={{ margin: 0, lineHeight: 1.5 }}>{explication.texte}</p>
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
 
 export default function Step2_Calculs({ sections, projectData, onBack, onNext }) {
   const { poteaux = [], poutres = [], semelles = [] } = sections || {};
   const totalElements = poteaux.length + poutres.length + semelles.length;
+
+  // Explications IA en cache, indexées par elementId (id numérique réel
+  // ElementStructurel, pas le repère P1/S1 affiché).
+  const [explications, setExplications] = useState({});
+
+  const handleExpliquer = async (item) => {
+    if (!item.elementId) return;
+    setExplications((prev) => ({ ...prev, [item.elementId]: { loading: true } }));
+    try {
+      const res = await dqeService.expliquerElementIA(item.elementId);
+      setExplications((prev) => ({
+        ...prev,
+        [item.elementId]: {
+          loading: false,
+          texte: res.explication,
+          source: res.source,
+        },
+      }));
+    } catch (err) {
+      setExplications((prev) => ({
+        ...prev,
+        [item.elementId]: {
+          loading: false,
+          error: err.message || "Impossible d'obtenir une explication pour cet élément.",
+        },
+      }));
+    }
+  };
 
   return (
     <div className="glass-panel">
@@ -85,17 +167,27 @@ export default function Step2_Calculs({ sections, projectData, onBack, onNext })
                   <th>Effort Axial (N_sd)</th>
                   <th>Section Proposée (b x h)</th>
                   <th>Armatures (FeE500)</th>
+                  <th>IA</th>
                 </tr>
               </thead>
               <tbody>
                 {poteaux.map((item, idx) => (
-                  <tr key={item.id || idx}>
-                    <td style={{ fontWeight: 600, color: '#93c5fd' }}>{item.id || `P${idx + 1}`}</td>
-                    <td>{item.name || `Poteau P${idx + 1}`}</td>
-                    <td><span className="badge badge-info">{item.charge || item.effort_axial || '150 kN'}</span></td>
-                    <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{item.section || '20 x 20 cm'}</td>
-                    <td>{item.armatures || '4 HA 12'}</td>
-                  </tr>
+                  <ElementRow
+                    key={item.id || idx}
+                    item={item}
+                    colSpan={6}
+                    explication={explications[item.elementId]}
+                    onExpliquer={handleExpliquer}
+                    columns={
+                      <>
+                        <td style={{ fontWeight: 600, color: '#93c5fd' }}>{item.id || `P${idx + 1}`}</td>
+                        <td>{item.name || `Poteau P${idx + 1}`}</td>
+                        <td><span className="badge badge-info">{item.charge || item.effort_axial || '150 kN'}</span></td>
+                        <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{item.section || '20 x 20 cm'}</td>
+                        <td>{item.armatures || '4 HA 12'}</td>
+                      </>
+                    }
+                  />
                 ))}
               </tbody>
             </table>
@@ -114,17 +206,27 @@ export default function Step2_Calculs({ sections, projectData, onBack, onNext })
                   <th>Portée L</th>
                   <th>Section Proposée (b x h)</th>
                   <th>Armatures Longitudinales</th>
+                  <th>IA</th>
                 </tr>
               </thead>
               <tbody>
                 {poutres.map((item, idx) => (
-                  <tr key={item.id || idx}>
-                    <td style={{ fontWeight: 600, color: '#93c5fd' }}>{item.id || `R${idx + 1}`}</td>
-                    <td>{item.name || `Poutre R${idx + 1}`}</td>
-                    <td>{item.portee || '5.0 m'}</td>
-                    <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{item.section || '20 x 40 cm'}</td>
-                    <td>{item.armatures || '3 HA 14'}</td>
-                  </tr>
+                  <ElementRow
+                    key={item.id || idx}
+                    item={item}
+                    colSpan={6}
+                    explication={explications[item.elementId]}
+                    onExpliquer={handleExpliquer}
+                    columns={
+                      <>
+                        <td style={{ fontWeight: 600, color: '#93c5fd' }}>{item.id || `R${idx + 1}`}</td>
+                        <td>{item.name || `Poutre R${idx + 1}`}</td>
+                        <td>{item.portee || '5.0 m'}</td>
+                        <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{item.section || '20 x 40 cm'}</td>
+                        <td>{item.armatures || '3 HA 14'}</td>
+                      </>
+                    }
+                  />
                 ))}
               </tbody>
             </table>
@@ -143,17 +245,27 @@ export default function Step2_Calculs({ sections, projectData, onBack, onNext })
                   <th>Contrainte du Sol</th>
                   <th>Dimensions (A x B)</th>
                   <th>Hauteur h</th>
+                  <th>IA</th>
                 </tr>
               </thead>
               <tbody>
                 {semelles.map((item, idx) => (
-                  <tr key={item.id || idx}>
-                    <td style={{ fontWeight: 600, color: '#93c5fd' }}>{item.id || `S${idx + 1}`}</td>
-                    <td>{item.name || `Semelle S${idx + 1}`}</td>
-                    <td>{item.contrainteSol || '0.20 MPa'}</td>
-                    <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{item.section || '120 x 120 cm'}</td>
-                    <td>{item.hauteur || '35 cm'}</td>
-                  </tr>
+                  <ElementRow
+                    key={item.id || idx}
+                    item={item}
+                    colSpan={6}
+                    explication={explications[item.elementId]}
+                    onExpliquer={handleExpliquer}
+                    columns={
+                      <>
+                        <td style={{ fontWeight: 600, color: '#93c5fd' }}>{item.id || `S${idx + 1}`}</td>
+                        <td>{item.name || `Semelle S${idx + 1}`}</td>
+                        <td>{item.contrainteSol || '0.20 MPa'}</td>
+                        <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{item.section || '120 x 120 cm'}</td>
+                        <td>{item.hauteur || '35 cm'}</td>
+                      </>
+                    }
+                  />
                 ))}
               </tbody>
             </table>
