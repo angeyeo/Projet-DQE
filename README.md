@@ -124,16 +124,3 @@ VITE_API_URL=https://api.ivoireinnovationbtp.com/api
 ```
 
 Le fichier `frontend/Dockerfile` construit Vite puis sert `dist/` avec Caddy, avec fallback SPA vers `index.html`.
-
-
-
-
-
-
-
-### 🔧 Correctifs Backend - Sprint (Samuel)
-- **Sécurisation de la génération de trame (`generer_trame`) :**
-  - Ajout de valeurs de secours par défaut sur les paramètres de trame (`nb_travees_x/y`, `portee_x/y`, `hauteur_etage`, `nb_niveaux`).
-  - Garantie d'un dictionnaire `resultat_calcul` non vide pour chaque élément créé (évite le bug des "0 éléments calculés" à l'Étape 2).
-- **Export DXF (`plan_fondation`) :**
-  - Exposition de l'en-tête HTTP `Access-Control-Expose-Headers: Content-Disposition` pour permettre au frontend de récupérer le nom du fichier `.dxf`.
