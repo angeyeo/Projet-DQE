@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle, Sparkles, Check } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
 
 const CHARGE_EXPLOITATION_PAR_USAGE = {
@@ -31,6 +31,13 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   const [analysisError, setAnalysisError] = useState(null);
   const [analysisSuccess, setAnalysisSuccess] = useState(false);
   const [analysisWarnings, setAnalysisWarnings] = useState([]);
+
+  // État de l'analyse en langage naturel (Assistant IA)
+  const [nlpDescription, setNlpDescription] = useState('');
+  const [nlpAnalyzing, setNlpAnalyzing] = useState(false);
+  const [nlpError, setNlpError] = useState(null);
+  const [nlpResult, setNlpResult] = useState(null);
+  const [nlpApplied, setNlpApplied] = useState(false);
 
   useEffect(() => {
     if (!projectData.chargeExploitation && projectData.typeUsage) {
@@ -124,6 +131,112 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         setAnalyzing(false);
       }
     }
+  };
+
+  const handleAnalyzeDescription = async () => {
+    const text = nlpDescription.trim();
+    if (!text) {
+      setNlpError("Veuillez saisir une description avant de lancer l'analyse.");
+      return;
+    }
+    setNlpError(null);
+    setNlpResult(null);
+    setNlpApplied(false);
+    setNlpAnalyzing(true);
+
+    try {
+      const res = await dqeService.structurerProjetIA(text);
+      setNlpResult(res);
+    } catch (err) {
+      const status = err.status;
+      if (status === 429) {
+        setNlpError("Limite d'appels IA atteinte. Veuillez patienter avant de réessayer.");
+      } else if (status === 400) {
+        setNlpError(err.message || "Description invalide ou absente.");
+      } else {
+        setNlpError("Impossible d'analyser la description pour le moment. Vous pouvez continuer à saisir les paramètres manuellement.");
+      }
+    } finally {
+      setNlpAnalyzing(false);
+    }
+  };
+
+  const hasApplicableNlpData = (donnees) => {
+    if (!donnees) return false;
+
+    if (donnees.nombre_niveaux !== null && donnees.nombre_niveaux !== undefined && donnees.nombre_niveaux !== '') {
+      const val = parseInt(donnees.nombre_niveaux, 10);
+      if (!isNaN(val) && val >= LIMITES.nombreNiveaux.min && val <= LIMITES.nombreNiveaux.max) {
+        return true;
+      }
+    }
+
+    if (donnees.usage && String(donnees.usage).trim() !== '') {
+      return true;
+    }
+
+    if (donnees.portee_m !== null && donnees.portee_m !== undefined && donnees.portee_m !== '') {
+      const portee = parseFloat(donnees.portee_m);
+      if (!isNaN(portee) && portee >= LIMITES.porteeX.min && portee <= LIMITES.porteeX.max) {
+        return true;
+      }
+    }
+
+    if (donnees.hauteur_niveau_m !== null && donnees.hauteur_niveau_m !== undefined && donnees.hauteur_niveau_m !== '') {
+      const h = parseFloat(donnees.hauteur_niveau_m);
+      if (!isNaN(h) && h >= LIMITES.hauteurEtage.min && h <= LIMITES.hauteurEtage.max) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  const handleApplyNlpParameters = () => {
+    if (!nlpResult || !nlpResult.donnees) return;
+    const d = nlpResult.donnees;
+    const updates = {};
+
+    if (d.nombre_niveaux !== null && d.nombre_niveaux !== undefined && d.nombre_niveaux !== '') {
+      const val = parseInt(d.nombre_niveaux, 10);
+      if (!isNaN(val) && val >= LIMITES.nombreNiveaux.min && val <= LIMITES.nombreNiveaux.max) {
+        updates.nombreNiveaux = val;
+      }
+    }
+
+    if (d.usage) {
+      const uLower = String(d.usage).toLowerCase();
+      if (uLower === 'habitation') {
+        updates.typeUsage = 'habitation';
+        updates.chargeExploitation = CHARGE_EXPLOITATION_PAR_USAGE.habitation;
+      } else if (uLower === 'bureau') {
+        updates.typeUsage = 'bureau';
+        updates.chargeExploitation = CHARGE_EXPLOITATION_PAR_USAGE.bureau;
+      } else if (uLower === 'commerce' || uLower === 'commercial') {
+        updates.typeUsage = 'commercial';
+        updates.chargeExploitation = CHARGE_EXPLOITATION_PAR_USAGE.commercial;
+      }
+    }
+
+    if (d.portee_m !== null && d.portee_m !== undefined && d.portee_m !== '') {
+      const portee = parseFloat(d.portee_m);
+      if (!isNaN(portee) && portee >= LIMITES.porteeX.min && portee <= LIMITES.porteeX.max) {
+        updates.porteeX = portee;
+        if (!projectData.porteeY) {
+          updates.porteeY = portee;
+        }
+      }
+    }
+
+    if (d.hauteur_niveau_m !== null && d.hauteur_niveau_m !== undefined && d.hauteur_niveau_m !== '') {
+      const h = parseFloat(d.hauteur_niveau_m);
+      if (!isNaN(h) && h >= LIMITES.hauteurEtage.min && h <= LIMITES.hauteurEtage.max) {
+        updates.hauteurEtage = h;
+      }
+    }
+
+    updateProjectData(updates);
+    setNlpApplied(true);
   };
 
   const vision = projectData.visionResult;
@@ -280,6 +393,166 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           </ul>
         </div>
       )}
+
+      {/* Section : Description du projet en langage naturel (Assistant IA) */}
+      <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'rgba(15, 23, 42, 0.5)', border: '1px solid rgba(148, 163, 184, 0.2)', marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
+          <Sparkles size={20} color="var(--accent-primary)" />
+          <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>
+            Décrire le projet avec l’IA
+          </h3>
+        </div>
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+          Saisissez une description en langage naturel du bâtiment. L'assistant extraira automatiquement les paramètres structurels clés.
+        </p>
+
+        <textarea
+          className="form-control"
+          rows={3}
+          value={nlpDescription}
+          onChange={(e) => setNlpDescription(e.target.value)}
+          placeholder="Ex. Maison R+1 à usage d'habitation, 2 travées de 4 m en X, 3 travées de 5 m en Y, hauteur d'étage 3 m..."
+          disabled={nlpAnalyzing}
+          style={{ marginBottom: '1rem', width: '100%', resize: 'vertical' }}
+        />
+
+        <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={handleAnalyzeDescription}
+            disabled={nlpAnalyzing || !nlpDescription.trim()}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+          >
+            {nlpAnalyzing ? (
+              <>
+                <Loader2 size={16} className="spin" />
+                <span>Analyse de la description en cours...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles size={16} />
+                <span>Analyser la description</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {nlpError && (
+          <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fca5a5', fontSize: '0.88rem' }}>
+            <AlertCircle size={18} color="#ef4444" />
+            <span>{nlpError}</span>
+          </div>
+        )}
+
+        {nlpResult && (
+          <div style={{ marginTop: '1.25rem', paddingTop: '1.25rem', borderTop: '1px solid rgba(148, 163, 184, 0.15)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <h4 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
+                Paramètres détectés
+              </h4>
+              {nlpResult.source && (
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: nlpResult.source === 'GEMINI' ? 'rgba(99, 102, 241, 0.2)' : nlpResult.source === 'MOCK' ? 'rgba(245, 158, 11, 0.2)' : 'rgba(100, 116, 139, 0.2)', color: nlpResult.source === 'GEMINI' ? '#a5b4fc' : nlpResult.source === 'MOCK' ? '#fcd34d' : '#cbd5e1', border: '1px solid rgba(148, 163, 184, 0.3)' }}>
+                  Source : {nlpResult.source === 'GEMINI' ? 'Gemini' : nlpResult.source === 'MOCK' ? 'Simulation locale' : 'Analyse automatique indisponible / partielle'}
+                </span>
+              )}
+            </div>
+
+            {/* Ingrédients / Paramètres extraits */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Nombre de niveaux</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.nombre_niveaux != null ? '#38bdf8' : '#94a3b8' }}>
+                  {nlpResult.donnees?.nombre_niveaux != null ? nlpResult.donnees.nombre_niveaux : 'Non détecté'}
+                </span>
+              </div>
+
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Configuration</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.configuration ? '#38bdf8' : '#94a3b8' }}>
+                  {nlpResult.donnees?.configuration || 'Non détectée'}
+                </span>
+              </div>
+
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Usage du bâtiment</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.usage ? '#38bdf8' : '#94a3b8' }}>
+                  {nlpResult.donnees?.usage || 'Non détecté'}
+                </span>
+              </div>
+
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Portée principale</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.portee_m != null ? '#38bdf8' : '#94a3b8' }}>
+                  {nlpResult.donnees?.portee_m != null ? `${nlpResult.donnees.portee_m} m` : 'Non détectée'}
+                </span>
+              </div>
+
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Hauteur d'étage</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.hauteur_niveau_m != null ? '#38bdf8' : '#94a3b8' }}>
+                  {nlpResult.donnees?.hauteur_niveau_m != null ? `${nlpResult.donnees.hauteur_niveau_m} m` : 'Non détectée'}
+                </span>
+              </div>
+
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Contrainte du sol</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.contrainte_sol_kn_m2 != null ? '#38bdf8' : '#94a3b8' }}>
+                  {nlpResult.donnees?.contrainte_sol_kn_m2 != null ? `${nlpResult.donnees.contrainte_sol_kn_m2} kN/m²` : 'Non détectée'}
+                </span>
+              </div>
+            </div>
+
+            {/* Message si données manquant/partielles OU si aucune donnée exploitable */}
+            {!hasApplicableNlpData(nlpResult.donnees) ? (
+              <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', marginBottom: '1rem', color: '#fca5a5', fontSize: '0.85rem' }}>
+                Aucun paramètre exploitable n'a été détecté. Complétez le formulaire manuellement.
+              </div>
+            ) : (
+              ((Array.isArray(nlpResult.donnees_manquantes) && nlpResult.donnees_manquantes.length > 0) ||
+                nlpResult.donnees?.nombre_niveaux == null ||
+                nlpResult.donnees?.usage == null ||
+                nlpResult.donnees?.portee_m == null) && (
+                <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', marginBottom: '1rem', color: '#fcd34d', fontSize: '0.85rem' }}>
+                  Certains paramètres n'ont pas pu être déterminés. Complétez-les manuellement avant de poursuivre.
+                </div>
+              )
+            )}
+
+            {/* Avertissements */}
+            {Array.isArray(nlpResult.avertissements) && nlpResult.avertissements.length > 0 && (
+              <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', marginBottom: '1rem', color: '#fca5a5', fontSize: '0.82rem' }}>
+                <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+                  {nlpResult.avertissements.map((adv, idx) => (
+                    <li key={idx}>{adv}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Bouton de confirmation d'application (affiché UNIQUEMENT si au moins 1 donnée est exploitable) */}
+            {hasApplicableNlpData(nlpResult.donnees) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleApplyNlpParameters}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                >
+                  <Check size={16} />
+                  <span>Appliquer ces paramètres</span>
+                </button>
+
+                {nlpApplied && (
+                  <span style={{ fontSize: '0.85rem', color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}>
+                    <CheckCircle2 size={16} /> Paramètres appliqués au formulaire avec succès !
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Form Fields */}
       <div className="grid-2" style={{ marginBottom: '2rem' }}>
