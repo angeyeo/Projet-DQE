@@ -155,7 +155,6 @@ export const dqeService = {
     });
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      const err = new Error((data && (data.detail || data.erreur)) || `Erreur ${response.status}`);
       const msg = (data && (data.erreur || data.detail)) || (
         response.status === 413
           ? "L'image envoyée est trop volumineuse."

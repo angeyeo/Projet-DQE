@@ -1,11 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
+import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle, Sparkles, Check } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
 
 const CHARGE_EXPLOITATION_PAR_USAGE = {
   habitation: 1.5,
   bureau: 2.5,
   commercial: 4.0,
+};
+
+const TYPE_LABELS = {
+  semelle: 'Semelles',
+  semelle_filante: 'Semelle filante',
+  longrine: 'Longrines',
+  poteau: 'Poteaux',
+  poutre: 'Poutres',
+  dalle: 'Dalles',
+  chainage: 'Chaînages',
 };
 
 const LIMITES = {
@@ -32,18 +42,15 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   const [analysisSuccess, setAnalysisSuccess] = useState(false);
   const [analysisWarnings, setAnalysisWarnings] = useState([]);
 
-  // Vision IA -- résultat brut renvoyé par /projets/{id}/analyser_plan_image/ :
-  // une liste d'annotations OCR lues sur l'image (pas des nb_travees_x/y).
-  const [visionAnnotations, setVisionAnnotations] = useState([]);
-  const [visionMessage, setVisionMessage] = useState(null);
-  const [visionSource, setVisionSource] = useState(null);
-
-  // Structuration NLP -- description libre du projet analysée par l'IA
-  // (POST /assistant/structurer-projet/), jamais câblée à aucune UI avant.
+  // État de l'analyse en langage naturel (Assistant IA)
   const [nlpDescription, setNlpDescription] = useState('');
-  const [nlpLoading, setNlpLoading] = useState(false);
+  const [nlpAnalyzing, setNlpAnalyzing] = useState(false);
   const [nlpError, setNlpError] = useState(null);
   const [nlpResult, setNlpResult] = useState(null);
+  const [nlpApplied, setNlpApplied] = useState(false);
+
+  // État d'affichage réduit/déplié des textes non classés Vision
+  const [showAllTextesNonClasses, setShowAllTextesNonClasses] = useState(false);
 
   useEffect(() => {
     if (!projectData.chargeExploitation && projectData.typeUsage) {
@@ -116,60 +123,26 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       return;
     }
 
-    // Traitement Vision IA si c'est une image de plan.
-    // Le backend (projets/services/assistant_ia/vision.py::analyser_plan_2d)
-    // ne renvoie PAS de nb_travees_x/y : il renvoie une lecture OCR brute des
-    // annotations visibles sur l'image (repère + dimensions entre parenthèses,
-    // ex: "S1(170x170x40)"), à charge pour l'ingénieur de les reporter
-    // manuellement. L'ancien code attendait `result.parametres_detectes`, un
-    // champ qui n'existe pas dans la réponse -- la condition ne se déclenchait
-    // donc jamais et rien ne s'affichait, en plus du crash sur la fonction
-    // manquante.
-    if (isImage && projectData.id) {
+    // Traitement Vision IA si c'est une image de plan (Aperçu uniquement, aucune mutation des paramètres du projet)
+    if (isImage) {
       setAnalyzing(true);
-      setVisionAnnotations([]);
-      setVisionMessage(null);
-      setVisionSource(null);
+      setAnalysisError(null);
       try {
-        const result = await dqeService.analyserPlanImage(projectData.id, file);
-        setVisionAnnotations(result?.annotations_lues || []);
-        setVisionMessage(result?.message || null);
-        setVisionSource(result?.source || null);
-        setAnalysisSuccess((result?.annotations_lues || []).length > 0);
+        let projetId = projectData.id;
+        if (!projetId) {
+          const projet = await dqeService.createProjet(projectData);
+          projetId = projet.id;
+          updateProjectData({ id: projetId });
+        }
+
+        const result = await dqeService.analyserPlanImage(projetId, file);
+        updateProjectData({ visionResult: result });
+        setAnalysisSuccess(true);
       } catch (err) {
         setAnalysisError(`Erreur d'analyse IA : ${err.message || "Impossible d'extraire le plan"}`);
       } finally {
         setAnalyzing(false);
       }
-    }
-  };
-
-  const handleStructurerIA = async () => {
-    if (!nlpDescription.trim()) return;
-    setNlpLoading(true);
-    setNlpError(null);
-    setNlpResult(null);
-    try {
-      const res = await dqeService.structurerProjetIA(nlpDescription.trim());
-      setNlpResult(res);
-
-      const usageMap = { HABITATION: 'habitation', BUREAU: 'bureau', COMMERCE: 'commercial' };
-      const patch = {};
-      if (res.nombre_niveaux != null) patch.nombreNiveaux = res.nombre_niveaux;
-      if (res.usage && usageMap[res.usage]) {
-        patch.typeUsage = usageMap[res.usage];
-        patch.chargeExploitation = CHARGE_EXPLOITATION_PAR_USAGE[usageMap[res.usage]];
-      }
-      if (res.portee_m != null) {
-        patch.porteeX = res.portee_m;
-        patch.porteeY = res.portee_m;
-      }
-      if (res.hauteur_niveau_m != null) patch.hauteurEtage = res.hauteur_niveau_m;
-      updateProjectData(patch);
-    } catch (err) {
-      setNlpError(err.message || "Impossible de structurer la description.");
-    } finally {
-      setNlpLoading(false);
     }
   };
 
@@ -280,6 +253,22 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   };
 
   const vision = projectData.visionResult;
+  const visionAnnotations = (vision && Array.isArray(vision.annotations_lues)) ? vision.annotations_lues : [];
+  const visionTotalElements = visionAnnotations.length;
+
+  const visionCountsByType = {};
+  visionAnnotations.forEach((ann) => {
+    const t = ann.type_normalise || 'autre';
+    visionCountsByType[t] = (visionCountsByType[t] || 0) + 1;
+  });
+
+  const visionCategories = Object.entries(visionCountsByType).map(([type, count]) => ({
+    type,
+    label: TYPE_LABELS[type] || type.replace('_', ' '),
+    count,
+  }));
+
+  const visionMaxCount = Math.max(...visionCategories.map((c) => c.count), 1);
 
   return (
     <div className="glass-panel">
@@ -354,6 +343,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       {/* Gemini Vision Results Panel */}
       {vision && (
         <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(59, 130, 246, 0.3)', marginBottom: '2rem' }}>
+          {/* En-tête */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
               <FileText size={20} color="#60a5fa" />
@@ -365,11 +355,9 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
               <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: vision.source === 'GEMINI' ? 'rgba(99, 102, 241, 0.2)' : 'rgba(245, 158, 11, 0.2)', color: vision.source === 'GEMINI' ? '#a5b4fc' : '#fcd34d', border: vision.source === 'GEMINI' ? '1px solid rgba(99, 102, 241, 0.4)' : '1px solid rgba(245, 158, 11, 0.4)' }}>
                 Source : {vision.source || 'GEMINI'}
               </span>
-              {vision.validation_humaine_requise && (
-                <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontStyle: 'italic' }}>
-                  Une vérification humaine est requise.
-                </span>
-              )}
+              <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                Vérification humaine requise.
+              </span>
             </div>
           </div>
 
@@ -379,24 +367,60 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
             </div>
           )}
 
-          {/* Annotations lues */}
-          {Array.isArray(vision.annotations_lues) && vision.annotations_lues.length > 0 ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
-              {vision.annotations_lues.map((ann, idx) => (
-                <div key={idx} style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                    <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#38bdf8' }}>{ann.repere || ann.texte_lu}</span>
-                    <span style={{ fontSize: '0.75rem', textTransform: 'capitalize', padding: '0.15rem 0.4rem', borderRadius: '4px', background: 'rgba(56, 189, 248, 0.15)', color: '#7dd3fc' }}>
-                      {ann.type_normalise || 'Élément'}
-                    </span>
-                  </div>
-                  {ann.dimensions_parsees && Array.isArray(ann.dimensions_parsees.valeurs) && ann.dimensions_parsees.valeurs.length > 0 && (
-                    <div style={{ fontSize: '0.8rem', color: '#cbd5e1', marginTop: '0.25rem' }}>
-                      Dimensions : {ann.dimensions_parsees.valeurs.join(' × ')} {ann.dimensions_parsees.unite || ''}
+          {/* Résumé & Comptage par catégorie */}
+          {visionTotalElements > 0 && (
+            <div style={{ marginBottom: '1.25rem' }}>
+              {/* Total d'éléments */}
+              <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#38bdf8', marginBottom: '0.75rem' }}>
+                {visionTotalElements} élément{visionTotalElements > 1 ? 's' : ''} détecté{visionTotalElements > 1 ? 's' : ''}
+              </div>
+
+              {/* Cartes Résumé par catégorie */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                {visionCategories.map((cat) => (
+                  <div key={cat.type} style={{ padding: '0.65rem 0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(56, 189, 248, 0.25)', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'capitalize', marginBottom: '0.2rem' }}>
+                      {cat.label}
                     </div>
-                  )}
-                </div>
-              ))}
+                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#f8fafc' }}>
+                      {cat.count}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Détail des annotations lues */}
+          {visionTotalElements > 0 ? (
+            <div>
+              <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#94a3b8', marginBottom: '0.5rem' }}>
+                Détail des annotations lues :
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+                {visionAnnotations.map((ann, idx) => {
+                  const hasDims = ann.dimensions_parsees && Array.isArray(ann.dimensions_parsees.valeurs) && ann.dimensions_parsees.valeurs.length > 0;
+                  return (
+                    <div key={idx} style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                        <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#38bdf8' }}>{ann.repere || ann.texte_lu}</span>
+                        <span style={{ fontSize: '0.75rem', textTransform: 'capitalize', padding: '0.15rem 0.4rem', borderRadius: '4px', background: 'rgba(56, 189, 248, 0.15)', color: '#7dd3fc' }}>
+                          {TYPE_LABELS[ann.type_normalise] || ann.type_normalise || 'Élément'}
+                        </span>
+                      </div>
+                      {hasDims ? (
+                        <div style={{ fontSize: '0.8rem', color: '#cbd5e1', marginTop: '0.25rem' }}>
+                          Dimensions : {ann.dimensions_parsees.valeurs.join(' × ')} {ann.dimensions_parsees.unite || ''}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: '0.78rem', color: '#94a3b8', fontStyle: 'italic', marginTop: '0.25rem' }}>
+                          Dimensions non détectées
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           ) : (
             <p style={{ fontSize: '0.85rem', color: '#94a3b8', margin: 0 }}>Aucun élément reconnu avec certitude sur ce plan.</p>
@@ -405,11 +429,36 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           {/* Textes non classés */}
           {Array.isArray(vision.textes_non_classes) && vision.textes_non_classes.length > 0 && (
             <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(148, 163, 184, 0.15)' }}>
-              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#94a3b8', marginBottom: '0.5rem' }}>
-                Textes détectés non classés :
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#94a3b8' }}>
+                  Textes détectés non classés ({vision.textes_non_classes.length}) :
+                </div>
+                {vision.textes_non_classes.length > 3 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllTextesNonClasses((prev) => !prev)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#60a5fa',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      padding: 0,
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    {showAllTextesNonClasses
+                      ? 'Réduire'
+                      : `Voir les ${vision.textes_non_classes.length - 3} autres textes`}
+                  </button>
+                )}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                {vision.textes_non_classes.map((txt, idx) => (
+                {(showAllTextesNonClasses
+                  ? vision.textes_non_classes
+                  : vision.textes_non_classes.slice(0, 3)
+                ).map((txt, idx) => (
                   <span key={idx} style={{ fontSize: '0.75rem', background: 'rgba(51, 65, 85, 0.6)', color: '#cbd5e1', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(148, 163, 184, 0.2)' }}>
                     {txt}
                   </span>
@@ -434,96 +483,6 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         </div>
       )}
 
-      {visionAnnotations.length > 0 && (
-        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.25)', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, marginBottom: '0.5rem', color: '#a5b4fc' }}>
-            <Sparkles size={18} />
-            <span>Vision IA -- annotations lues sur l'image ({visionSource === 'MOCK' ? 'mode démo' : 'Gemini'})</span>
-          </div>
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Repère</th>
-                <th>Texte lu</th>
-                <th>Type</th>
-                <th>Dimensions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visionAnnotations.map((a, idx) => (
-                <tr key={idx}>
-                  <td>{a.repere || '—'}</td>
-                  <td>{a.texte_lu}</td>
-                  <td>{a.type_normalise || 'n/d'}</td>
-                  <td>
-                    {a.dimensions_parsees?.valeurs
-                      ? a.dimensions_parsees.valeurs.join(' x ')
-                      : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p style={{ color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-            Ces lectures doivent être vérifiées par l'ingénieur avant report dans les champs ci-dessous.
-          </p>
-        </div>
-      )}
-
-      {visionMessage && (
-        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.35)', marginBottom: '1.5rem', color: '#fcd34d', fontSize: '0.85rem' }}>
-          {visionMessage}
-        </div>
-      )}
-
-      {/* Structuration NLP -- Assistant IA */}
-      <div style={{ background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: '14px', padding: '1.25rem', marginBottom: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-          <Sparkles size={18} color="#a5b4fc" />
-          <h4 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#a5b4fc' }}>
-            Décrire le projet en langage naturel (Assistant IA)
-          </h4>
-        </div>
-        <textarea
-          className="form-control"
-          rows={3}
-          placeholder="ex : Bâtiment R+2 commercial avec des portées de 6 mètres."
-          value={nlpDescription}
-          onChange={(e) => setNlpDescription(e.target.value)}
-          style={{ marginBottom: '0.75rem', resize: 'vertical' }}
-        />
-        <button
-          className="btn btn-secondary"
-          disabled={nlpLoading || !nlpDescription.trim()}
-          onClick={handleStructurerIA}
-        >
-          {nlpLoading ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
-          <span>{nlpLoading ? 'Analyse en cours...' : 'Structurer avec l\'IA'}</span>
-        </button>
-
-        {nlpError && (
-          <p style={{ color: '#fca5a5', fontSize: '0.85rem', marginTop: '0.75rem' }}>{nlpError}</p>
-        )}
-
-        {nlpResult && (
-          <div style={{ marginTop: '1rem', fontSize: '0.85rem' }}>
-            <p style={{ color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-              <CheckCircle2 size={16} /> Paramètres détectés et pré-remplis ci-dessous ({nlpResult.source === 'MOCK' ? 'mode démo' : 'Gemini'}).
-            </p>
-            {nlpResult.contrainte_sol_kn_m2 != null && (
-              <p style={{ color: 'var(--text-muted)' }}>
-                Contrainte de sol évoquée : {nlpResult.contrainte_sol_kn_m2} kN/m² (aucun champ dédié -- à noter manuellement).
-              </p>
-            )}
-            {nlpResult.donnees_manquantes?.length > 0 && (
-              <p style={{ color: '#fcd34d' }}>
-                Données manquantes à compléter : {nlpResult.donnees_manquantes.join(', ')}
-              </p>
-            )}
-            {nlpResult.avertissements?.length > 0 && (
-              <ul style={{ margin: '0.3rem 0 0', paddingLeft: '1.4rem', color: '#fcd34d' }}>
-                {nlpResult.avertissements.map((w, idx) => <li key={idx}>{w}</li>)}
-              </ul>
       {/* Section : Description du projet en langage naturel (Assistant IA) */}
       <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'rgba(15, 23, 42, 0.5)', border: '1px solid rgba(148, 163, 184, 0.2)', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
