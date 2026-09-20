@@ -1,5 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from projets.views import (
     ProjetViewSet,
     ElementStructurelViewSet,
@@ -9,6 +10,17 @@ from projets.views import (
     AssistantExpliquerView,
     AssistantSuggererPosteView,
     EntrepriseParametresView,
+)
+from projets.auth_views import (
+    InscriptionEntrepriseView,
+    InviterUtilisateurView,
+    ActiverCompteView,
+    MembresEntrepriseView,
+    DesactiverUtilisateurView,
+    ChangerMotDePasseView,
+    DemanderReinitialisationView,
+    ConfirmerReinitialisationView,
+    LogoutView,
 )
 
 router = DefaultRouter()
@@ -65,5 +77,23 @@ urlpatterns = [
         EntrepriseParametresView.as_view(),
         name="entreprise-parametres",
     ),
+
+    # --- Auth JWT (sprint Comptes & Permissions) ---
+    path("auth/token/", TokenObtainPairView.as_view(), name="token-obtain-pair"),
+    path("auth/token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
+    path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
+
+    # --- Comptes & cabinet ---
+    path("auth/inscription/", InscriptionEntrepriseView.as_view(), name="auth-inscription"),
+    path("auth/inviter/", InviterUtilisateurView.as_view(), name="auth-inviter"),
+    path("auth/activer/", ActiverCompteView.as_view(), name="auth-activer"),
+    path("auth/membres/", MembresEntrepriseView.as_view(), name="auth-membres"),
+    path("auth/membres/<int:user_id>/desactiver/", DesactiverUtilisateurView.as_view(), name="auth-desactiver-membre"),
+
+    # --- Mot de passe ---
+    path("auth/changer-mot-de-passe/", ChangerMotDePasseView.as_view(), name="auth-changer-mdp"),
+    path("auth/mot-de-passe-oublie/", DemanderReinitialisationView.as_view(), name="auth-mdp-oublie"),
+    path("auth/reinitialiser-mot-de-passe/", ConfirmerReinitialisationView.as_view(), name="auth-reinitialiser-mdp"),
+
     path("", include(router.urls)),
 ]

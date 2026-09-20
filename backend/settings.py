@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'api',
     'moteur_calcul',
@@ -61,6 +62,27 @@ REST_FRAMEWORK = {
         'assistant_vision': '5/min',
         'assistant_coherence': '10/min',
     },
+    # Avant ce sprint : aucune permission par défaut (AllowAny implicite de
+    # DRF) -- seules les 6 vues IA vérifiaient IsAuthenticated elles-mêmes.
+    # EstAuthentifieOuDemoMode généralise ce même principe (ouvert en
+    # DEMO_MODE, fermé sinon) à TOUTES les vues plutôt qu'à l'IA seule.
+    'DEFAULT_PERMISSION_CLASSES': [
+        'projets.permissions.EstAuthentifieOuDemoMode',
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+}
+
+from datetime import timedelta  # noqa: E402
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
 }
 
 # Limite d'upload pour les images de plans (Phase A Vision)
