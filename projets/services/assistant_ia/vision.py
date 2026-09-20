@@ -1,11 +1,14 @@
 import io
 import re
 import json
+import logging
 from PIL import Image
 from .client import get_ai_client, MockAIClient, LLMServiceError
 from .prompts import PROMPT_EXTRACTION_PLAN_2D
 from .schemas import valider_reponse_ocr
 from .postes import extraire_et_parser_json
+
+logger = logging.getLogger(__name__)
 
 # Expression régulière pour le parsing déterministe des dimensions entre parenthèses.
 # Gère les espaces optionnels autour des délimiteurs x, X ou ×.
@@ -194,6 +197,11 @@ def analyser_plan_2d(image_bytes: bytes, mime_type: str) -> dict:
         data = extraire_et_parser_json(raw_response)
         validated_ocr = valider_reponse_ocr(data)
     except (LLMServiceError, ValueError) as exc:
+        logger.warning(
+            "Fallback Vision déclenché [%s] : %s",
+            type(exc).__name__,
+            exc,
+        )
         # Si c'est une erreur de validation JSON (ValueError) issue de la réponse du LLM,
         # ou une erreur réseau/service LLM (LLMServiceError), on bascule sur le fallback local.
         # Les erreurs d'entrée utilisateur (ValueError levée par valider_physique_image) sont en dehors
