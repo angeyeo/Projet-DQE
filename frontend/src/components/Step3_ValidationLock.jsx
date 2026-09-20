@@ -1,6 +1,3 @@
-import React, { useState } from 'react';
-import { Lock, Unlock, ShieldAlert, ArrowLeft, ArrowRight, Edit3, ShieldCheck, HardHat, Plus, Trash2, Sparkles, Loader2, AlertCircle } from 'lucide-react';
-import { dqeService } from '../api/dqeService';
 import React, { useState, useEffect } from 'react';
 import { Lock, Unlock, ShieldAlert, ArrowLeft, ArrowRight, Edit3, ShieldCheck, HardHat, Plus, Trash2, Activity, Loader2, AlertTriangle, CheckCircle2, Info, RefreshCw, Sparkles } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
