@@ -12,7 +12,13 @@ from django.conf import settings
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 
-from .models import Projet, ElementStructurel, CoucheCharge, PosteComplementaire, EntrepriseParametres
+from .models import Projet, ElementStructurel, CoucheCharge, PosteComplementaire, EntrepriseParametres, Profil
+from .permissions import (
+    EstAuthentifieOuDemoMode,
+    EstMembreEntreprise,
+    PeutValider,
+    EstAdminEntreprise,
+)
 from .serializers import (
     ProjetSerializer,
     ElementStructurelSerializer,
@@ -145,6 +151,30 @@ def _entreprise_export_dict(entreprise: "EntrepriseParametres") -> dict:
 class ProjetViewSet(viewsets.ModelViewSet):
     queryset = Projet.objects.all()
     serializer_class = ProjetSerializer
+    permission_classes = [EstAuthentifieOuDemoMode, EstMembreEntreprise]
+
+    def get_queryset(self):
+        qs = Projet.objects.all()
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            # Anonyme : seulement possible en DEMO_MODE (sinon bloqué en
+            # amont par EstAuthentifieOuDemoMode) -- comportement legacy
+            # inchangé, pas de filtrage.
+            return qs
+        profil = getattr(user, "profil", None)
+        if profil is None:
+            # Utilisateur authentifié sans Profil (comptes créés avant ce
+            # sprint) : pas de filtrage, comportement legacy inchangé.
+            return qs
+        return qs.filter(entreprise_id=profil.entreprise_id)
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        profil = getattr(user, "profil", None) if user and user.is_authenticated else None
+        serializer.save(
+            cree_par=user if user and user.is_authenticated else None,
+            entreprise=profil.entreprise if profil else None,
+        )
 
     def get_permissions(self):
         if self.action in ("analyser_plan_image", "analyse_coherence"):
@@ -660,12 +690,15 @@ class ProjetViewSet(viewsets.ModelViewSet):
 class ElementStructurelViewSet(viewsets.ModelViewSet):
     queryset = ElementStructurel.objects.all()
     serializer_class = ElementStructurelSerializer
+    permission_classes = [EstAuthentifieOuDemoMode, EstMembreEntreprise]
 
     def get_permissions(self):
         if self.action == "expliquer_coherence":
             if os.getenv("DEMO_MODE", "False").lower() == "true":
                 return [AllowAny()]
             return [IsAuthenticated()]
+        if self.action == "valider":
+            return [EstAuthentifieOuDemoMode(), PeutValider()]
         return super().get_permissions()
 
     def get_throttles(self):
@@ -753,11 +786,13 @@ class ElementStructurelViewSet(viewsets.ModelViewSet):
 class CoucheChargeViewSet(viewsets.ModelViewSet):
     queryset = CoucheCharge.objects.all()
     serializer_class = CoucheChargeSerializer
+    permission_classes = [EstAuthentifieOuDemoMode, EstMembreEntreprise]
 
 
 class PosteComplementaireViewSet(viewsets.ModelViewSet):
     queryset = PosteComplementaire.objects.all()
     serializer_class = PosteComplementaireSerializer
+    permission_classes = [EstAuthentifieOuDemoMode, EstMembreEntreprise]
 
     def perform_create(self, serializer):
         mode = serializer.validated_data.get("mode")
@@ -781,8 +816,18 @@ class PosteComplementaireViewSet(viewsets.ModelViewSet):
 class EntrepriseParametresView(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
+    def _entreprise_courante(self, request) -> EntrepriseParametres:
+        """Entreprise du Profil de l'utilisateur connecté. Repli sur
+        l'entreprise legacy (pk=1) pour DEMO_MODE ou un utilisateur encore
+        sans Profil -- ne casse pas les comptes créés avant ce sprint."""
+        user = request.user
+        profil = getattr(user, "profil", None) if user and user.is_authenticated else None
+        if profil is not None:
+            return profil.entreprise
+        return EntrepriseParametres.get_solo()
+
     def get(self, request):
-        entreprise = EntrepriseParametres.get_solo()
+        entreprise = self._entreprise_courante(request)
         serializer = EntrepriseParametresSerializer(entreprise, context={"request": request})
         return Response(serializer.data)
 
@@ -793,7 +838,7 @@ class EntrepriseParametresView(APIView):
         return self._update(request, partial=True)
 
     def _update(self, request, partial):
-        entreprise = EntrepriseParametres.get_solo()
+        entreprise = self._entreprise_courante(request)
         serializer = EntrepriseParametresSerializer(
             entreprise, data=request.data, partial=partial, context={"request": request}
         )

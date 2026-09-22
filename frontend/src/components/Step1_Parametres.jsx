@@ -45,6 +45,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   // État de l'analyse en langage naturel (Assistant IA)
   const [nlpDescription, setNlpDescription] = useState('');
   const [nlpAnalyzing, setNlpAnalyzing] = useState(false);
+  const [nlpApplied, setNlpApplied] = useState(false);
   const [nlpError, setNlpError] = useState(null);
   const [nlpResult, setNlpResult] = useState(null);
   const [nlpApplied, setNlpApplied] = useState(false);
@@ -304,12 +305,12 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           </div>
         ) : projectData.planFileName ? (
           <div>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(16, 185, 129, 0.15)', color: '#6ee7b7', padding: '0.5rem 1rem', borderRadius: '20px', fontWeight: 600 }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: 'var(--status-ok-soft)', color: 'var(--status-ok)', padding: '0.5rem 1rem', borderRadius: '20px', fontWeight: 600 }}>
               <FileText size={16} />
               <span>{projectData.planFileName} ({projectData.planFileSize})</span>
             </div>
             {analysisSuccess && (
-              <p style={{ fontSize: '0.85rem', color: '#6ee7b7', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
+              <p style={{ fontSize: '0.85rem', color: 'var(--status-ok)', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
                 <CheckCircle2 size={16} /> Annotations du plan détectées automatiquement — vérification humaine requise.
               </p>
             )}
@@ -334,132 +335,72 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       </div>
 
       {analysisError && (
-        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fca5a5', fontSize: '0.88rem' }}>
-          <AlertCircle size={18} color="#ef4444" />
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--status-critical)', fontSize: '0.88rem' }}>
+          <AlertCircle size={18} color="var(--status-critical)" />
           <span>{analysisError}</span>
         </div>
       )}
 
       {/* Gemini Vision Results Panel */}
       {vision && (
-        <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(59, 130, 246, 0.3)', marginBottom: '2rem' }}>
-          {/* En-tête */}
+        <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'var(--core-bg)', border: '1px solid var(--accent-soft-border)', marginBottom: '2rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              <FileText size={20} color="#60a5fa" />
-              <h4 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
+              <FileText size={20} color="var(--accent)" />
+              <h4 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: 'var(--ink-900)' }}>
                 Éléments détectés sur le plan (Aperçu Vision)
               </h4>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: vision.source === 'GEMINI' ? 'rgba(99, 102, 241, 0.2)' : 'rgba(245, 158, 11, 0.2)', color: vision.source === 'GEMINI' ? '#a5b4fc' : '#fcd34d', border: vision.source === 'GEMINI' ? '1px solid rgba(99, 102, 241, 0.4)' : '1px solid rgba(245, 158, 11, 0.4)' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: vision.source === 'GEMINI' ? 'var(--accent-soft-border)' : 'var(--status-warn-soft)', color: vision.source === 'GEMINI' ? 'var(--accent)' : 'var(--status-warn)', border: vision.source === 'GEMINI' ? '1px solid var(--accent-soft-border)' : '1px solid var(--status-warn-soft)' }}>
                 Source : {vision.source || 'GEMINI'}
               </span>
-              <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontStyle: 'italic' }}>
-                Vérification humaine requise.
-              </span>
+              {vision.validation_humaine_requise && (
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', fontStyle: 'italic' }}>
+                  Une vérification humaine est requise.
+                </span>
+              )}
             </div>
           </div>
 
           {vision.source === 'FALLBACK_LOCAL' && (
-            <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', marginBottom: '1rem', color: '#fcd34d', fontSize: '0.85rem' }}>
+            <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', marginBottom: '1rem', color: 'var(--status-warn)', fontSize: '0.85rem' }}>
               L'analyse automatique du plan n'est pas disponible pour le moment.
             </div>
           )}
 
-          {/* Résumé & Comptage par catégorie */}
-          {visionTotalElements > 0 && (
-            <div style={{ marginBottom: '1.25rem' }}>
-              {/* Total d'éléments */}
-              <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#38bdf8', marginBottom: '0.75rem' }}>
-                {visionTotalElements} élément{visionTotalElements > 1 ? 's' : ''} détecté{visionTotalElements > 1 ? 's' : ''}
-              </div>
-
-              {/* Cartes Résumé par catégorie */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
-                {visionCategories.map((cat) => (
-                  <div key={cat.type} style={{ padding: '0.65rem 0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(56, 189, 248, 0.25)', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'capitalize', marginBottom: '0.2rem' }}>
-                      {cat.label}
-                    </div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#f8fafc' }}>
-                      {cat.count}
-                    </div>
+          {/* Annotations lues */}
+          {Array.isArray(vision.annotations_lues) && vision.annotations_lues.length > 0 ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+              {vision.annotations_lues.map((ann, idx) => (
+                <div key={idx} style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                    <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--accent)' }}>{ann.repere || ann.texte_lu}</span>
+                    <span style={{ fontSize: '0.75rem', textTransform: 'capitalize', padding: '0.15rem 0.4rem', borderRadius: '4px', background: 'var(--accent-soft)', color: 'var(--accent)' }}>
+                      {ann.type_normalise || 'Élément'}
+                    </span>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Détail des annotations lues */}
-          {visionTotalElements > 0 ? (
-            <div>
-              <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#94a3b8', marginBottom: '0.5rem' }}>
-                Détail des annotations lues :
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
-                {visionAnnotations.map((ann, idx) => {
-                  const hasDims = ann.dimensions_parsees && Array.isArray(ann.dimensions_parsees.valeurs) && ann.dimensions_parsees.valeurs.length > 0;
-                  return (
-                    <div key={idx} style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                        <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#38bdf8' }}>{ann.repere || ann.texte_lu}</span>
-                        <span style={{ fontSize: '0.75rem', textTransform: 'capitalize', padding: '0.15rem 0.4rem', borderRadius: '4px', background: 'rgba(56, 189, 248, 0.15)', color: '#7dd3fc' }}>
-                          {TYPE_LABELS[ann.type_normalise] || ann.type_normalise || 'Élément'}
-                        </span>
-                      </div>
-                      {hasDims ? (
-                        <div style={{ fontSize: '0.8rem', color: '#cbd5e1', marginTop: '0.25rem' }}>
-                          Dimensions : {ann.dimensions_parsees.valeurs.join(' × ')} {ann.dimensions_parsees.unite || ''}
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: '0.78rem', color: '#94a3b8', fontStyle: 'italic', marginTop: '0.25rem' }}>
-                          Dimensions non détectées
-                        </div>
-                      )}
+                  {ann.dimensions_parsees && Array.isArray(ann.dimensions_parsees.valeurs) && ann.dimensions_parsees.valeurs.length > 0 && (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--core-border)', marginTop: '0.25rem' }}>
+                      Dimensions : {ann.dimensions_parsees.valeurs.join(' × ')} {ann.dimensions_parsees.unite || ''}
                     </div>
                   );
                 })}
               </div>
             </div>
           ) : (
-            <p style={{ fontSize: '0.85rem', color: '#94a3b8', margin: 0 }}>Aucun élément reconnu avec certitude sur ce plan.</p>
+            <p style={{ fontSize: '0.85rem', color: 'var(--ink-500)', margin: 0 }}>Aucun élément reconnu avec certitude sur ce plan.</p>
           )}
 
           {/* Textes non classés */}
           {Array.isArray(vision.textes_non_classes) && vision.textes_non_classes.length > 0 && (
-            <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(148, 163, 184, 0.15)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#94a3b8' }}>
-                  Textes détectés non classés ({vision.textes_non_classes.length}) :
-                </div>
-                {vision.textes_non_classes.length > 3 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAllTextesNonClasses((prev) => !prev)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: '#60a5fa',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      padding: 0,
-                      textDecoration: 'underline',
-                    }}
-                  >
-                    {showAllTextesNonClasses
-                      ? 'Réduire'
-                      : `Voir les ${vision.textes_non_classes.length - 3} autres textes`}
-                  </button>
-                )}
+            <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--status-neutral-soft)' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--ink-500)', marginBottom: '0.5rem' }}>
+                Textes détectés non classés :
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                {(showAllTextesNonClasses
-                  ? vision.textes_non_classes
-                  : vision.textes_non_classes.slice(0, 3)
-                ).map((txt, idx) => (
-                  <span key={idx} style={{ fontSize: '0.75rem', background: 'rgba(51, 65, 85, 0.6)', color: '#cbd5e1', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(148, 163, 184, 0.2)' }}>
+                {vision.textes_non_classes.map((txt, idx) => (
+                  <span key={idx} style={{ fontSize: '0.75rem', background: 'var(--core-border)', color: 'var(--core-border)', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid var(--status-neutral-soft)' }}>
                     {txt}
                   </span>
                 ))}
@@ -470,9 +411,9 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       )}
 
       {analysisWarnings.length > 0 && (
-        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.35)', marginBottom: '1.5rem', color: '#fcd34d', fontSize: '0.85rem' }}>
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', marginBottom: '1.5rem', color: 'var(--status-warn)', fontSize: '0.85rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-            <AlertCircle size={18} color="#f59e0b" />
+            <AlertCircle size={18} color="var(--status-warn)" />
             <span>Trame détectée approximative -- à vérifier avant de continuer</span>
           </div>
           <ul style={{ margin: 0, paddingLeft: '1.4rem' }}>
@@ -483,8 +424,50 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         </div>
       )}
 
+      {visionAnnotations.length > 0 && (
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--accent-soft)', border: '1px solid var(--accent-soft-border)', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent)' }}>
+            <Sparkles size={18} />
+            <span>Vision IA -- annotations lues sur l'image ({visionSource === 'MOCK' ? 'mode démo' : 'Gemini'})</span>
+          </div>
+          <table className="custom-table">
+            <thead>
+              <tr>
+                <th>Repère</th>
+                <th>Texte lu</th>
+                <th>Type</th>
+                <th>Dimensions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visionAnnotations.map((a, idx) => (
+                <tr key={idx}>
+                  <td>{a.repere || '—'}</td>
+                  <td>{a.texte_lu}</td>
+                  <td>{a.type_normalise || 'n/d'}</td>
+                  <td>
+                    {a.dimensions_parsees?.valeurs
+                      ? a.dimensions_parsees.valeurs.join(' x ')
+                      : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p style={{ color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+            Ces lectures doivent être vérifiées par l'ingénieur avant report dans les champs ci-dessous.
+          </p>
+        </div>
+      )}
+
+      {visionMessage && (
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', marginBottom: '1.5rem', color: 'var(--status-warn)', fontSize: '0.85rem' }}>
+          {visionMessage}
+        </div>
+      )}
+
       {/* Section : Description du projet en langage naturel (Assistant IA) */}
-      <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'rgba(15, 23, 42, 0.5)', border: '1px solid rgba(148, 163, 184, 0.2)', marginBottom: '2rem' }}>
+      <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
           <Sparkles size={20} color="var(--accent-primary)" />
           <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>
@@ -528,20 +511,20 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         </div>
 
         {nlpError && (
-          <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fca5a5', fontSize: '0.88rem' }}>
-            <AlertCircle size={18} color="#ef4444" />
+          <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--status-critical)', fontSize: '0.88rem' }}>
+            <AlertCircle size={18} color="var(--status-critical)" />
             <span>{nlpError}</span>
           </div>
         )}
 
         {nlpResult && (
-          <div style={{ marginTop: '1.25rem', paddingTop: '1.25rem', borderTop: '1px solid rgba(148, 163, 184, 0.15)' }}>
+          <div style={{ marginTop: '1.25rem', paddingTop: '1.25rem', borderTop: '1px solid var(--status-neutral-soft)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <h4 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
+              <h4 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: 'var(--ink-900)' }}>
                 Paramètres détectés
               </h4>
               {nlpResult.source && (
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: nlpResult.source === 'GEMINI' ? 'rgba(99, 102, 241, 0.2)' : nlpResult.source === 'MOCK' ? 'rgba(245, 158, 11, 0.2)' : 'rgba(100, 116, 139, 0.2)', color: nlpResult.source === 'GEMINI' ? '#a5b4fc' : nlpResult.source === 'MOCK' ? '#fcd34d' : '#cbd5e1', border: '1px solid rgba(148, 163, 184, 0.3)' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: nlpResult.source === 'GEMINI' ? 'var(--accent-soft-border)' : nlpResult.source === 'MOCK' ? 'var(--status-warn-soft)' : 'var(--status-neutral-soft)', color: nlpResult.source === 'GEMINI' ? 'var(--accent)' : nlpResult.source === 'MOCK' ? 'var(--status-warn)' : 'var(--core-border)', border: '1px solid var(--core-border)' }}>
                   Source : {nlpResult.source === 'GEMINI' ? 'Gemini' : nlpResult.source === 'MOCK' ? 'Simulation locale' : 'Analyse automatique indisponible / partielle'}
                 </span>
               )}
@@ -549,44 +532,44 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
 
             {/* Ingrédients / Paramètres extraits */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
-              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
-                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Nombre de niveaux</span>
-                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.nombre_niveaux != null ? '#38bdf8' : '#94a3b8' }}>
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Nombre de niveaux</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.nombre_niveaux != null ? 'var(--accent)' : 'var(--ink-500)' }}>
                   {nlpResult.donnees?.nombre_niveaux != null ? nlpResult.donnees.nombre_niveaux : 'Non détecté'}
                 </span>
               </div>
 
-              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
-                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Configuration</span>
-                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.configuration ? '#38bdf8' : '#94a3b8' }}>
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Configuration</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.configuration ? 'var(--accent)' : 'var(--ink-500)' }}>
                   {nlpResult.donnees?.configuration || 'Non détectée'}
                 </span>
               </div>
 
-              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
-                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Usage du bâtiment</span>
-                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.usage ? '#38bdf8' : '#94a3b8' }}>
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Usage du bâtiment</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.usage ? 'var(--accent)' : 'var(--ink-500)' }}>
                   {nlpResult.donnees?.usage || 'Non détecté'}
                 </span>
               </div>
 
-              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
-                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Portée principale</span>
-                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.portee_m != null ? '#38bdf8' : '#94a3b8' }}>
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Portée principale</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.portee_m != null ? 'var(--accent)' : 'var(--ink-500)' }}>
                   {nlpResult.donnees?.portee_m != null ? `${nlpResult.donnees.portee_m} m` : 'Non détectée'}
                 </span>
               </div>
 
-              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
-                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Hauteur d'étage</span>
-                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.hauteur_niveau_m != null ? '#38bdf8' : '#94a3b8' }}>
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Hauteur d'étage</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.hauteur_niveau_m != null ? 'var(--accent)' : 'var(--ink-500)' }}>
                   {nlpResult.donnees?.hauteur_niveau_m != null ? `${nlpResult.donnees.hauteur_niveau_m} m` : 'Non détectée'}
                 </span>
               </div>
 
-              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
-                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Contrainte du sol</span>
-                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.contrainte_sol_kn_m2 != null ? '#38bdf8' : '#94a3b8' }}>
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Contrainte du sol</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.contrainte_sol_kn_m2 != null ? 'var(--accent)' : 'var(--ink-500)' }}>
                   {nlpResult.donnees?.contrainte_sol_kn_m2 != null ? `${nlpResult.donnees.contrainte_sol_kn_m2} kN/m²` : 'Non détectée'}
                 </span>
               </div>
@@ -594,7 +577,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
 
             {/* Message si données manquant/partielles OU si aucune donnée exploitable */}
             {!hasApplicableNlpData(nlpResult.donnees) ? (
-              <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', marginBottom: '1rem', color: '#fca5a5', fontSize: '0.85rem' }}>
+              <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginBottom: '1rem', color: 'var(--status-critical)', fontSize: '0.85rem' }}>
                 Aucun paramètre exploitable n'a été détecté. Complétez le formulaire manuellement.
               </div>
             ) : (
@@ -602,7 +585,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
                 nlpResult.donnees?.nombre_niveaux == null ||
                 nlpResult.donnees?.usage == null ||
                 nlpResult.donnees?.portee_m == null) && (
-                <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', marginBottom: '1rem', color: '#fcd34d', fontSize: '0.85rem' }}>
+                <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', marginBottom: '1rem', color: 'var(--status-warn)', fontSize: '0.85rem' }}>
                   Certains paramètres n'ont pas pu être déterminés. Complétez-les manuellement avant de poursuivre.
                 </div>
               )
@@ -610,7 +593,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
 
             {/* Avertissements */}
             {Array.isArray(nlpResult.avertissements) && nlpResult.avertissements.length > 0 && (
-              <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', marginBottom: '1rem', color: '#fca5a5', fontSize: '0.82rem' }}>
+              <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginBottom: '1rem', color: 'var(--status-critical)', fontSize: '0.82rem' }}>
                 <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
                   {nlpResult.avertissements.map((adv, idx) => (
                     <li key={idx}>{adv}</li>
@@ -633,7 +616,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
                 </button>
 
                 {nlpApplied && (
-                  <span style={{ fontSize: '0.85rem', color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--status-ok)', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}>
                     <CheckCircle2 size={16} /> Paramètres appliqués au formulaire avec succès !
                   </span>
                 )}
@@ -773,7 +756,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         </div>
 
         <div className="form-group" style={{ gridColumn: 'span 2' }}>
-          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--accent-primary)', background: '#eff6ff', border: '1px solid #bfdbfe', padding: '0.5rem 1rem', borderRadius: '8px', display: 'inline-block' }}>
+          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--accent-primary)', background: 'var(--status-neutral-soft)', border: '1px solid var(--accent-soft-border)', padding: '0.5rem 1rem', borderRadius: '8px', display: 'inline-block' }}>
             Aperçu Trame : Grille de {(parseInt(projectData.nbTraveesX || 0) + 1) * (parseInt(projectData.nbTraveesY || 0) + 1)} poteaux ({projectData.nbTraveesX || 0}x{projectData.nbTraveesY || 0} travées)
           </p>
         </div>

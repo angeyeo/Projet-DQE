@@ -171,10 +171,13 @@ class TestVisionAPI(APITestCase):
     # --- F. Sécurité ---
     def test_securite_demo_mode_false_anonyme_rejete(self):
         os.environ["DEMO_MODE"] = "False"
-        # Client anonyme
+        # Client anonyme -- 401 depuis l'ajout de JWTAuthentication (sprint
+        # Comptes & Permissions) : DRF renvoie 401 (non authentifié) plutôt
+        # que 403 (authentifié mais interdit) dès qu'un schéma d'authentification
+        # avec challenge WWW-Authenticate est configuré.
         fichier = SimpleUploadedFile("plan.png", self.png_bytes, content_type="image/png")
         response = self.client.post(self._url(), {"fichier": fichier}, format="multipart")
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_securite_demo_mode_false_authentifie_accepte(self):
         os.environ["DEMO_MODE"] = "False"
