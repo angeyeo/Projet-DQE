@@ -1,11 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
+import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle, Sparkles, Check } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
 
 const CHARGE_EXPLOITATION_PAR_USAGE = {
   habitation: 1.5,
   bureau: 2.5,
   commercial: 4.0,
+};
+
+const TYPE_LABELS = {
+  semelle: 'Semelles',
+  semelle_filante: 'Semelle filante',
+  longrine: 'Longrines',
+  poteau: 'Poteaux',
+  poutre: 'Poutres',
+  dalle: 'Dalles',
+  chainage: 'Chaînages',
 };
 
 const LIMITES = {
@@ -32,19 +42,16 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   const [analysisSuccess, setAnalysisSuccess] = useState(false);
   const [analysisWarnings, setAnalysisWarnings] = useState([]);
 
-  // Vision IA -- résultat brut renvoyé par /projets/{id}/analyser_plan_image/ :
-  // une liste d'annotations OCR lues sur l'image (pas des nb_travees_x/y).
-  const [visionAnnotations, setVisionAnnotations] = useState([]);
-  const [visionMessage, setVisionMessage] = useState(null);
-  const [visionSource, setVisionSource] = useState(null);
-
-  // Structuration NLP -- description libre du projet analysée par l'IA
-  // (POST /assistant/structurer-projet/), jamais câblée à aucune UI avant.
+  // État de l'analyse en langage naturel (Assistant IA)
   const [nlpDescription, setNlpDescription] = useState('');
   const [nlpAnalyzing, setNlpAnalyzing] = useState(false);
   const [nlpApplied, setNlpApplied] = useState(false);
   const [nlpError, setNlpError] = useState(null);
   const [nlpResult, setNlpResult] = useState(null);
+  const [nlpApplied, setNlpApplied] = useState(false);
+
+  // État d'affichage réduit/déplié des textes non classés Vision
+  const [showAllTextesNonClasses, setShowAllTextesNonClasses] = useState(false);
 
   useEffect(() => {
     if (!projectData.chargeExploitation && projectData.typeUsage) {
@@ -117,26 +124,21 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       return;
     }
 
-    // Traitement Vision IA si c'est une image de plan.
-    // Le backend (projets/services/assistant_ia/vision.py::analyser_plan_2d)
-    // ne renvoie PAS de nb_travees_x/y : il renvoie une lecture OCR brute des
-    // annotations visibles sur l'image (repère + dimensions entre parenthèses,
-    // ex: "S1(170x170x40)"), à charge pour l'ingénieur de les reporter
-    // manuellement. L'ancien code attendait `result.parametres_detectes`, un
-    // champ qui n'existe pas dans la réponse -- la condition ne se déclenchait
-    // donc jamais et rien ne s'affichait, en plus du crash sur la fonction
-    // manquante.
-    if (isImage && projectData.id) {
+    // Traitement Vision IA si c'est une image de plan (Aperçu uniquement, aucune mutation des paramètres du projet)
+    if (isImage) {
       setAnalyzing(true);
-      setVisionAnnotations([]);
-      setVisionMessage(null);
-      setVisionSource(null);
+      setAnalysisError(null);
       try {
-        const result = await dqeService.analyserPlanImage(projectData.id, file);
-        setVisionAnnotations(result?.annotations_lues || []);
-        setVisionMessage(result?.message || null);
-        setVisionSource(result?.source || null);
-        setAnalysisSuccess((result?.annotations_lues || []).length > 0);
+        let projetId = projectData.id;
+        if (!projetId) {
+          const projet = await dqeService.createProjet(projectData);
+          projetId = projet.id;
+          updateProjectData({ id: projetId });
+        }
+
+        const result = await dqeService.analyserPlanImage(projetId, file);
+        updateProjectData({ visionResult: result });
+        setAnalysisSuccess(true);
       } catch (err) {
         setAnalysisError(`Erreur d'analyse IA : ${err.message || "Impossible d'extraire le plan"}`);
       } finally {
@@ -252,6 +254,22 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   };
 
   const vision = projectData.visionResult;
+  const visionAnnotations = (vision && Array.isArray(vision.annotations_lues)) ? vision.annotations_lues : [];
+  const visionTotalElements = visionAnnotations.length;
+
+  const visionCountsByType = {};
+  visionAnnotations.forEach((ann) => {
+    const t = ann.type_normalise || 'autre';
+    visionCountsByType[t] = (visionCountsByType[t] || 0) + 1;
+  });
+
+  const visionCategories = Object.entries(visionCountsByType).map(([type, count]) => ({
+    type,
+    label: TYPE_LABELS[type] || type.replace('_', ' '),
+    count,
+  }));
+
+  const visionMaxCount = Math.max(...visionCategories.map((c) => c.count), 1);
 
   return (
     <div className="glass-panel">
@@ -366,9 +384,9 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
                     <div style={{ fontSize: '0.8rem', color: 'var(--core-border)', marginTop: '0.25rem' }}>
                       Dimensions : {ann.dimensions_parsees.valeurs.join(' × ')} {ann.dimensions_parsees.unite || ''}
                     </div>
-                  )}
-                </div>
-              ))}
+                  );
+                })}
+              </div>
             </div>
           ) : (
             <p style={{ fontSize: '0.85rem', color: 'var(--ink-500)', margin: 0 }}>Aucun élément reconnu avec certitude sur ce plan.</p>
