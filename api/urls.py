@@ -15,6 +15,7 @@ from projets.auth_views import (
     InscriptionEntrepriseView,
     InviterUtilisateurView,
     ActiverCompteView,
+    MoiView,
     MembresEntrepriseView,
     DesactiverUtilisateurView,
     ChangerMotDePasseView,
@@ -84,6 +85,7 @@ urlpatterns = [
     path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
 
     # --- Comptes & cabinet ---
+    path("auth/moi/", MoiView.as_view(), name="auth-moi"),
     path("auth/inscription/", InscriptionEntrepriseView.as_view(), name="auth-inscription"),
     path("auth/inviter/", InviterUtilisateurView.as_view(), name="auth-inviter"),
     path("auth/activer/", ActiverCompteView.as_view(), name="auth-activer"),

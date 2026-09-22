@@ -178,6 +178,24 @@ class ActiverCompteView(APIView):
         return Response({"detail": "Compte activé, vous pouvez maintenant vous connecter."})
 
 
+class MoiView(APIView):
+    """
+    GET /api/auth/moi/ -- profil de l'utilisateur connecté (rôle, entreprise).
+    Utilisé côté frontend pour savoir s'il faut afficher "Équipe" dans la
+    Sidebar (réservé Admin) et pour gérer TeamManagementView. Renvoie 404
+    si l'utilisateur n'a pas encore de Profil (compte legacy / onboarding
+    pas encore fait) -- pas de donnée inventée.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        profil = getattr(request.user, "profil", None)
+        if profil is None:
+            return Response({"detail": "Aucun profil pour cet utilisateur."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(_profil_serialise(profil))
+
+
 class MembresEntrepriseView(APIView):
     """
     GET /api/auth/membres/ -- liste les comptes du cabinet de l'Admin connecté.
