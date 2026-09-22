@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, FileUp, Calculator, Lock, FileSpreadsheet, ChevronLeft, ChevronRight, Compass, Settings, Building2 } from 'lucide-react';
+import { LayoutDashboard, FileUp, Calculator, Lock, FileSpreadsheet, ChevronLeft, ChevronRight, Compass, Settings, Building2, LogOut, Users } from 'lucide-react';
 
 export default function Sidebar({
   activeView,
@@ -10,6 +10,8 @@ export default function Sidebar({
   totalCount,
   entreprise,
   entrepriseLoading,
+  onLogout,
+  moiProfil,
 }) {
   const menuItems = [
     { id: 'dashboard', label: 'Tableau de Bord', icon: LayoutDashboard },
@@ -21,6 +23,9 @@ export default function Sidebar({
 
   const menuItemsBas = [
     { id: 'settingsEntreprise', label: 'Paramètres Entreprise', icon: Settings },
+    // Visible uniquement pour un compte Admin -- l'API refuse déjà l'accès
+    // aux autres rôles, mais autant ne pas afficher un lien qui échouera.
+    ...(moiProfil?.role === 'admin' ? [{ id: 'equipe', label: 'Équipe', icon: Users }] : []),
   ];
 
   // Initiales tirées du vrai nom d'entreprise (dqeService.getEntreprise) --
@@ -125,6 +130,15 @@ export default function Sidebar({
             </div>
           )}
         </div>
+
+        <button
+          className="nav-item"
+          style={{ width: '100%', marginTop: '0.5rem', background: 'transparent', border: 'none', cursor: 'pointer' }}
+          onClick={onLogout}
+        >
+          <LogOut size={19} style={{ flexShrink: 0 }} />
+          {!isCollapsed && <span>Déconnexion</span>}
+        </button>
       </div>
     </aside>
   );

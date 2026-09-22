@@ -1,19 +1,27 @@
 import React, { useState } from 'react';
-import { Compass, Building2, Mail, Lock, ArrowRight, Info } from 'lucide-react';
+import { Compass, Mail, Lock, ArrowRight, Loader2, AlertCircle } from 'lucide-react';
+import { dqeService } from '../api/dqeService';
 
 export default function LoginPage({ onEnterApp, onBackToLanding, onGoToRegister, onGoToForgotPassword }) {
-  const [nomEntreprise, setNomEntreprise] = useState('');
   const [email, setEmail] = useState('');
   const [motDePasse, setMotDePasse] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [erreur, setErreur] = useState(null);
 
-  // IMPORTANT : il n'existe pas encore d'API d'authentification côté
-  // backend (Entreprise/Profil/JWT -- prévu au sprint permissions). On ne
-  // simule donc PAS une connexion réussie avec des données inventées : on
-  // le dit clairement et on laisse entrer en mode direct, sans prétendre
-  // qu'un compte a été vérifié.
-  const handleSubmit = (e) => {
+  // Connexion réelle -- dqeService.login() appelle POST /api/auth/token/
+  // et stocke access/refresh en localStorage (voir dqeService.js).
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    onEnterApp();
+    setErreur(null);
+    setLoading(true);
+    try {
+      await dqeService.login(email, motDePasse);
+      onEnterApp();
+    } catch (err) {
+      setErreur(err.status === 401 ? 'Email ou mot de passe incorrect.' : (err.message || 'Connexion impossible.'));
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -39,20 +47,6 @@ export default function LoginPage({ onEnterApp, onBackToLanding, onGoToRegister,
           <p className="login-sub">Accédez à l'espace de votre entreprise.</p>
 
           <div className="form-group">
-            <label className="form-label">Nom de l'entreprise</label>
-            <div className="input-icon-wrap">
-              <Building2 size={17} />
-              <input
-                className="form-control"
-                style={{ paddingLeft: '2.4rem' }}
-                placeholder="ex : BATI-PRO SARL"
-                value={nomEntreprise}
-                onChange={(e) => setNomEntreprise(e.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="form-group">
             <label className="form-label">Email professionnel</label>
             <div className="input-icon-wrap">
               <Mail size={17} />
@@ -63,6 +57,7 @@ export default function LoginPage({ onEnterApp, onBackToLanding, onGoToRegister,
                 placeholder="vous@entreprise.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
               />
             </div>
           </div>
@@ -83,13 +78,21 @@ export default function LoginPage({ onEnterApp, onBackToLanding, onGoToRegister,
                 placeholder="••••••••"
                 value={motDePasse}
                 onChange={(e) => setMotDePasse(e.target.value)}
+                autoComplete="current-password"
               />
             </div>
           </div>
 
-          <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.85rem' }}>
-            <span>Se connecter</span>
-            <ArrowRight size={17} />
+          {erreur && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--status-critical)', fontSize: '0.82rem', marginBottom: '1rem' }}>
+              <AlertCircle size={14} />
+              <span>{erreur}</span>
+            </div>
+          )}
+
+          <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.85rem' }} disabled={loading}>
+            {loading ? <Loader2 size={17} className="spin" /> : <ArrowRight size={17} />}
+            <span>{loading ? 'Connexion...' : 'Se connecter'}</span>
           </button>
 
           <p className="login-switch">
@@ -98,15 +101,6 @@ export default function LoginPage({ onEnterApp, onBackToLanding, onGoToRegister,
               Créer un compte
             </button>
           </p>
-
-          <div className="login-notice">
-            <Info size={14} />
-            <span>
-              L'authentification par compte d'entreprise est en cours de
-              déploiement côté serveur. En attendant, ce bouton vous fait
-              entrer directement dans l'application.
-            </span>
-          </div>
         </form>
       </div>
     </div>

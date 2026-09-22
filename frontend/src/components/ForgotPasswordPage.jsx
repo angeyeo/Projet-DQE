@@ -1,18 +1,28 @@
 import React, { useState } from 'react';
-import { Compass, Mail, ArrowRight, Info, CheckCircle2 } from 'lucide-react';
+import { Compass, Mail, ArrowRight, Info, CheckCircle2, Loader2 } from 'lucide-react';
+import { dqeService } from '../api/dqeService';
 
 export default function ForgotPasswordPage({ onBackToLanding, onGoToLogin }) {
   const [email, setEmail] = useState('');
   const [envoye, setEnvoye] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  // Il n'existe aucune API d'envoi d'email de réinitialisation côté
-  // backend. On n'affiche donc jamais "email envoyé" comme s'il l'avait
-  // réellement été -- on montre l'état "demande enregistrée localement"
-  // et on explique honnêtement que rien n'est encore branché.
-  const handleSubmit = (e) => {
+  // Appel réel : POST /api/auth/mot-de-passe-oublie/. Le backend ne
+  // révèle jamais si l'email existe (email_envoye est toujours false
+  // dans la réponse, par design -- pas d'énumération de comptes) : voir
+  // DemanderReinitialisationView. Aucun SMTP n'est configuré ce jour, donc
+  // aucun email n'est réellement envoyé -- ça reste vrai à dire, mais la
+  // demande elle-même est désormais bien traitée côté serveur.
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!email.trim()) return;
-    setEnvoye(true);
+    setLoading(true);
+    try {
+      await dqeService.demanderReinitialisation(email.trim());
+    } finally {
+      setLoading(false);
+      setEnvoye(true);
+    }
   };
 
   return (
@@ -53,17 +63,17 @@ export default function ForgotPasswordPage({ onBackToLanding, onGoToLogin }) {
                 </div>
               </div>
 
-              <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.85rem' }}>
-                <span>Envoyer le lien</span>
-                <ArrowRight size={17} />
+              <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.85rem' }} disabled={loading}>
+                {loading ? <Loader2 size={17} className="spin" /> : <ArrowRight size={17} />}
+                <span>{loading ? 'Envoi...' : 'Envoyer le lien'}</span>
               </button>
 
               <div className="login-notice">
                 <Info size={14} />
                 <span>
-                  L'envoi d'email de réinitialisation n'est pas encore
-                  branché côté serveur : aucun email ne sera réellement
-                  envoyé tant que cette fonctionnalité n'est pas déployée.
+                  Aucun serveur d'envoi d'email n'est encore configuré :
+                  la demande est bien traitée, mais aucun email ne sera
+                  réellement reçu pour l'instant.
                 </span>
               </div>
             </>
@@ -71,9 +81,9 @@ export default function ForgotPasswordPage({ onBackToLanding, onGoToLogin }) {
             <div className="login-notice" style={{ background: 'var(--status-ok-soft)' }}>
               <CheckCircle2 size={14} style={{ color: 'var(--status-ok)' }} />
               <span>
-                Demande enregistrée pour <strong>{email}</strong>. Aucun
-                email n'a réellement été envoyé -- cette fonctionnalité
-                arrive avec l'authentification par compte entreprise.
+                Si un compte existe pour <strong>{email}</strong>, une
+                demande de réinitialisation a été enregistrée. Aucun email
+                n'a réellement été envoyé (pas de serveur SMTP configuré).
               </span>
             </div>
           )}

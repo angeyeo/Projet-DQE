@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Compass, Building2, Mail, Lock, User, ArrowRight, Info } from 'lucide-react';
+import { Compass, Building2, Mail, Lock, User, ArrowRight, Loader2, AlertCircle } from 'lucide-react';
+import { dqeService } from '../api/dqeService';
 
 export default function RegisterPage({ onEnterApp, onBackToLanding, onGoToLogin }) {
   const [nomEntreprise, setNomEntreprise] = useState('');
@@ -7,16 +8,41 @@ export default function RegisterPage({ onEnterApp, onBackToLanding, onGoToLogin 
   const [email, setEmail] = useState('');
   const [motDePasse, setMotDePasse] = useState('');
   const [confirmation, setConfirmation] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [erreurs, setErreurs] = useState({});
 
   const motsDePasseDifferents = motDePasse.length > 0 && confirmation.length > 0 && motDePasse !== confirmation;
 
-  // Même principe que LoginPage : aucune API de création de compte
-  // n'existe encore côté backend. On ne prétend pas créer un compte
-  // entreprise réel -- on le dit et on laisse entrer en mode direct.
-  const handleSubmit = (e) => {
+  // Inscription réelle -- crée l'entreprise + le premier compte Admin
+  // (voir projets/auth_views.py::InscriptionEntrepriseView). Pas de champ
+  // "username" séparé dans ce formulaire : l'email sert d'identifiant.
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (motsDePasseDifferents) return;
-    onEnterApp();
+    setErreurs({});
+    setLoading(true);
+    try {
+      await dqeService.inscription({
+        nomEntreprise,
+        username: email,
+        email,
+        motDePasse,
+      });
+      onEnterApp();
+    } catch (err) {
+      // err.data : erreurs par champ renvoyées par le backend
+      // (nom_entreprise, username, mot_de_passe...) -- on les remappe sur
+      // les noms de champs de ce formulaire.
+      const d = err.data || {};
+      setErreurs({
+        nomEntreprise: d.nom_entreprise,
+        email: d.username || d.email,
+        motDePasse: d.mot_de_passe,
+        generale: !d.nom_entreprise && !d.username && !d.mot_de_passe ? (err.message || 'Inscription impossible.') : null,
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -53,6 +79,11 @@ export default function RegisterPage({ onEnterApp, onBackToLanding, onGoToLogin 
                 onChange={(e) => setNomEntreprise(e.target.value)}
               />
             </div>
+            {erreurs.nomEntreprise && (
+              <p style={{ color: 'var(--status-critical)', fontSize: '0.78rem', marginTop: '0.4rem' }}>
+                {[].concat(erreurs.nomEntreprise).join(' ')}
+              </p>
+            )}
           </div>
 
           <div className="form-group">
@@ -80,8 +111,14 @@ export default function RegisterPage({ onEnterApp, onBackToLanding, onGoToLogin 
                 placeholder="vous@entreprise.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
               />
             </div>
+            {erreurs.email && (
+              <p style={{ color: 'var(--status-critical)', fontSize: '0.78rem', marginTop: '0.4rem' }}>
+                {[].concat(erreurs.email).join(' ')}
+              </p>
+            )}
           </div>
 
           <div className="form-group">
@@ -95,8 +132,14 @@ export default function RegisterPage({ onEnterApp, onBackToLanding, onGoToLogin 
                 placeholder="••••••••"
                 value={motDePasse}
                 onChange={(e) => setMotDePasse(e.target.value)}
+                autoComplete="new-password"
               />
             </div>
+            {erreurs.motDePasse && (
+              <p style={{ color: 'var(--status-critical)', fontSize: '0.78rem', marginTop: '0.4rem' }}>
+                {[].concat(erreurs.motDePasse).join(' ')}
+              </p>
+            )}
           </div>
 
           <div className="form-group">
@@ -119,9 +162,16 @@ export default function RegisterPage({ onEnterApp, onBackToLanding, onGoToLogin 
             )}
           </div>
 
-          <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.85rem' }} disabled={motsDePasseDifferents}>
-            <span>Créer le compte</span>
-            <ArrowRight size={17} />
+          {erreurs.generale && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--status-critical)', fontSize: '0.82rem', marginBottom: '1rem' }}>
+              <AlertCircle size={14} />
+              <span>{erreurs.generale}</span>
+            </div>
+          )}
+
+          <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '0.85rem' }} disabled={motsDePasseDifferents || loading}>
+            {loading ? <Loader2 size={17} className="spin" /> : <ArrowRight size={17} />}
+            <span>{loading ? 'Création...' : 'Créer le compte'}</span>
           </button>
 
           <p className="login-switch">
@@ -130,15 +180,6 @@ export default function RegisterPage({ onEnterApp, onBackToLanding, onGoToLogin 
               Se connecter
             </button>
           </p>
-
-          <div className="login-notice">
-            <Info size={14} />
-            <span>
-              La création de compte entreprise n'est pas encore active côté
-              serveur (auth en cours de déploiement). En attendant, ce
-              bouton vous fait entrer directement dans l'application.
-            </span>
-          </div>
         </form>
       </div>
     </div>
