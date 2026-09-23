@@ -1,0 +1,31 @@
+{% extends "emails/base_email.html" %}
+{% block titre %}Bienvenue sur Projet DQE{% endblock %}
+{% block content %}
+  <h1>Bienvenue sur Projet DQE !</h1>
+  <p>Bonjour,</p>
+  <p>
+    Le cabinet <strong>{{ entreprise_nom }}</strong> vient d'être créé sur
+    <strong>Projet DQE</strong>, avec votre compte en tant qu'<strong>Administrateur</strong>.
+  </p>
+  <p>Vous pouvez dès maintenant :</p>
+  <ul style="margin:0 0 16px; padding-left:20px; color:#1F2937;">
+    <li>Créer vos premiers projets et estimations quantitatives (DQE)</li>
+    <li>Configurer les paramètres de votre cabinet</li>
+    <li>Inviter les membres de votre équipe (Techniciens, Ingénieurs)</li>
+  </ul>
+  <table role="presentation" class="btn-wrap" cellpadding="0" cellspacing="0">
+    <tr>
+      <td>
+        <a href="{{ lien_application }}" class="btn"
+           style="display:inline-block;background-color:#E8871E;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;padding:13px 30px;border-radius:6px;">
+          Accéder à mon espace
+        </a>
+      </td>
+    </tr>
+  </table>
+  <p class="link-fallback">
+    Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br>
+    <a href="{{ lien_application }}">{{ lien_application }}</a>
+  </p>
+  <p>Si vous n'êtes pas à l'origine de cette inscription, vous pouvez ignorer cet email.</p>
+{% endblock %}

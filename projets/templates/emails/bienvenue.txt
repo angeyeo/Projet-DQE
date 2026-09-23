@@ -1,0 +1,17 @@
+Bonjour,
+
+Le cabinet {{ entreprise_nom }} vient d'être créé sur Projet DQE, avec votre
+compte en tant qu'Administrateur.
+
+Vous pouvez dès maintenant :
+- Créer vos premiers projets et estimations quantitatives (DQE)
+- Configurer les paramètres de votre cabinet
+- Inviter les membres de votre équipe (Techniciens, Ingénieurs)
+
+Accédez à votre espace :
+{{ lien_application }}
+
+Si vous n'êtes pas à l'origine de cette inscription, ignorez simplement cet email.
+
+-- 
+Projet DQE
