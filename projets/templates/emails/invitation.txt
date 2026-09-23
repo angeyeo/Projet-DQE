@@ -1,0 +1,13 @@
+Bonjour,
+
+Vous avez été invité(e) à rejoindre le cabinet {{ entreprise_nom }} sur Projet DQE
+en tant que {{ role_label }}.
+
+Activez votre compte via ce lien :
+{{ lien_activation }}
+
+Ce lien est à usage unique. Si vous n'êtes pas concerné(e) par cette invitation,
+ignorez simplement cet email.
+
+-- 
+Projet DQE

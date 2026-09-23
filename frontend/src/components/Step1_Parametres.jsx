@@ -269,6 +269,8 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   }));
 
   const visionMaxCount = Math.max(...visionCategories.map((c) => c.count), 1);
+  const visionSource = vision?.source;
+  const visionMessage = vision?.message;
 
   return (
     <div className="glass-panel">
@@ -383,8 +385,8 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
                     <div style={{ fontSize: '0.8rem', color: 'var(--core-border)', marginTop: '0.25rem' }}>
                       Dimensions : {ann.dimensions_parsees.valeurs.join(' × ')} {ann.dimensions_parsees.unite || ''}
                     </div>
-                )}
-              </div>
+                  )}
+                </div>
               ))}
             </div>
           ) : (

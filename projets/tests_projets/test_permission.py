@@ -13,6 +13,7 @@ justement le mode où les permissions doivent s'appliquer pour de vrai.
 import os
 
 from django.contrib.auth.models import User
+from django.core import mail
 from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -369,3 +370,82 @@ class FluxAuthentificationTestCase(APITestCase):
             "nouveau_mot_de_passe": "ToutNouveau2026!",
         }, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+@override_settings(
+    EMAIL_HOST="smtp.dqe-test.local",
+    DEFAULT_FROM_EMAIL="no-reply@dqe-test.local",
+    FRONTEND_URL="https://app.dqe-test.local",
+)
+class EnvoiEmailTestCase(APITestCase):
+    """Sprint "Serveur mail" : avec un backend SMTP réellement configuré
+    (ici simulé par le backend locmem de Django, capturé dans mail.outbox),
+    invitation et réinitialisation doivent réellement envoyer un email --
+    et la réinitialisation ne doit plus jamais exposer le lien en JSON."""
+
+    def setUp(self):
+        self.demo = _EnvCtx("DEMO_MODE", "False")
+        self.demo.__enter__()
+
+    def tearDown(self):
+        self.demo.__exit__()
+
+    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_invitation_envoie_reellement_un_email(self):
+        insc = self.client.post("/api/auth/inscription/", {
+            "nom_entreprise": "BATI-TEST SARL",
+            "username": "admin_mail1",
+            "email": "admin_mail1@bati-test.ci",
+            "mot_de_passe": "UnMotDePasseSolide2026!",
+        }, format="json")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {insc.data['access']}")
+
+        mail.outbox = []
+        invit = self.client.post("/api/auth/inviter/", {
+            "email": "invite_mail1@bati-test.ci", "role": "technicien",
+        }, format="json")
+        self.assertEqual(invit.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(invit.data["email_envoye"])
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["invite_mail1@bati-test.ci"])
+        self.assertIn("https://app.dqe-test.local/activer-compte", mail.outbox[0].body)
+
+    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_reinitialisation_envoie_email_et_ne_fuite_pas_le_lien(self):
+        self.client.post("/api/auth/inscription/", {
+            "nom_entreprise": "BATI-TEST SARL",
+            "username": "admin_mail2",
+            "email": "admin_mail2@bati-test.ci",
+            "mot_de_passe": "UnMotDePasseSolide2026!",
+        }, format="json")
+
+        mail.outbox = []
+        demande = self.client.post("/api/auth/mot-de-passe-oublie/", {
+            "email": "admin_mail2@bati-test.ci",
+        }, format="json")
+        self.assertEqual(demande.status_code, status.HTTP_200_OK)
+        self.assertTrue(demande.data["email_envoye"])
+        self.assertNotIn("lien_reinitialisation", demande.data)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["admin_mail2@bati-test.ci"])
+        self.assertIn("https://app.dqe-test.local/reinitialiser-mot-de-passe", mail.outbox[0].body)
+
+    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_reinitialisation_reponse_identique_email_connu_ou_non(self):
+        """Anti-énumération : avec SMTP configuré, la réponse ne doit
+        jamais permettre de distinguer un email connu d'un email inconnu."""
+        self.client.post("/api/auth/inscription/", {
+            "nom_entreprise": "BATI-TEST SARL",
+            "username": "admin_mail3",
+            "email": "admin_mail3@bati-test.ci",
+            "mot_de_passe": "UnMotDePasseSolide2026!",
+        }, format="json")
+
+        connu = self.client.post("/api/auth/mot-de-passe-oublie/", {
+            "email": "admin_mail3@bati-test.ci",
+        }, format="json")
+        inconnu = self.client.post("/api/auth/mot-de-passe-oublie/", {
+            "email": "personne@nulle-part.ci",
+        }, format="json")
+        self.assertEqual(set(connu.data.keys()), set(inconnu.data.keys()))
+        self.assertEqual(connu.data["email_envoye"], inconnu.data["email_envoye"])

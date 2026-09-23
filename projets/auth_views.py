@@ -3,19 +3,28 @@ Vues du sprint "Comptes & Permissions" : inscription d'un cabinet,
 invitation/gestion des membres, mot de passe (changement + réinitialisation),
 déconnexion (révocation du refresh token).
 
-IMPORTANT -- honnêteté sur ce qui est réellement branché : aucun backend
-d'envoi d'email n'est configuré dans ce projet (pas d'EMAIL_BACKEND dans
-settings.py). Les vues qui devraient normalement envoyer un email
-(invitation, réinitialisation de mot de passe) renvoient donc le lien
-directement dans la réponse JSON, avec un champ explicite
-`email_envoye: false` -- jamais de faux "email envoyé". À remplacer par un
-vrai envoi dès qu'un backend SMTP est configuré (voir TODO ci-dessous).
+Envoi d'email -- un backend SMTP réel peut être configuré via les variables
+EMAIL_HOST/EMAIL_PORT/EMAIL_HOST_USER/EMAIL_HOST_PASSWORD (voir .env.example
+et backend/settings.py). Tant qu'EMAIL_HOST n'est pas renseigné (dev/tests),
+Django retombe sur le backend "console" -- aucun envoi réel -- et les vues
+ci-dessous gardent alors leur ancien comportement de secours : le lien est
+renvoyé directement dans la réponse JSON, avec un champ explicite
+`email_envoye: false` -- jamais de faux "email envoyé". Voir
+_email_reellement_configure() ci-dessous pour la bascule entre ces deux
+comportements.
 """
 
+import logging
+from smtplib import SMTPException
+
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.mail import EmailMultiAlternatives
+from django.template import TemplateDoesNotExist
+from django.template.loader import render_to_string
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.db import transaction
@@ -29,6 +38,46 @@ from rest_framework_simplejwt.exceptions import TokenError
 
 from .models import Profil, EntrepriseParametres
 from .permissions import EstAdminEntreprise
+
+logger = logging.getLogger(__name__)
+
+
+def _email_reellement_configure() -> bool:
+    """Vrai seulement si EMAIL_HOST est renseigné (voir backend/settings.py) --
+    c'est-à-dire qu'un vrai serveur SMTP a été configuré pour ce déploiement.
+    Sert à ne jamais annoncer `email_envoye: true` sans un envoi réel, et à
+    savoir quand il est sûr d'arrêter de renvoyer les liens en clair dans le
+    JSON. On ne teste pas `settings.EMAIL_BACKEND` ici : le test runner de
+    Django le remplace toujours par le backend locmem pendant les tests,
+    quel que soit EMAIL_HOST -- ce ne serait donc pas un signal fiable."""
+    return bool(getattr(settings, "EMAIL_HOST", ""))
+
+
+def _envoyer_email(destinataire: str, sujet: str, template_base: str, contexte: dict) -> bool:
+    """Rend `projets/templates/{template_base}.html` (mise en page) et
+    `{template_base}.txt` (repli texte brut, pour les clients qui n'affichent
+    pas le HTML) puis envoie un email multipart. Renvoie True seulement si un
+    backend SMTP est configuré ET que l'envoi a réussi. Ne lève jamais -- une
+    panne d'envoi (réseau, identifiants invalides, template manquant...) ne
+    doit jamais faire échouer la requête HTTP ; l'appelant garde alors son
+    ancien secours (lien dans la réponse JSON)."""
+    if not _email_reellement_configure():
+        return False
+    try:
+        corps_texte = render_to_string(f"{template_base}.txt", contexte)
+        corps_html = render_to_string(f"{template_base}.html", contexte)
+        message = EmailMultiAlternatives(
+            subject=sujet,
+            body=corps_texte,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[destinataire],
+        )
+        message.attach_alternative(corps_html, "text/html")
+        message.send(fail_silently=False)
+        return True
+    except (SMTPException, OSError, TemplateDoesNotExist) as exc:
+        logger.warning("Échec de l'envoi d'email à %s : %s", destinataire, exc)
+        return False
 
 
 def _profil_serialise(profil: Profil) -> dict:
@@ -129,14 +178,30 @@ class InviterUtilisateurView(APIView):
 
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
+        lien_relatif = f"/activer-compte?uid={uid}&token={token}"
+
+        email_envoye = _envoyer_email(
+            destinataire=email,
+            sujet=f"Invitation à rejoindre {entreprise.nom} sur Projet DQE",
+            template_base="emails/invitation",
+            contexte={
+                "entreprise_nom": entreprise.nom,
+                "role_label": dict(Profil.Role.choices).get(role, role),
+                "lien_activation": f"{settings.FRONTEND_URL}{lien_relatif}",
+            },
+        )
 
         return Response(
             {
-                "detail": "Compte créé (désactivé) -- lien d'activation ci-dessous.",
-                "email_envoye": False,
+                "detail": (
+                    "Compte créé -- email d'invitation envoyé."
+                    if email_envoye
+                    else "Compte créé (désactivé) -- lien d'activation ci-dessous."
+                ),
+                "email_envoye": email_envoye,
                 "uid": uid,
                 "token": token,
-                "lien_activation": f"/activer-compte?uid={uid}&token={token}",
+                "lien_activation": lien_relatif,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -176,6 +241,24 @@ class ActiverCompteView(APIView):
         user.save(update_fields=["password", "is_active"])
 
         return Response({"detail": "Compte activé, vous pouvez maintenant vous connecter."})
+
+
+class MoiView(APIView):
+    """
+    GET /api/auth/moi/ -- profil de l'utilisateur connecté (rôle, entreprise).
+    Utilisé côté frontend pour savoir s'il faut afficher "Équipe" dans la
+    Sidebar (réservé Admin) et pour gérer TeamManagementView. Renvoie 404
+    si l'utilisateur n'a pas encore de Profil (compte legacy / onboarding
+    pas encore fait) -- pas de donnée inventée.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        profil = getattr(request.user, "profil", None)
+        if profil is None:
+            return Response({"detail": "Aucun profil pour cet utilisateur."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(_profil_serialise(profil))
 
 
 class MembresEntrepriseView(APIView):
@@ -244,8 +327,13 @@ class DemanderReinitialisationView(APIView):
     """
     POST /api/auth/mot-de-passe-oublie/  {"email": ...}
     Ne révèle jamais si l'email existe ou non (réponse identique dans les
-    deux cas -- énumération d'emails). Le lien n'est renvoyé dans la
-    réponse QUE si l'email correspond à un compte, jamais autrement.
+    deux cas). Sans backend SMTP configuré, le lien de réinitialisation
+    était auparavant toujours renvoyé dans le JSON pour un email connu --
+    un secours nécessaire vu l'absence d'envoi réel, mais qui revient à
+    révéler l'existence du compte à qui lit la réponse. Ce lien n'est
+    donc renvoyé en JSON que lorsqu'aucun SMTP n'est configuré (dev/tests) ;
+    dès qu'un backend réel est branché, il ne part plus que par email --
+    seul canal qui prouve la possession de la boîte mail.
     """
 
     permission_classes = [AllowAny]
@@ -254,14 +342,36 @@ class DemanderReinitialisationView(APIView):
         email = (request.data.get("email") or "").strip()
         user = User.objects.filter(email=email, is_active=True).first()
 
+        smtp_configure = _email_reellement_configure()
         reponse = {
             "detail": "Si un compte existe avec cet email, un lien de réinitialisation a été généré.",
-            "email_envoye": False,
+            "email_envoye": smtp_configure,
         }
+
         if user is not None:
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)
-            reponse["lien_reinitialisation"] = f"/reinitialiser-mot-de-passe?uid={uid}&token={token}"
+            lien_relatif = f"/reinitialiser-mot-de-passe?uid={uid}&token={token}"
+
+            if smtp_configure:
+                envoye = _envoyer_email(
+                    destinataire=user.email,
+                    sujet="Réinitialisation de votre mot de passe -- Projet DQE",
+                    template_base="emails/reinitialisation",
+                    contexte={
+                        "lien_reinitialisation": f"{settings.FRONTEND_URL}{lien_relatif}",
+                    },
+                )
+                if not envoye:
+                    # SMTP configuré mais l'envoi a échoué (panne réseau,
+                    # identifiants invalides...) -- secours exceptionnel
+                    # pour ne pas bloquer l'utilisateur derrière une panne
+                    # d'infra qu'il ne peut pas résoudre lui-même.
+                    reponse["email_envoye"] = False
+                    reponse["lien_reinitialisation"] = lien_relatif
+            else:
+                # Pas de SMTP configuré (dev/tests) : comportement historique.
+                reponse["lien_reinitialisation"] = lien_relatif
 
         return Response(reponse)
 

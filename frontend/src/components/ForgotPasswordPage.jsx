@@ -5,20 +5,23 @@ import { dqeService } from '../api/dqeService';
 export default function ForgotPasswordPage({ onBackToLanding, onGoToLogin }) {
   const [email, setEmail] = useState('');
   const [envoye, setEnvoye] = useState(false);
+  const [emailReellementEnvoye, setEmailReellementEnvoye] = useState(false);
+  const [lienSecours, setLienSecours] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // Appel réel : POST /api/auth/mot-de-passe-oublie/. Le backend ne
-  // révèle jamais si l'email existe (email_envoye est toujours false
-  // dans la réponse, par design -- pas d'énumération de comptes) : voir
-  // DemanderReinitialisationView. Aucun SMTP n'est configuré ce jour, donc
-  // aucun email n'est réellement envoyé -- ça reste vrai à dire, mais la
-  // demande elle-même est désormais bien traitée côté serveur.
+  // Appel réel : POST /api/auth/mot-de-passe-oublie/. Le backend ne révèle
+  // jamais si l'email existe (email_envoye est identique que le compte
+  // existe ou non, par design -- pas d'énumération de comptes) : voir
+  // DemanderReinitialisationView. On peut donc afficher email_envoye tel
+  // quel sans rien révéler sur l'existence du compte.
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!email.trim()) return;
     setLoading(true);
     try {
-      await dqeService.demanderReinitialisation(email.trim());
+      const res = await dqeService.demanderReinitialisation(email.trim());
+      setEmailReellementEnvoye(Boolean(res?.email_envoye));
+      setLienSecours(res?.lien_reinitialisation || null);
     } finally {
       setLoading(false);
       setEnvoye(true);
@@ -71,9 +74,8 @@ export default function ForgotPasswordPage({ onBackToLanding, onGoToLogin }) {
               <div className="login-notice">
                 <Info size={14} />
                 <span>
-                  Aucun serveur d'envoi d'email n'est encore configuré :
-                  la demande est bien traitée, mais aucun email ne sera
-                  réellement reçu pour l'instant.
+                  Si un compte existe pour cette adresse, un lien de
+                  réinitialisation vous sera transmis.
                 </span>
               </div>
             </>
@@ -81,9 +83,25 @@ export default function ForgotPasswordPage({ onBackToLanding, onGoToLogin }) {
             <div className="login-notice" style={{ background: 'var(--status-ok-soft)' }}>
               <CheckCircle2 size={14} style={{ color: 'var(--status-ok)' }} />
               <span>
-                Si un compte existe pour <strong>{email}</strong>, une
-                demande de réinitialisation a été enregistrée. Aucun email
-                n'a réellement été envoyé (pas de serveur SMTP configuré).
+                {emailReellementEnvoye ? (
+                  <>
+                    Si un compte existe pour <strong>{email}</strong>, un email de
+                    réinitialisation vient d'être envoyé -- vérifiez votre boîte de
+                    réception (et vos spams).
+                  </>
+                ) : (
+                  <>
+                    Si un compte existe pour <strong>{email}</strong>, une
+                    demande de réinitialisation a été enregistrée. Aucun email
+                    n'a réellement été envoyé (pas de serveur SMTP configuré).
+                    {lienSecours && (
+                      <>
+                        {' '}Lien de secours :{' '}
+                        <a href={lienSecours}>{window.location.origin + lienSecours}</a>
+                      </>
+                    )}
+                  </>
+                )}
               </span>
             </div>
           )}

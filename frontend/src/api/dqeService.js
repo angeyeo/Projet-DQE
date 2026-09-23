@@ -625,6 +625,11 @@ export const dqeService = {
     });
   },
 
+  // Profil (rôle, entreprise) de l'utilisateur connecté.
+  getMoi: async () => {
+    return getJSON(`${API_BASE_URL}/auth/moi/`);
+  },
+
   // Réservé aux comptes Admin du cabinet.
   inviterUtilisateur: async ({ email, role }) => {
     return postJSON(`${API_BASE_URL}/auth/inviter/`, { email, role });
