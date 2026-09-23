@@ -32,18 +32,32 @@ def generer_image_png_valide() -> bytes:
 
 class TestVisionAPI(APITestCase):
     def setUp(self):
-        # On s'assure que le cache est propre avant chaque test pour éviter des interférences de throttling
         cache.clear()
 
-        # Création des données de test
-        self.projet = Projet.objects.create(nom="Projet Test Vision")
+        # Création de l'entreprise et de l'utilisateur pour le multi-tenant
+        from projets.models import Entreprise, Profil
+        self.entreprise, _ = Entreprise.objects.get_or_create(
+            code_cabinet="CAB-VISION-TEST",
+            defaults={"nom": "Cabinet Vision Test"}
+        )
         self.user = User.objects.create_user(username="testuser", password="password123")
+        Profil.objects.get_or_create(
+            user=self.user,
+            defaults={"entreprise": self.entreprise, "role": "INGENIEUR"}
+        )
+        self.client.force_authenticate(user=self.user)
 
-        # Par défaut, on se met en mode DEMO_MODE=True pour simplifier les tests nominaux hors-sécurité
+        # Création du projet lié à l'entreprise et l'utilisateur
+        self.projet = Projet.objects.create(
+            nom="Projet Test Vision",
+            entreprise=self.entreprise,
+            cree_par=self.user
+        )
+
+        # Reste du code existant...
         self.original_demo_mode = os.getenv("DEMO_MODE")
         os.environ["DEMO_MODE"] = "True"
 
-        # On force également le fournisseur d'IA à 'mock' pour éviter les appels réels
         self.original_llm_provider = os.getenv("LLM_PROVIDER")
         os.environ["LLM_PROVIDER"] = "mock"
 
@@ -171,13 +185,11 @@ class TestVisionAPI(APITestCase):
     # --- F. Sécurité ---
     def test_securite_demo_mode_false_anonyme_rejete(self):
         os.environ["DEMO_MODE"] = "False"
-        # Client anonyme -- 401 depuis l'ajout de JWTAuthentication (sprint
-        # Comptes & Permissions) : DRF renvoie 401 (non authentifié) plutôt
-        # que 403 (authentifié mais interdit) dès qu'un schéma d'authentification
-        # avec challenge WWW-Authenticate est configuré.
+        self.client.logout()
+        
         fichier = SimpleUploadedFile("plan.png", self.png_bytes, content_type="image/png")
         response = self.client.post(self._url(), {"fichier": fichier}, format="multipart")
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED) # <--- Ici
 
     def test_securite_demo_mode_false_authentifie_accepte(self):
         os.environ["DEMO_MODE"] = "False"
