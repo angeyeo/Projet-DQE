@@ -1,0 +1,13 @@
+Bonjour,
+
+Une demande de réinitialisation de mot de passe a été effectuée pour le compte
+associé à cette adresse email sur Projet DQE.
+
+Réinitialisez votre mot de passe via ce lien :
+{{ lien_reinitialisation }}
+
+Si vous n'êtes pas à l'origine de cette demande, ignorez simplement cet email --
+votre mot de passe restera inchangé.
+
+-- 
+Projet DQE

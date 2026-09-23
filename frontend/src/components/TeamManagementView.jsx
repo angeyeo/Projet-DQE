@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { UserPlus, Loader2, AlertCircle, Copy, Check, ShieldOff, ShieldAlert } from 'lucide-react';
+import { UserPlus, Loader2, AlertCircle, Copy, Check, ShieldOff, ShieldAlert, MailCheck } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
 
 const ROLES = [
@@ -40,6 +40,8 @@ export default function TeamManagementView({ moiProfil }) {
   const [invitationEnCours, setInvitationEnCours] = useState(false);
   const [erreurInvitation, setErreurInvitation] = useState(null);
   const [dernierLien, setDernierLien] = useState(null);
+  const [dernierEmailEnvoye, setDernierEmailEnvoye] = useState(false);
+  const [dernierEmailInvite, setDernierEmailInvite] = useState('');
 
   const [desactivationEnCours, setDesactivationEnCours] = useState(null);
 
@@ -68,9 +70,13 @@ export default function TeamManagementView({ moiProfil }) {
     setInvitationEnCours(true);
     setErreurInvitation(null);
     setDernierLien(null);
+    setDernierEmailEnvoye(false);
+    const emailCible = emailInvite.trim();
     try {
-      const res = await dqeService.inviterUtilisateur({ email: emailInvite.trim(), role: roleInvite });
+      const res = await dqeService.inviterUtilisateur({ email: emailCible, role: roleInvite });
       setDernierLien(res.lien_activation);
+      setDernierEmailEnvoye(Boolean(res.email_envoye));
+      setDernierEmailInvite(emailCible);
       setEmailInvite('');
       chargerMembres();
     } catch (err) {
@@ -146,10 +152,19 @@ export default function TeamManagementView({ moiProfil }) {
 
         {dernierLien && (
           <div style={{ marginTop: '1rem' }}>
-            <p style={{ fontSize: '0.82rem', color: 'var(--ink-700)', marginBottom: '0.5rem' }}>
-              Compte créé. Aucun email n'est envoyé (pas de serveur SMTP configuré) -- transmettez ce lien vous-même :
-            </p>
-            <CopyBox texte={dernierLien} />
+            {dernierEmailEnvoye ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--status-success, #16a34a)', fontSize: '0.85rem' }}>
+                <MailCheck size={15} />
+                <span>Email d'invitation envoyé à {dernierEmailInvite}.</span>
+              </div>
+            ) : (
+              <>
+                <p style={{ fontSize: '0.82rem', color: 'var(--ink-700)', marginBottom: '0.5rem' }}>
+                  Compte créé. Aucun email n'est envoyé (pas de serveur SMTP configuré) -- transmettez ce lien vous-même :
+                </p>
+                <CopyBox texte={dernierLien} />
+              </>
+            )}
           </div>
         )}
       </div>

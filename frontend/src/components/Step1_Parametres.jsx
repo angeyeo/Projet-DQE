@@ -48,7 +48,6 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   const [nlpApplied, setNlpApplied] = useState(false);
   const [nlpError, setNlpError] = useState(null);
   const [nlpResult, setNlpResult] = useState(null);
-  const [nlpApplied, setNlpApplied] = useState(false);
 
   // État d'affichage réduit/déplié des textes non classés Vision
   const [showAllTextesNonClasses, setShowAllTextesNonClasses] = useState(false);
@@ -270,6 +269,8 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   }));
 
   const visionMaxCount = Math.max(...visionCategories.map((c) => c.count), 1);
+  const visionSource = vision?.source;
+  const visionMessage = vision?.message;
 
   return (
     <div className="glass-panel">
@@ -384,9 +385,9 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
                     <div style={{ fontSize: '0.8rem', color: 'var(--core-border)', marginTop: '0.25rem' }}>
                       Dimensions : {ann.dimensions_parsees.valeurs.join(' × ')} {ann.dimensions_parsees.unite || ''}
                     </div>
-                  );
-                })}
-              </div>
+                  )}
+                </div>
+              ))}
             </div>
           ) : (
             <p style={{ fontSize: '0.85rem', color: 'var(--ink-500)', margin: 0 }}>Aucun élément reconnu avec certitude sur ce plan.</p>
