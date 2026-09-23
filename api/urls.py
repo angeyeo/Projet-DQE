@@ -22,6 +22,17 @@ from projets.views import (
     gerer_profil_utilisateur,
     changer_mot_de_passe
 )
+from projets.auth_views import (
+    InscriptionEntrepriseView,
+    InviterUtilisateurView,
+    ActiverCompteView,
+    MembresEntrepriseView,
+    DesactiverUtilisateurView,
+    ChangerMotDePasseView,
+    DemanderReinitialisationView,
+    ConfirmerReinitialisationView,
+    LogoutView,
+)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])

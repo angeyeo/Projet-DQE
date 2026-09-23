@@ -1,11 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle, Sparkles, Check } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
 
 const CHARGE_EXPLOITATION_PAR_USAGE = {
   habitation: 1.5,
   bureau: 2.5,
   commercial: 4.0,
+};
+
+const TYPE_LABELS = {
+  semelle: 'Semelles',
+  semelle_filante: 'Semelle filante',
+  longrine: 'Longrines',
+  poteau: 'Poteaux',
+  poutre: 'Poutres',
+  dalle: 'Dalles',
+  chainage: 'Chaînages',
 };
 
 const LIMITES = {
@@ -32,6 +42,17 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
   const [analysisSuccess, setAnalysisSuccess] = useState(false);
   const [analysisWarnings, setAnalysisWarnings] = useState([]);
 
+  // État de l'analyse en langage naturel (Assistant IA)
+  const [nlpDescription, setNlpDescription] = useState('');
+  const [nlpAnalyzing, setNlpAnalyzing] = useState(false);
+  const [nlpApplied, setNlpApplied] = useState(false);
+  const [nlpError, setNlpError] = useState(null);
+  const [nlpResult, setNlpResult] = useState(null);
+  const [nlpApplied, setNlpApplied] = useState(false);
+
+  // État d'affichage réduit/déplié des textes non classés Vision
+  const [showAllTextesNonClasses, setShowAllTextesNonClasses] = useState(false);
+
   useEffect(() => {
     if (!projectData.chargeExploitation && projectData.typeUsage) {
       const defaut = CHARGE_EXPLOITATION_PAR_USAGE[projectData.typeUsage];
@@ -46,7 +67,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
 
     const file = files[0];
     const ext = file.name.split('.').pop().toLowerCase();
-    const isImage = ['jpg', 'jpeg', 'png', 'webp'].includes(ext);
+    const isImage = ['jpg', 'jpeg', 'png'].includes(ext);
     const isIfc = ext === 'ifc';
     const isCAD = ['pln', 'pl', 'pdf'].includes(ext);
 
@@ -103,22 +124,21 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       return;
     }
 
-    // Traitement Vision IA si c'est une image de plan
-    if (isImage && projectData.id) {
+    // Traitement Vision IA si c'est une image de plan (Aperçu uniquement, aucune mutation des paramètres du projet)
+    if (isImage) {
       setAnalyzing(true);
+      setAnalysisError(null);
       try {
-        const result = await dqeService.analyserPlanImage(projectData.id, file);
-        if (result && result.parametres_detectes) {
-          const params = result.parametres_detectes;
-          updateProjectData({
-            nbTraveesX: params.nb_travees_x || projectData.nbTraveesX,
-            nbTraveesY: params.nb_travees_y || projectData.nbTraveesY,
-            porteeX: params.portee_x || projectData.porteeX,
-            porteeY: params.portee_y || projectData.porteeY,
-            nombreNiveaux: params.nombre_niveaux || projectData.nombreNiveaux,
-          });
-          setAnalysisSuccess(true);
+        let projetId = projectData.id;
+        if (!projetId) {
+          const projet = await dqeService.createProjet(projectData);
+          projetId = projet.id;
+          updateProjectData({ id: projetId });
         }
+
+        const result = await dqeService.analyserPlanImage(projetId, file);
+        updateProjectData({ visionResult: result });
+        setAnalysisSuccess(true);
       } catch (err) {
         setAnalysisError(`Erreur d'analyse IA : ${err.message || "Impossible d'extraire le plan"}`);
       } finally {
@@ -126,6 +146,130 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       }
     }
   };
+
+  const handleAnalyzeDescription = async () => {
+    const text = nlpDescription.trim();
+    if (!text) {
+      setNlpError("Veuillez saisir une description avant de lancer l'analyse.");
+      return;
+    }
+    setNlpError(null);
+    setNlpResult(null);
+    setNlpApplied(false);
+    setNlpAnalyzing(true);
+
+    try {
+      const res = await dqeService.structurerProjetIA(text);
+      setNlpResult(res);
+    } catch (err) {
+      const status = err.status;
+      if (status === 429) {
+        setNlpError("Limite d'appels IA atteinte. Veuillez patienter avant de réessayer.");
+      } else if (status === 400) {
+        setNlpError(err.message || "Description invalide ou absente.");
+      } else {
+        setNlpError("Impossible d'analyser la description pour le moment. Vous pouvez continuer à saisir les paramètres manuellement.");
+      }
+    } finally {
+      setNlpAnalyzing(false);
+    }
+  };
+
+  const hasApplicableNlpData = (donnees) => {
+    if (!donnees) return false;
+
+    if (donnees.nombre_niveaux !== null && donnees.nombre_niveaux !== undefined && donnees.nombre_niveaux !== '') {
+      const val = parseInt(donnees.nombre_niveaux, 10);
+      if (!isNaN(val) && val >= LIMITES.nombreNiveaux.min && val <= LIMITES.nombreNiveaux.max) {
+        return true;
+      }
+    }
+
+    if (donnees.usage && String(donnees.usage).trim() !== '') {
+      return true;
+    }
+
+    if (donnees.portee_m !== null && donnees.portee_m !== undefined && donnees.portee_m !== '') {
+      const portee = parseFloat(donnees.portee_m);
+      if (!isNaN(portee) && portee >= LIMITES.porteeX.min && portee <= LIMITES.porteeX.max) {
+        return true;
+      }
+    }
+
+    if (donnees.hauteur_niveau_m !== null && donnees.hauteur_niveau_m !== undefined && donnees.hauteur_niveau_m !== '') {
+      const h = parseFloat(donnees.hauteur_niveau_m);
+      if (!isNaN(h) && h >= LIMITES.hauteurEtage.min && h <= LIMITES.hauteurEtage.max) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  const handleApplyNlpParameters = () => {
+    if (!nlpResult || !nlpResult.donnees) return;
+    const d = nlpResult.donnees;
+    const updates = {};
+
+    if (d.nombre_niveaux !== null && d.nombre_niveaux !== undefined && d.nombre_niveaux !== '') {
+      const val = parseInt(d.nombre_niveaux, 10);
+      if (!isNaN(val) && val >= LIMITES.nombreNiveaux.min && val <= LIMITES.nombreNiveaux.max) {
+        updates.nombreNiveaux = val;
+      }
+    }
+
+    if (d.usage) {
+      const uLower = String(d.usage).toLowerCase();
+      if (uLower === 'habitation') {
+        updates.typeUsage = 'habitation';
+        updates.chargeExploitation = CHARGE_EXPLOITATION_PAR_USAGE.habitation;
+      } else if (uLower === 'bureau') {
+        updates.typeUsage = 'bureau';
+        updates.chargeExploitation = CHARGE_EXPLOITATION_PAR_USAGE.bureau;
+      } else if (uLower === 'commerce' || uLower === 'commercial') {
+        updates.typeUsage = 'commercial';
+        updates.chargeExploitation = CHARGE_EXPLOITATION_PAR_USAGE.commercial;
+      }
+    }
+
+    if (d.portee_m !== null && d.portee_m !== undefined && d.portee_m !== '') {
+      const portee = parseFloat(d.portee_m);
+      if (!isNaN(portee) && portee >= LIMITES.porteeX.min && portee <= LIMITES.porteeX.max) {
+        updates.porteeX = portee;
+        if (!projectData.porteeY) {
+          updates.porteeY = portee;
+        }
+      }
+    }
+
+    if (d.hauteur_niveau_m !== null && d.hauteur_niveau_m !== undefined && d.hauteur_niveau_m !== '') {
+      const h = parseFloat(d.hauteur_niveau_m);
+      if (!isNaN(h) && h >= LIMITES.hauteurEtage.min && h <= LIMITES.hauteurEtage.max) {
+        updates.hauteurEtage = h;
+      }
+    }
+
+    updateProjectData(updates);
+    setNlpApplied(true);
+  };
+
+  const vision = projectData.visionResult;
+  const visionAnnotations = (vision && Array.isArray(vision.annotations_lues)) ? vision.annotations_lues : [];
+  const visionTotalElements = visionAnnotations.length;
+
+  const visionCountsByType = {};
+  visionAnnotations.forEach((ann) => {
+    const t = ann.type_normalise || 'autre';
+    visionCountsByType[t] = (visionCountsByType[t] || 0) + 1;
+  });
+
+  const visionCategories = Object.entries(visionCountsByType).map(([type, count]) => ({
+    type,
+    label: TYPE_LABELS[type] || type.replace('_', ' '),
+    count,
+  }));
+
+  const visionMaxCount = Math.max(...visionCategories.map((c) => c.count), 1);
 
   return (
     <div className="glass-panel">
@@ -161,13 +305,13 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           </div>
         ) : projectData.planFileName ? (
           <div>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(16, 185, 129, 0.15)', color: '#6ee7b7', padding: '0.5rem 1rem', borderRadius: '20px', fontWeight: 600 }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: 'var(--status-ok-soft)', color: 'var(--status-ok)', padding: '0.5rem 1rem', borderRadius: '20px', fontWeight: 600 }}>
               <FileText size={16} />
               <span>{projectData.planFileName} ({projectData.planFileSize})</span>
             </div>
             {analysisSuccess && (
-              <p style={{ fontSize: '0.85rem', color: '#6ee7b7', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
-                <CheckCircle2 size={16} /> Paramètres extraits automatiquement, à vérifier ci-dessous !
+              <p style={{ fontSize: '0.85rem', color: 'var(--status-ok)', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
+                <CheckCircle2 size={16} /> Annotations du plan détectées automatiquement — vérification humaine requise.
               </p>
             )}
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
@@ -184,23 +328,92 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
             </p>
             <label className="btn btn-secondary">
               Parcourir les fichiers
-              <input type="file" accept="image/*,.ifc,.pln,.pl,.pdf" onChange={handleFileUpload} style={{ display: 'none' }} />
+              <input type="file" accept="image/png,image/jpeg,.ifc,.pln,.pl,.pdf" onChange={handleFileUpload} style={{ display: 'none' }} />
             </label>
           </div>
         )}
       </div>
 
       {analysisError && (
-        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fca5a5', fontSize: '0.88rem' }}>
-          <AlertCircle size={18} color="#ef4444" />
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--status-critical)', fontSize: '0.88rem' }}>
+          <AlertCircle size={18} color="var(--status-critical)" />
           <span>{analysisError}</span>
         </div>
       )}
 
+      {/* Gemini Vision Results Panel */}
+      {vision && (
+        <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'var(--core-bg)', border: '1px solid var(--accent-soft-border)', marginBottom: '2rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <FileText size={20} color="var(--accent)" />
+              <h4 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: 'var(--ink-900)' }}>
+                Éléments détectés sur le plan (Aperçu Vision)
+              </h4>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: vision.source === 'GEMINI' ? 'var(--accent-soft-border)' : 'var(--status-warn-soft)', color: vision.source === 'GEMINI' ? 'var(--accent)' : 'var(--status-warn)', border: vision.source === 'GEMINI' ? '1px solid var(--accent-soft-border)' : '1px solid var(--status-warn-soft)' }}>
+                Source : {vision.source || 'GEMINI'}
+              </span>
+              {vision.validation_humaine_requise && (
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', fontStyle: 'italic' }}>
+                  Une vérification humaine est requise.
+                </span>
+              )}
+            </div>
+          </div>
+
+          {vision.source === 'FALLBACK_LOCAL' && (
+            <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', marginBottom: '1rem', color: 'var(--status-warn)', fontSize: '0.85rem' }}>
+              L'analyse automatique du plan n'est pas disponible pour le moment.
+            </div>
+          )}
+
+          {/* Annotations lues */}
+          {Array.isArray(vision.annotations_lues) && vision.annotations_lues.length > 0 ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+              {vision.annotations_lues.map((ann, idx) => (
+                <div key={idx} style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                    <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--accent)' }}>{ann.repere || ann.texte_lu}</span>
+                    <span style={{ fontSize: '0.75rem', textTransform: 'capitalize', padding: '0.15rem 0.4rem', borderRadius: '4px', background: 'var(--accent-soft)', color: 'var(--accent)' }}>
+                      {ann.type_normalise || 'Élément'}
+                    </span>
+                  </div>
+                  {ann.dimensions_parsees && Array.isArray(ann.dimensions_parsees.valeurs) && ann.dimensions_parsees.valeurs.length > 0 && (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--core-border)', marginTop: '0.25rem' }}>
+                      Dimensions : {ann.dimensions_parsees.valeurs.join(' × ')} {ann.dimensions_parsees.unite || ''}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <p style={{ fontSize: '0.85rem', color: 'var(--ink-500)', margin: 0 }}>Aucun élément reconnu avec certitude sur ce plan.</p>
+          )}
+
+          {/* Textes non classés */}
+          {Array.isArray(vision.textes_non_classes) && vision.textes_non_classes.length > 0 && (
+            <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--status-neutral-soft)' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--ink-500)', marginBottom: '0.5rem' }}>
+                Textes détectés non classés :
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                {vision.textes_non_classes.map((txt, idx) => (
+                  <span key={idx} style={{ fontSize: '0.75rem', background: 'var(--core-border)', color: 'var(--core-border)', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid var(--status-neutral-soft)' }}>
+                    {txt}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {analysisWarnings.length > 0 && (
-        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.35)', marginBottom: '1.5rem', color: '#fcd34d', fontSize: '0.85rem' }}>
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', marginBottom: '1.5rem', color: 'var(--status-warn)', fontSize: '0.85rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-            <AlertCircle size={18} color="#f59e0b" />
+            <AlertCircle size={18} color="var(--status-warn)" />
             <span>Trame détectée approximative -- à vérifier avant de continuer</span>
           </div>
           <ul style={{ margin: 0, paddingLeft: '1.4rem' }}>
@@ -210,6 +423,208 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
           </ul>
         </div>
       )}
+
+      {visionAnnotations.length > 0 && (
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--accent-soft)', border: '1px solid var(--accent-soft-border)', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent)' }}>
+            <Sparkles size={18} />
+            <span>Vision IA -- annotations lues sur l'image ({visionSource === 'MOCK' ? 'mode démo' : 'Gemini'})</span>
+          </div>
+          <table className="custom-table">
+            <thead>
+              <tr>
+                <th>Repère</th>
+                <th>Texte lu</th>
+                <th>Type</th>
+                <th>Dimensions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visionAnnotations.map((a, idx) => (
+                <tr key={idx}>
+                  <td>{a.repere || '—'}</td>
+                  <td>{a.texte_lu}</td>
+                  <td>{a.type_normalise || 'n/d'}</td>
+                  <td>
+                    {a.dimensions_parsees?.valeurs
+                      ? a.dimensions_parsees.valeurs.join(' x ')
+                      : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p style={{ color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+            Ces lectures doivent être vérifiées par l'ingénieur avant report dans les champs ci-dessous.
+          </p>
+        </div>
+      )}
+
+      {visionMessage && (
+        <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', marginBottom: '1.5rem', color: 'var(--status-warn)', fontSize: '0.85rem' }}>
+          {visionMessage}
+        </div>
+      )}
+
+      {/* Section : Description du projet en langage naturel (Assistant IA) */}
+      <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)', marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
+          <Sparkles size={20} color="var(--accent-primary)" />
+          <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>
+            Décrire le projet avec l’IA
+          </h3>
+        </div>
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+          Saisissez une description en langage naturel du bâtiment. L'assistant extraira automatiquement les paramètres structurels clés.
+        </p>
+
+        <textarea
+          className="form-control"
+          rows={3}
+          value={nlpDescription}
+          onChange={(e) => setNlpDescription(e.target.value)}
+          placeholder="Ex. Maison R+1 à usage d'habitation, 2 travées de 4 m en X, 3 travées de 5 m en Y, hauteur d'étage 3 m..."
+          disabled={nlpAnalyzing}
+          style={{ marginBottom: '1rem', width: '100%', resize: 'vertical' }}
+        />
+
+        <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={handleAnalyzeDescription}
+            disabled={nlpAnalyzing || !nlpDescription.trim()}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+          >
+            {nlpAnalyzing ? (
+              <>
+                <Loader2 size={16} className="spin" />
+                <span>Analyse de la description en cours...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles size={16} />
+                <span>Analyser la description</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {nlpError && (
+          <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--status-critical)', fontSize: '0.88rem' }}>
+            <AlertCircle size={18} color="var(--status-critical)" />
+            <span>{nlpError}</span>
+          </div>
+        )}
+
+        {nlpResult && (
+          <div style={{ marginTop: '1.25rem', paddingTop: '1.25rem', borderTop: '1px solid var(--status-neutral-soft)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <h4 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: 'var(--ink-900)' }}>
+                Paramètres détectés
+              </h4>
+              {nlpResult.source && (
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: nlpResult.source === 'GEMINI' ? 'var(--accent-soft-border)' : nlpResult.source === 'MOCK' ? 'var(--status-warn-soft)' : 'var(--status-neutral-soft)', color: nlpResult.source === 'GEMINI' ? 'var(--accent)' : nlpResult.source === 'MOCK' ? 'var(--status-warn)' : 'var(--core-border)', border: '1px solid var(--core-border)' }}>
+                  Source : {nlpResult.source === 'GEMINI' ? 'Gemini' : nlpResult.source === 'MOCK' ? 'Simulation locale' : 'Analyse automatique indisponible / partielle'}
+                </span>
+              )}
+            </div>
+
+            {/* Ingrédients / Paramètres extraits */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Nombre de niveaux</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.nombre_niveaux != null ? 'var(--accent)' : 'var(--ink-500)' }}>
+                  {nlpResult.donnees?.nombre_niveaux != null ? nlpResult.donnees.nombre_niveaux : 'Non détecté'}
+                </span>
+              </div>
+
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Configuration</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.configuration ? 'var(--accent)' : 'var(--ink-500)' }}>
+                  {nlpResult.donnees?.configuration || 'Non détectée'}
+                </span>
+              </div>
+
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Usage du bâtiment</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.usage ? 'var(--accent)' : 'var(--ink-500)' }}>
+                  {nlpResult.donnees?.usage || 'Non détecté'}
+                </span>
+              </div>
+
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Portée principale</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.portee_m != null ? 'var(--accent)' : 'var(--ink-500)' }}>
+                  {nlpResult.donnees?.portee_m != null ? `${nlpResult.donnees.portee_m} m` : 'Non détectée'}
+                </span>
+              </div>
+
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Hauteur d'étage</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.hauteur_niveau_m != null ? 'var(--accent)' : 'var(--ink-500)' }}>
+                  {nlpResult.donnees?.hauteur_niveau_m != null ? `${nlpResult.donnees.hauteur_niveau_m} m` : 'Non détectée'}
+                </span>
+              </div>
+
+              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Contrainte du sol</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.contrainte_sol_kn_m2 != null ? 'var(--accent)' : 'var(--ink-500)' }}>
+                  {nlpResult.donnees?.contrainte_sol_kn_m2 != null ? `${nlpResult.donnees.contrainte_sol_kn_m2} kN/m²` : 'Non détectée'}
+                </span>
+              </div>
+            </div>
+
+            {/* Message si données manquant/partielles OU si aucune donnée exploitable */}
+            {!hasApplicableNlpData(nlpResult.donnees) ? (
+              <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginBottom: '1rem', color: 'var(--status-critical)', fontSize: '0.85rem' }}>
+                Aucun paramètre exploitable n'a été détecté. Complétez le formulaire manuellement.
+              </div>
+            ) : (
+              ((Array.isArray(nlpResult.donnees_manquantes) && nlpResult.donnees_manquantes.length > 0) ||
+                nlpResult.donnees?.nombre_niveaux == null ||
+                nlpResult.donnees?.usage == null ||
+                nlpResult.donnees?.portee_m == null) && (
+                <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', marginBottom: '1rem', color: 'var(--status-warn)', fontSize: '0.85rem' }}>
+                  Certains paramètres n'ont pas pu être déterminés. Complétez-les manuellement avant de poursuivre.
+                </div>
+              )
+            )}
+
+            {/* Avertissements */}
+            {Array.isArray(nlpResult.avertissements) && nlpResult.avertissements.length > 0 && (
+              <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginBottom: '1rem', color: 'var(--status-critical)', fontSize: '0.82rem' }}>
+                <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+                  {nlpResult.avertissements.map((adv, idx) => (
+                    <li key={idx}>{adv}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Bouton de confirmation d'application (affiché UNIQUEMENT si au moins 1 donnée est exploitable) */}
+            {hasApplicableNlpData(nlpResult.donnees) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleApplyNlpParameters}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                >
+                  <Check size={16} />
+                  <span>Appliquer ces paramètres</span>
+                </button>
+
+                {nlpApplied && (
+                  <span style={{ fontSize: '0.85rem', color: 'var(--status-ok)', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}>
+                    <CheckCircle2 size={16} /> Paramètres appliqués au formulaire avec succès !
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Form Fields */}
       <div className="grid-2" style={{ marginBottom: '2rem' }}>
@@ -341,7 +756,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         </div>
 
         <div className="form-group" style={{ gridColumn: 'span 2' }}>
-          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--accent-primary)', background: '#eff6ff', border: '1px solid #bfdbfe', padding: '0.5rem 1rem', borderRadius: '8px', display: 'inline-block' }}>
+          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--accent-primary)', background: 'var(--status-neutral-soft)', border: '1px solid var(--accent-soft-border)', padding: '0.5rem 1rem', borderRadius: '8px', display: 'inline-block' }}>
             Aperçu Trame : Grille de {(parseInt(projectData.nbTraveesX || 0) + 1) * (parseInt(projectData.nbTraveesY || 0) + 1)} poteaux ({projectData.nbTraveesX || 0}x{projectData.nbTraveesY || 0} travées)
           </p>
         </div>

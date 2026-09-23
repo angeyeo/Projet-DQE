@@ -40,6 +40,10 @@ def structurer_description_projet(description: str) -> dict:
     # On demande une confirmation si des données de base sont manquantes ou s'il y a des avertissements
     confirmation_requise = bool(validated_data["donnees_manquantes"]) or bool(validated_data["avertissements"])
 
+    from .client import MockAIClient
+    is_mock = isinstance(client, MockAIClient)
+    source = "MOCK" if is_mock else "GEMINI"
+
     return {
         "donnees": {
             "nombre_niveaux": validated_data["nombre_niveaux"],
@@ -52,4 +56,5 @@ def structurer_description_projet(description: str) -> dict:
         "donnees_manquantes": validated_data["donnees_manquantes"],
         "avertissements": validated_data["avertissements"],
         "confirmation_requise": confirmation_requise,
+        "source": source,
     }

@@ -1,41 +1,48 @@
 import React from 'react';
-import { Building, Layers, Lock, FileSpreadsheet, ArrowRight, ShieldCheck, CheckCircle2, Edit3 } from 'lucide-react';
+import { Building, Layers, Lock, FileSpreadsheet, ShieldCheck, Edit3 } from 'lucide-react';
 
 export default function DashboardView({ projectData, sections, lockedCount, totalCount, onNavigate }) {
   const { poteaux = [], poutres = [], semelles = [] } = sections || {};
 
   const allElements = [
-    ...poteaux.map(p => ({ ...p, category: 'Poteau' })),
-    ...poutres.map(p => ({ ...p, category: 'Poutre' })),
-    ...semelles.map(s => ({ ...s, category: 'Semelle' })),
+    ...poteaux.map((p) => ({ ...p, category: 'Poteau' })),
+    ...poutres.map((p) => ({ ...p, category: 'Poutre' })),
+    ...semelles.map((s) => ({ ...s, category: 'Semelle' })),
   ];
 
   const percentLocked = totalCount > 0 ? Math.round((lockedCount / totalCount) * 100) : 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
-      {/* Welcome Banner Core 2.0 */}
+      {/* Bandeau projet */}
       <div
+        className="fade-in-up"
         style={{
-          background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(99, 102, 241, 0.12))',
+          background: 'linear-gradient(135deg, var(--accent-soft), var(--core-surface))',
           border: '1px solid var(--core-border)',
           borderRadius: 'var(--radius-lg)',
           padding: '1.5rem 2rem',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '1rem',
         }}
       >
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
             <span className="badge badge-info">Vue Synthétique</span>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Normes BAEL 91 / Eurocode 2</span>
+            <span style={{ fontSize: '0.8rem', color: 'var(--ink-500)' }}>Normes {projectData.norme || 'BAEL 91'}</span>
           </div>
           <h2 style={{ fontSize: '1.6rem', fontWeight: 700, fontFamily: 'var(--font-heading)' }}>
-            {projectData.nomProjet}
+            {projectData.nomProjet || 'Nouveau Projet BTP'}
           </h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.2rem' }}>
-            Fichier plan chargé : <strong>{projectData.planFileName}</strong> • Portée max : <strong>{projectData.porteeMax}m</strong>
+          <p style={{ color: 'var(--ink-500)', fontSize: '0.875rem', marginTop: '0.2rem' }}>
+            {projectData.planFileName ? (
+              <>Fichier plan chargé : <strong>{projectData.planFileName}</strong></>
+            ) : (
+              'Aucun plan chargé pour le moment'
+            )}
           </p>
         </div>
 
@@ -51,64 +58,60 @@ export default function DashboardView({ projectData, sections, lockedCount, tota
         </div>
       </div>
 
-      {/* KPI Stat Cards Grid */}
-      <div className="grid-4">
+      {/* KPI */}
+      <div className="grid-4 stagger">
         <div className="kpi-card">
-          <div className="kpi-icon blue">
-            <Building size={22} />
-          </div>
+          <div className="kpi-icon blue"><Building size={20} /></div>
           <div>
-            <div className="kpi-lbl">Structure & Usage</div>
-            <div className="kpi-val" style={{ fontSize: '1.15rem' }}>R+{projectData.nombreNiveaux} • {projectData.typeUsage}</div>
+            <div className="kpi-value tabular" style={{ fontSize: '1.05rem' }}>
+              R+{projectData.nombreNiveaux || 0} · {projectData.typeUsage || '—'}
+            </div>
+            <div className="kpi-label">Structure & usage</div>
           </div>
         </div>
 
         <div className="kpi-card">
-          <div className="kpi-icon emerald">
-            <Layers size={22} />
-          </div>
+          <div className="kpi-icon green"><Layers size={20} /></div>
           <div>
-            <div className="kpi-lbl">Total Sections</div>
-            <div className="kpi-val">{totalCount} Éléments</div>
+            <div className="kpi-value tabular">{totalCount}</div>
+            <div className="kpi-label">Éléments calculés</div>
           </div>
         </div>
 
         <div className="kpi-card">
-          <div className="kpi-icon amber">
-            <Lock size={22} />
-          </div>
+          <div className="kpi-icon amber"><Lock size={20} /></div>
           <div>
-            <div className="kpi-lbl">Taux de Verrouillage</div>
-            <div className="kpi-val">{percentLocked}% ({lockedCount}/{totalCount})</div>
+            <div className="kpi-value tabular">{percentLocked}%</div>
+            <div className="kpi-label">Verrouillé ({lockedCount}/{totalCount})</div>
           </div>
         </div>
 
         <div className="kpi-card">
-          <div className="kpi-icon indigo">
-            <FileSpreadsheet size={22} />
-          </div>
+          <div className="kpi-icon orange"><FileSpreadsheet size={20} /></div>
           <div>
-            <div className="kpi-lbl">Devis Quantitatif</div>
-            <div className="kpi-val" style={{ fontSize: '1.15rem', color: 'var(--accent-emerald)' }}>Prêt à l'export</div>
+            <div className="kpi-value" style={{ fontSize: '1.05rem' }}>
+              {totalCount > 0 && lockedCount === totalCount ? 'Prêt à l\'export' : 'En cours'}
+            </div>
+            <div className="kpi-label">Devis quantitatif</div>
           </div>
         </div>
       </div>
 
-      {/* Tableau Synthétique Épuré des Éléments Structurels */}
-      <div className="glass-panel" style={{ padding: '1.75rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+      {/* Synthèse des éléments */}
+      <div className="glass-panel fade-in-up">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
-            <h3 style={{ fontSize: '1.15rem', fontWeight: 600, fontFamily: 'var(--font-heading)' }}>
-              Synthèse des Éléments & Sections Validées
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 600, fontFamily: 'var(--font-heading)' }}>
+              Synthèse des éléments & sections validées
             </h3>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            <p style={{ fontSize: '0.8rem', color: 'var(--ink-500)' }}>
               État du pré-dimensionnement pour les poteaux, poutres et semelles de l'ouvrage.
             </p>
           </div>
 
           <button className="btn btn-secondary" onClick={() => onNavigate('step2')} style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}>
             <Edit3 size={14} />
-            <span>Consulter les Calculs</span>
+            <span>Consulter les calculs</span>
           </button>
         </div>
 
@@ -118,9 +121,9 @@ export default function DashboardView({ projectData, sections, lockedCount, tota
               <tr>
                 <th>Catégorie</th>
                 <th>Identifiant</th>
-                <th>Section Dimensionnée</th>
-                <th>Armatures / Feraillage</th>
-                <th>Statut Verrouillage</th>
+                <th>Section dimensionnée</th>
+                <th>Armatures / Ferraillage</th>
+                <th>Statut verrouillage</th>
               </tr>
             </thead>
             <tbody>
@@ -128,12 +131,12 @@ export default function DashboardView({ projectData, sections, lockedCount, tota
                 <tr key={item.id}>
                   <td><span className="badge badge-info">{item.category}</span></td>
                   <td style={{ fontWeight: 600 }}>{item.id} — {item.name}</td>
-                  <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{item.section}</td>
+                  <td style={{ fontWeight: 700, color: 'var(--status-ok)' }}>{item.section}</td>
                   <td>{item.armatures || item.hauteur || '-'}</td>
                   <td>
                     <span className={item.locked ? 'badge badge-locked' : 'badge badge-unlocked'}>
                       {item.locked ? <Lock size={12} /> : <ShieldCheck size={12} />}
-                      {item.locked ? 'SECTION VERROUILLÉE' : 'MODIFIABLE'}
+                      {item.locked ? 'Verrouillée' : 'Modifiable'}
                     </span>
                   </td>
                 </tr>
@@ -141,7 +144,7 @@ export default function DashboardView({ projectData, sections, lockedCount, tota
             </tbody>
           </table>
         ) : (
-          <div style={{ padding: '2rem', textTransform: 'center', textAlign: 'center', color: 'var(--text-muted)' }}>
+          <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--ink-500)' }}>
             Aucun élément calculé pour le moment.
           </div>
         )}

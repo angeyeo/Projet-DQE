@@ -78,6 +78,26 @@ class Projet(models.Model):
     date_creation = models.DateTimeField(auto_now_add=True)
     date_modification = models.DateTimeField(auto_now=True)
 
+    # Rattachement multi-cabinet (sprint Permissions & Comptes). Nullable
+    # tant que la migration de données (0014_...) n'a pas rattaché les
+    # projets déjà existants à l'entreprise "legacy". Ne pas rendre
+    # obligatoire avant que cette migration ait tourné en production.
+    entreprise = models.ForeignKey(
+        "EntrepriseParametres",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="projets",
+        help_text="Cabinet (entreprise) propriétaire de ce projet.",
+    )
+    cree_par = models.ForeignKey(
+        "auth.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="projets_crees",
+    )
+
     def __str__(self):
         return self.nom
 
@@ -269,8 +289,92 @@ class EntrepriseParametres(models.Model):
 
     @classmethod
     def get_solo(cls) -> "EntrepriseParametres":
+        """Entreprise legacy (pk=1) -- repli pour les utilisateurs sans
+        Profil (comptes créés avant ce sprint, ou DEMO_MODE). Pour un
+        accès réellement multi-cabinet, passer par
+        request.user.profil.entreprise plutôt que par cette méthode."""
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
 
     def __str__(self):
         return self.nom or "Paramètres entreprise"
+
+
+class JournalAppelIA(models.Model):
+    """
+    Journal de traçabilité des appels aux services IA (Gemini, Mock, Fallback Local).
+    """
+
+    class Source(models.TextChoices):
+        MOCK = "MOCK", "Mock Client"
+        GEMINI = "GEMINI", "Gemini AI"
+        FALLBACK_LOCAL = "FALLBACK_LOCAL", "Fallback Local"
+
+    utilisateur = models.ForeignKey(
+        "auth.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="appels_ia",
+    )
+    endpoint = models.CharField(max_length=255)
+    source = models.CharField(max_length=30, choices=Source.choices)
+    duree_ms = models.IntegerField(null=True, blank=True)
+    date_appel = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Journal d'appel IA"
+        verbose_name_plural = "Journaux d'appels IA"
+        ordering = ["-date_appel"]
+
+    def __str__(self):
+        user_str = self.utilisateur.username if self.utilisateur else "Anonyme"
+        return f"[{self.source}] {self.endpoint} par {user_str} le {self.date_appel:%Y-%m-%d %H:%M:%S}"
+
+
+class Profil(models.Model):
+    """
+    Extension de auth.User (sprint Permissions & Comptes) : rattache un
+    utilisateur à une entreprise (cabinet) et lui donne un rôle. Le
+    verrou d'ingénieur (Étape 3 validation) et l'accès à la gestion des
+    comptes du cabinet dépendent de ce rôle -- voir la matrice de
+    permissions du sprint (technicien / ingenieur / admin).
+    """
+
+    class Role(models.TextChoices):
+        TECHNICIEN = "technicien", "Technicien"
+        INGENIEUR = "ingenieur", "Ingénieur"
+        ADMIN = "admin", "Admin (Gérant du cabinet)"
+
+    utilisateur = models.OneToOneField(
+        "auth.User",
+        on_delete=models.CASCADE,
+        related_name="profil",
+    )
+    entreprise = models.ForeignKey(
+        "EntrepriseParametres",
+        on_delete=models.CASCADE,
+        related_name="profils",
+    )
+    role = models.CharField(
+        max_length=20,
+        choices=Role.choices,
+        default=Role.TECHNICIEN,
+    )
+    date_creation = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Profil"
+        verbose_name_plural = "Profils"
+
+    def __str__(self):
+        return f"{self.utilisateur.username} ({self.get_role_display()}) -- {self.entreprise.nom or self.entreprise_id}"
+
+    @property
+    def peut_valider(self) -> bool:
+        """Seul un ingénieur ou un admin peut verrouiller/valider (Étape 3)."""
+        return self.role in (self.Role.INGENIEUR, self.Role.ADMIN)
+
+    @property
+    def est_admin(self) -> bool:
+        return self.role == self.Role.ADMIN

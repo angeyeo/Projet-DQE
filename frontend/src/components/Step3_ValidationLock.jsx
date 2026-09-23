@@ -1,8 +1,22 @@
-import React, { useState } from 'react';
-import { Lock, Unlock, ShieldAlert, ArrowLeft, ArrowRight, Edit3, ShieldCheck, HardHat, Plus, Trash2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Lock, Unlock, ShieldAlert, ArrowLeft, ArrowRight, Edit3, ShieldCheck, HardHat, Plus, Trash2, Sparkles, Loader2, AlertCircle, Activity, AlertTriangle, CheckCircle2, Info, RefreshCw } from 'lucide-react';
+import { dqeService } from '../api/dqeService';
+
+const STATUTS_AVEC_EXPLICATION_IA = ['CRITIQUE', 'ATTENTION', 'INFORMATION'];
+
+const STATUT_ANALYSIS_MAP = {
+  CRITIQUE: { label: 'CRITIQUE', color: 'var(--status-critical)', bg: 'var(--status-critical-soft)', border: 'var(--status-critical-soft)' },
+  ATTENTION: { label: 'ATTENTION', color: 'var(--status-warn)', bg: 'var(--status-warn-soft)', border: 'var(--status-warn-soft)' },
+  INFORMATION: { label: 'INFORMATION', color: 'var(--accent)', bg: 'var(--accent-soft)', border: 'var(--accent-soft-border)' },
+  AUCUN_SIGNAL: { label: 'AUCUN SIGNAL', color: 'var(--status-ok)', bg: 'var(--status-ok-soft)', border: 'var(--status-ok-soft)' },
+  CALCUL_A_VALIDER: { label: 'À VALIDER', color: 'var(--status-warn)', bg: 'var(--status-warn-soft)', border: 'var(--status-warn-soft)' },
+  CALCUL_A_REFAIRE: { label: 'À RECALCULER', color: 'var(--accent)', bg: 'var(--accent-soft)', border: 'var(--accent-soft-border)' },
+  CALCUL_NON_DISPONIBLE: { label: 'SANS RÉSULTAT', color: 'var(--ink-500)', bg: 'var(--status-neutral-soft)', border: 'var(--core-border)' },
+};
 
 export default function Step3_ValidationLock({
   sections,
+  projetId,
   toggleLock,
   toggleLockAll,
   updateSection,
@@ -17,6 +31,69 @@ export default function Step3_ValidationLock({
 }) {
   const { poteaux = [], poutres = [], semelles = [] } = sections || {};
 
+  const activeProjetId = projetId || sections?.projetId;
+
+  const [coherenceData, setCoherenceData] = useState(null);
+  const [loadingCoherence, setLoadingCoherence] = useState(false);
+  const [coherenceError, setCoherenceError] = useState(null);
+
+  const fetchCoherence = async () => {
+    if (!activeProjetId) return;
+    setLoadingCoherence(true);
+    setCoherenceError(null);
+    try {
+      const res = await dqeService.analyserCoherenceProjet(activeProjetId);
+      setCoherenceData(res);
+    } catch (err) {
+      setCoherenceError(err.message || "Impossible de charger l'analyse de cohérence.");
+    } finally {
+      setLoadingCoherence(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeProjetId) {
+      fetchCoherence();
+    }
+  }, [activeProjetId]);
+
+  const handleToggleLock = async (id, category) => {
+    const ok = await toggleLock(id, category);
+    if (ok && activeProjetId) {
+      await fetchCoherence();
+    }
+  };
+
+  const handleToggleLockAll = async (targetState) => {
+    const ok = await toggleLockAll(targetState);
+    if (ok && activeProjetId) {
+      await fetchCoherence();
+    }
+  };
+
+  const [explicationsMap, setExplicationsMap] = useState({});
+  const [loadingExplications, setLoadingExplications] = useState({});
+  const [errorExplications, setErrorExplications] = useState({});
+
+  const handleExpliquerElement = async (elementId) => {
+    if (!elementId || loadingExplications[elementId]) return;
+
+    setLoadingExplications((prev) => ({ ...prev, [elementId]: true }));
+    setErrorExplications((prev) => ({ ...prev, [elementId]: null }));
+
+    try {
+      const res = await dqeService.expliquerCoherenceElement(elementId);
+      setExplicationsMap((prev) => ({ ...prev, [elementId]: res }));
+    } catch (err) {
+      setErrorExplications((prev) => ({
+        ...prev,
+        [elementId]: "Impossible d'obtenir l'explication IA pour le moment."
+      }));
+    } finally {
+      setLoadingExplications((prev) => ({ ...prev, [elementId]: false }));
+    }
+  };
+
   const [nouveauPoste, setNouveauPoste] = useState({
     lot: 'lot_02_gros_oeuvre_superstructure',
     mode: 'simple',
@@ -28,6 +105,35 @@ export default function Step3_ValidationLock({
     valeurGeometrie: '',
   });
   const [posteEnCours, setPosteEnCours] = useState(false);
+
+  // Suggestion de poste par Assistant IA (POST /assistant/suggerer-poste/) --
+  // n'existait ni côté service ni côté UI avant.
+  const [posteIADescription, setPosteIADescription] = useState('');
+  const [posteIALoading, setPosteIALoading] = useState(false);
+  const [posteIAError, setPosteIAError] = useState(null);
+  const [posteIAConfiance, setPosteIAConfiance] = useState(null);
+
+  const handleSuggererPoste = async () => {
+    if (!posteIADescription.trim()) return;
+    setPosteIALoading(true);
+    setPosteIAError(null);
+    setPosteIAConfiance(null);
+    try {
+      const res = await dqeService.suggererPosteIA(posteIADescription.trim());
+      setNouveauPoste((p) => ({
+        ...p,
+        mode: 'simple',
+        designation: res.designation,
+        unite: res.unite,
+        lot: res.lot_suggere,
+      }));
+      setPosteIAConfiance(res.confiance);
+    } catch (err) {
+      setPosteIAError(err.message || "Impossible de suggérer ce poste.");
+    } finally {
+      setPosteIALoading(false);
+    }
+  };
 
   const handleAjouterPoste = async () => {
     if (nouveauPoste.mode === 'simple') {
@@ -82,7 +188,7 @@ export default function Step3_ValidationLock({
         {allElements.length > 0 && (
           <button
             className={`btn ${isAllLocked ? 'btn-warning' : 'btn-success'}`}
-            onClick={() => toggleLockAll(!isAllLocked)}
+            onClick={() => handleToggleLockAll(!isAllLocked)}
           >
             {isAllLocked ? <Unlock size={18} /> : <Lock size={18} />}
             <span>{isAllLocked ? 'Déverrouiller Tout' : 'Verrouiller Toutes les Sections'}</span>
@@ -91,9 +197,9 @@ export default function Step3_ValidationLock({
       </div>
 
       {validationError && (
-        <div style={{ padding: '1rem 1.25rem', borderRadius: '12px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', marginBottom: '1.5rem', display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-          <ShieldAlert size={20} color="#ef4444" style={{ flexShrink: 0, marginTop: '0.1rem' }} />
-          <span style={{ fontSize: '0.88rem', color: '#fca5a5' }}>{validationError}</span>
+        <div style={{ padding: '1rem 1.25rem', borderRadius: '12px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginBottom: '1.5rem', display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+          <ShieldAlert size={20} color="var(--status-critical)" style={{ flexShrink: 0, marginTop: '0.1rem' }} />
+          <span style={{ fontSize: '0.88rem', color: 'var(--status-critical)' }}>{validationError}</span>
         </div>
       )}
 
@@ -102,8 +208,8 @@ export default function Step3_ValidationLock({
         style={{
           padding: '1.25rem 1.5rem',
           borderRadius: '14px',
-          background: isAllLocked ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)',
-          border: `1px solid ${isAllLocked ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`,
+          background: isAllLocked ? 'var(--status-ok-soft)' : 'var(--status-warn-soft)',
+          border: `1px solid ${isAllLocked ? 'var(--status-ok-soft)' : 'var(--status-warn-soft)'}`,
           marginBottom: '2rem',
           display: 'flex',
           alignItems: 'center',
@@ -111,12 +217,12 @@ export default function Step3_ValidationLock({
         }}
       >
         {isAllLocked ? (
-          <ShieldCheck size={28} color="#10b981" />
+          <ShieldCheck size={28} color="var(--status-ok)" />
         ) : (
-          <ShieldAlert size={28} color="#f59e0b" />
+          <ShieldAlert size={28} color="var(--status-warn)" />
         )}
         <div>
-          <h4 style={{ fontSize: '1rem', fontWeight: 600, color: isAllLocked ? '#6ee7b7' : '#fcd34d' }}>
+          <h4 style={{ fontSize: '1rem', fontWeight: 600, color: isAllLocked ? 'var(--status-ok)' : 'var(--status-warn)' }}>
             {isAllLocked ? 'Projet Intégralement Verrouillé & Validé' : 'Validation Ingénieur en cours'}
           </h4>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
@@ -125,6 +231,279 @@ export default function Step3_ValidationLock({
               : `${lockedCount} sur ${allElements.length} sections verrouillées. Cliquez sur le cadenas à droite de chaque ligne pour la verrouiller.`}
           </p>
         </div>
+      </div>
+
+      {/* BLOC 2: Contrôle de Cohérence Structurelle (Assistant IA) */}
+      <div style={{ padding: '1.5rem', borderRadius: '14px', background: 'var(--core-bg)', border: '1px solid var(--accent-soft-border)', marginBottom: '2.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <Activity size={24} color="var(--accent)" />
+            <div>
+              <h3 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0, color: 'var(--ink-900)' }}>
+                Contrôle de cohérence structurelle
+              </h3>
+              <p style={{ fontSize: '0.85rem', color: 'var(--ink-500)', margin: 0 }}>
+                Analyse automatique des résultats validés
+              </p>
+            </div>
+          </div>
+
+          <button
+            className="btn btn-secondary"
+            style={{ padding: '0.45rem 0.85rem', fontSize: '0.85rem' }}
+            disabled={loadingCoherence || !activeProjetId}
+            onClick={fetchCoherence}
+          >
+            {loadingCoherence ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
+            <span>{loadingCoherence ? 'Analyse...' : 'Analyser la cohérence'}</span>
+          </button>
+        </div>
+
+        {loadingCoherence && (
+          <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem' }}>
+            <Loader2 size={20} className="spin" />
+            <span>Analyse de cohérence en cours...</span>
+          </div>
+        )}
+
+        {coherenceError && (
+          <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', color: 'var(--status-critical)', fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <AlertTriangle size={18} color="var(--status-critical)" />
+            <span>Impossible de charger l'analyse de cohérence. {coherenceError}</span>
+          </div>
+        )}
+
+        {coherenceData && !loadingCoherence && (
+          <div>
+            {/* Panneau de Synthèse (Resume) */}
+            {coherenceData.resume && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                <div style={{ padding: '0.75rem', borderRadius: '10px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--status-critical)' }}>{coherenceData.resume.critiques || 0}</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--status-critical)', fontWeight: 600 }}>🔴 Critiques</div>
+                </div>
+                <div style={{ padding: '0.75rem', borderRadius: '10px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--status-warn)' }}>{coherenceData.resume.attentions || 0}</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--status-warn)', fontWeight: 600 }}>🟠 Attentions</div>
+                </div>
+                <div style={{ padding: '0.75rem', borderRadius: '10px', background: 'var(--accent-soft)', border: '1px solid var(--accent-soft-border)', textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--accent)' }}>{coherenceData.resume.informations || 0}</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--accent)', fontWeight: 600 }}>🔵 Informations</div>
+                </div>
+                <div style={{ padding: '0.75rem', borderRadius: '10px', background: 'var(--status-ok-soft)', border: '1px solid var(--status-ok-soft)', textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--status-ok)' }}>{coherenceData.resume.aucun_signal || 0}</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--status-ok)', fontWeight: 600 }}>🟢 Aucun signal</div>
+                </div>
+                <div style={{ padding: '0.75rem', borderRadius: '10px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--status-warn)' }}>{coherenceData.resume.calculs_a_valider || 0}</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--status-warn)', fontWeight: 600 }}>🟡 À valider</div>
+                </div>
+                <div style={{ padding: '0.75rem', borderRadius: '10px', background: 'var(--accent-soft)', border: '1px solid var(--accent-soft-border)', textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--accent)' }}>{coherenceData.resume.calculs_a_refaire || 0}</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--status-warn-soft)', fontWeight: 600 }}>🟠 À recalculer</div>
+                </div>
+                <div style={{ padding: '0.75rem', borderRadius: '10px', background: 'var(--status-neutral-soft)', border: '1px solid var(--core-border)', textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--ink-500)' }}>{coherenceData.resume.calculs_non_disponibles || 0}</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--core-border)', fontWeight: 600 }}>⚪ Sans résultat</div>
+                </div>
+              </div>
+            )}
+
+            {/* Banner de statut de cohérence */}
+            {coherenceData.resume && (() => {
+              const r = coherenceData.resume;
+              const hasNoSignalOnly = (
+                (r.critiques || 0) === 0 &&
+                (r.attentions || 0) === 0 &&
+                (r.informations || 0) === 0 &&
+                (r.calculs_a_valider || 0) === 0 &&
+                (r.calculs_a_refaire || 0) === 0 &&
+                (r.calculs_non_disponibles || 0) === 0 &&
+                (r.aucun_signal || 0) > 0
+              );
+
+              if (hasNoSignalOnly) {
+                return (
+                  <div style={{ padding: '1rem 1.25rem', borderRadius: '10px', background: 'var(--status-ok-soft)', border: '1px solid var(--status-ok-soft)', display: 'flex', alignItems: 'center', gap: '0.75rem', color: 'var(--status-ok)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                    <CheckCircle2 size={20} color="var(--status-ok)" />
+                    <span>Aucun signal de cohérence détecté parmi les contrôles disponibles.</span>
+                  </div>
+                );
+              }
+
+              if ((r.calculs_a_valider || 0) > 0) {
+                return (
+                  <div style={{ padding: '1rem 1.25rem', borderRadius: '10px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', display: 'flex', alignItems: 'center', gap: '0.75rem', color: 'var(--status-warn)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                    <Info size={20} color="var(--status-warn)" />
+                    <span>Certains éléments doivent encore être validés avant que leur cohérence puisse être analysée.</span>
+                  </div>
+                );
+              }
+
+              if ((r.calculs_a_refaire || 0) > 0) {
+                return (
+                  <div style={{ padding: '1rem 1.25rem', borderRadius: '10px', background: 'var(--accent-soft)', border: '1px solid var(--accent-soft-border)', display: 'flex', alignItems: 'center', gap: '0.75rem', color: 'var(--status-warn-soft)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                    <AlertTriangle size={20} color="var(--accent)" />
+                    <span>Certains éléments ont été modifiés et doivent être recalculés.</span>
+                  </div>
+                );
+              }
+
+              if ((r.calculs_non_disponibles || 0) > 0) {
+                return (
+                  <div style={{ padding: '1rem 1.25rem', borderRadius: '10px', background: 'var(--status-neutral-soft)', border: '1px solid var(--core-border)', display: 'flex', alignItems: 'center', gap: '0.75rem', color: 'var(--core-border)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                    <Info size={20} color="var(--ink-500)" />
+                    <span>Certains éléments ne disposent pas encore d'un résultat de calcul exploitable.</span>
+                  </div>
+                );
+              }
+
+              return null;
+            })()}
+
+            {/* Liste des Éléments et de leurs Signaux */}
+            {Array.isArray(coherenceData.elements) && coherenceData.elements.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {coherenceData.elements.map((el) => {
+                  const styleCfg = STATUT_ANALYSIS_MAP[el.statut_analyse] || STATUT_ANALYSIS_MAP.CALCUL_NON_DISPONIBLE;
+                  const canExplain = STATUTS_AVEC_EXPLICATION_IA.includes(el.statut_analyse);
+                  const explicationResult = explicationsMap[el.element_id];
+                  const isLoadingExpl = !!loadingExplications[el.element_id];
+                  const errExpl = errorExplications[el.element_id];
+                  return (
+                    <div key={el.element_id} style={{ padding: '1rem 1.25rem', borderRadius: '12px', background: 'var(--core-bg)', border: `1px solid ${styleCfg.border}` }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <strong style={{ fontSize: '1rem', color: 'var(--ink-900)' }}>{el.identifiant || `Élément #${el.element_id}`}</strong>
+                          <span style={{ fontSize: '0.75rem', textTransform: 'capitalize', color: 'var(--ink-500)', background: 'rgba(255,255,255,0.05)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>
+                            {(el.type_element || '').replace('_', ' ')}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '0.25rem 0.65rem', borderRadius: '12px', background: styleCfg.bg, color: styleCfg.color, border: `1px solid ${styleCfg.border}` }}>
+                          {styleCfg.label}
+                        </span>
+                      </div>
+
+                      {el.message_local && (
+                        <p style={{ fontSize: '0.85rem', color: 'var(--core-border)', marginBottom: '0.5rem' }}>{el.message_local}</p>
+                      )}
+
+                      {/* Signaux de l'élément */}
+                      {Array.isArray(el.signaux) && el.signaux.length > 0 && (
+                        <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {el.signaux.map((sig, sIdx) => {
+                            const sigCfg = STATUT_ANALYSIS_MAP[sig.categorie] || STATUT_ANALYSIS_MAP.INFORMATION;
+                            return (
+                              <div key={sIdx} style={{ padding: '0.65rem 0.85rem', borderRadius: '8px', background: 'var(--core-bg)', border: `1px solid ${sigCfg.border}` }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: sigCfg.color }}>{sig.code}</span>
+                                  <span style={{ fontSize: '0.7rem', fontWeight: 600, color: sigCfg.color }}>{sig.categorie}</span>
+                                </div>
+                                <p style={{ fontSize: '0.83rem', color: 'var(--ink-900)', margin: '0.2rem 0 0.4rem 0' }}>{sig.message_local}</p>
+                                {(sig.valeur_mesuree != null || sig.valeur_limite != null) && (
+                                  <div style={{ fontSize: '0.78rem', color: 'var(--ink-500)', display: 'flex', gap: '1rem', flexWrap: 'wrap', fontWeight: 600 }}>
+                                    {sig.valeur_mesuree != null && <span>Mesuré : {sig.valeur_mesuree} {sig.unite || ''}</span>}
+                                    {sig.valeur_limite != null && <span>Limite : {sig.valeur_limite} {sig.unite || ''}</span>}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {el.validation_humaine_requise && !explicationResult && (
+                        <div style={{ marginTop: '0.75rem', fontSize: '0.78rem', color: 'var(--ink-500)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          <Info size={14} color="var(--accent)" />
+                          <span>Une vérification humaine par l’ingénieur structure est requise.</span>
+                        </div>
+                      )}
+
+                      {/* Section Explication IA (si éligible : CRITIQUE, ATTENTION, INFORMATION) */}
+                      {canExplain && (
+                        <div style={{ marginTop: '0.75rem' }}>
+                          {!explicationResult && (
+                            <button
+                              className="btn btn-secondary"
+                              style={{
+                                padding: '0.4rem 0.85rem',
+                                fontSize: '0.8rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.4rem',
+                                border: '1px solid var(--accent-soft-border)',
+                                background: 'var(--accent-soft)',
+                                color: 'var(--accent)',
+                              }}
+                              disabled={isLoadingExpl}
+                              onClick={() => handleExpliquerElement(el.element_id)}
+                            >
+                              {isLoadingExpl ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} color="var(--accent)" />}
+                              <span>{isLoadingExpl ? 'Explication en cours...' : 'Expliquer avec l’IA'}</span>
+                            </button>
+                          )}
+
+                          {errExpl && (
+                            <div style={{ marginTop: '0.5rem', padding: '0.6rem 0.85rem', borderRadius: '8px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', color: 'var(--status-critical)', fontSize: '0.82rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                              <span>{errExpl}</span>
+                              <button
+                                className="btn btn-secondary"
+                                style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
+                                onClick={() => handleExpliquerElement(el.element_id)}
+                              >
+                                Réessayer
+                              </button>
+                            </div>
+                          )}
+
+                          {explicationResult && (
+                            <div style={{ marginTop: '0.75rem', padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--core-bg)', border: '1px solid var(--accent-soft-border)' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--accent-soft-border)', fontWeight: 700, fontSize: '0.85rem' }}>
+                                  <Sparkles size={16} color="var(--accent)" />
+                                  <span>Explication IA</span>
+                                </div>
+                                {explicationResult.source_explication === 'GEMINI' && (
+                                  <span style={{ fontSize: '0.72rem', fontWeight: 600, padding: '0.15rem 0.5rem', borderRadius: '10px', background: 'var(--status-ok-soft)', color: 'var(--status-ok)', border: '1px solid var(--status-ok-soft)' }}>
+                                    Source : Gemini
+                                  </span>
+                                )}
+                                {explicationResult.source_explication === 'MOCK' && (
+                                  <span style={{ fontSize: '0.72rem', fontWeight: 600, padding: '0.15rem 0.5rem', borderRadius: '10px', background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-soft-border)' }}>
+                                    Source : Simulation locale
+                                  </span>
+                                )}
+                              </div>
+
+                              {explicationResult.explication_ia ? (
+                                <p style={{ fontSize: '0.85rem', color: 'var(--ink-900)', lineHeight: '1.45', margin: '0 0 0.5rem 0' }}>
+                                  {explicationResult.explication_ia}
+                                </p>
+                              ) : (
+                                <p style={{ fontSize: '0.83rem', color: 'var(--ink-500)', fontStyle: 'italic', margin: '0 0 0.5rem 0' }}>
+                                  L'explication IA n'est pas disponible pour le moment. Le contrôle de cohérence reste disponible ci-dessus.
+                                </p>
+                              )}
+
+                              {explicationResult.validation_humaine_requise && (
+                                <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: 'var(--ink-500)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                  <Info size={14} color="var(--accent)" />
+                                  <span>{explicationResult.message_validation || "Cette analyse nécessite une vérification humaine par l’ingénieur structure."}</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p style={{ fontSize: '0.85rem', color: 'var(--ink-500)', margin: 0 }}>Aucun élément trouvé pour l'analyse de cohérence.</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Liste interactive des éléments */}
@@ -158,7 +537,7 @@ export default function Step3_ValidationLock({
                     className={`btn ${item.locked ? 'btn-secondary' : 'btn-success'}`}
                     style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
                     disabled={validatingId === item.id}
-                    onClick={() => toggleLock(item.id, item.category)}
+                    onClick={() => handleToggleLock(item.id, item.category)}
                   >
                     {item.locked ? <Unlock size={14} /> : <Lock size={14} />}
                     <span>
@@ -195,13 +574,13 @@ export default function Step3_ValidationLock({
                   />
                 </div>
 
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', background: 'rgba(15, 23, 42, 0.4)', padding: '0.75rem', borderRadius: '8px' }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', background: 'var(--core-bg)', padding: '0.75rem', borderRadius: '8px' }}>
                   {item.locked ? (
-                    <span style={{ color: '#fca5a5', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <span style={{ color: 'var(--status-critical)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                       <Lock size={14} /> Section figée par l'ingénieur
                     </span>
                   ) : (
-                    <span style={{ color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <span style={{ color: 'var(--status-ok)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                       <Edit3 size={14} /> Saisie manuelle autorisée avant verrou
                     </span>
                   )}
@@ -220,7 +599,7 @@ export default function Step3_ValidationLock({
         </h3>
 
         {mainDoeuvreError && (
-          <div style={{ padding: '0.85rem 1.1rem', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', marginBottom: '1rem', fontSize: '0.85rem', color: '#fca5a5' }}>
+          <div style={{ padding: '0.85rem 1.1rem', borderRadius: '10px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginBottom: '1rem', fontSize: '0.85rem', color: 'var(--status-critical)' }}>
             {mainDoeuvreError}
           </div>
         )}
@@ -256,7 +635,7 @@ export default function Step3_ValidationLock({
                       onClick={() => onRemovePosteMainDoeuvre(poste.id)}
                       title="Supprimer ce poste"
                     >
-                      <Trash2 size={14} color="#ef4444" />
+                      <Trash2 size={14} color="var(--status-critical)" />
                     </button>
                   </td>
                 </tr>
@@ -272,6 +651,43 @@ export default function Step3_ValidationLock({
           </table>
         )}
 
+        {/* Suggestion IA -- décrire le poste en langage naturel */}
+        <div style={{ background: 'var(--accent-soft)', border: '1px solid var(--accent-soft-border)', borderRadius: '12px', padding: '1.1rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.6rem' }}>
+            <Sparkles size={16} color="var(--accent)" />
+            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--accent)' }}>Suggestion IA du poste</span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              className="form-control"
+              style={{ flex: 1, minWidth: '240px' }}
+              placeholder="ex : installation et repli de chantier pour la durée des travaux"
+              value={posteIADescription}
+              onChange={(e) => setPosteIADescription(e.target.value)}
+            />
+            <button
+              className="btn btn-secondary"
+              disabled={posteIALoading || !posteIADescription.trim()}
+              onClick={handleSuggererPoste}
+            >
+              {posteIALoading ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
+              <span>{posteIALoading ? 'Analyse...' : 'Suggérer avec l\'IA'}</span>
+            </button>
+          </div>
+          {posteIAError && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--status-critical)', fontSize: '0.82rem', marginTop: '0.5rem' }}>
+              <AlertCircle size={14} />
+              <span>{posteIAError}</span>
+            </div>
+          )}
+          {posteIAConfiance && (
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+              Désignation, unité et lot pré-remplis ci-dessous (confiance IA : {posteIAConfiance}). Complétez quantité et prix unitaire, puis vérifiez avant ajout.
+            </p>
+          )}
+        </div>
+
         {/* Formulaire Bi-mode */}
         <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--core-border)', borderRadius: '12px', padding: '1.25rem' }}>
           <div className="grid-2" style={{ marginBottom: '1rem' }}>
@@ -282,15 +698,16 @@ export default function Step3_ValidationLock({
                 value={nouveauPoste.lot}
                 onChange={(e) => setNouveauPoste((p) => ({ ...p, lot: e.target.value }))}
               >
-                <option value="lot_00_generalites">Lot 00 — Généralités & Installation</option>
-                <option value="lot_01_terrassement">Lot 01 — Terrassement & Fouilles</option>
+                <option value="lot_00_generalites">Lot 00 — Généralités</option>
+                <option value="lot_01_terrassement">Lot 01 — Terrassement</option>
                 <option value="lot_02_gros_oeuvre_infrastructure">Lot 02a — Gros Œuvre Infrastructure</option>
                 <option value="lot_02_gros_oeuvre_superstructure">Lot 02b — Gros Œuvre Superstructure</option>
-                <option value="lot_03_etancheite">Lot 03 — Étanchéité & Isolation</option>
-                <option value="lot_04_revêtements">Lot 04 — Revêtements Sols & Murs</option>
-                <option value="lot_05_menuiserie">Lot 05 — Menuiserie & Serrurerie</option>
-                <option value="lot_06_plomberie_electricite">Lot 06 — Plomberie & Électricité</option>
-                <option value="lot_07_peinture_finitions">Lot 07 — Peinture & Finitions</option>
+                <option value="lot_03_etancheite">Lot 03 — Étanchéité</option>
+                <option value="lot_04_plomberie">Lot 04 — Plomberie</option>
+                <option value="lot_05_assainissement">Lot 05 — Assainissement</option>
+                <option value="lot_06_electricite">Lot 06 — Électricité</option>
+                <option value="lot_07_charpente">Lot 07 — Charpente</option>
+                <option value="lot_08_couverture">Lot 08 — Couverture</option>
               </select>
             </div>
 
@@ -327,11 +744,14 @@ export default function Step3_ValidationLock({
                   onChange={(e) => setNouveauPoste((p) => ({ ...p, unite: e.target.value }))}
                 >
                   <option value="forfait">Forfait</option>
+                  <option value="ens.">Ensemble (ens.)</option>
                   <option value="m²">m²</option>
                   <option value="m³">m³</option>
                   <option value="kg">kg</option>
+                  <option value="ml">Mètre linéaire (ml)</option>
                   <option value="jour">Jour</option>
                   <option value="unité">Unité</option>
+                  <option value="u">Unité (u)</option>
                 </select>
               </div>
               <div>

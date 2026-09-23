@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 from io import BytesIO
 
@@ -49,6 +50,12 @@ from .services.assistant_ia.explanations import expliquer_resultat_element
 from .services.assistant_ia.postes import suggerer_poste_complementaire
 from .services.assistant_ia.client import LLMServiceError
 from .services.assistant_ia.vision import analyser_plan_2d
+from .services.assistant_ia import (
+    analyser_projet_coherence,
+    analyser_element_coherence,
+    expliquer_analyse_coherence,
+    enregistrer_appel_ia,
+)
 from moteur_calcul.validators import EntreeInvalide
 from django.contrib.auth.models import User
 from .models import Profil
@@ -387,6 +394,30 @@ def generer_pdf_plan_coffrage_general(projet):
 class ProjetViewSet(viewsets.ModelViewSet):
     queryset = Projet.objects.all()
     serializer_class = ProjetSerializer
+    permission_classes = [EstAuthentifieOuDemoMode, EstMembreEntreprise]
+
+    def get_queryset(self):
+        qs = Projet.objects.all()
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            # Anonyme : seulement possible en DEMO_MODE (sinon bloqué en
+            # amont par EstAuthentifieOuDemoMode) -- comportement legacy
+            # inchangé, pas de filtrage.
+            return qs
+        profil = getattr(user, "profil", None)
+        if profil is None:
+            # Utilisateur authentifié sans Profil (comptes créés avant ce
+            # sprint) : pas de filtrage, comportement legacy inchangé.
+            return qs
+        return qs.filter(entreprise_id=profil.entreprise_id)
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        profil = getattr(user, "profil", None) if user and user.is_authenticated else None
+        serializer.save(
+            cree_par=user if user and user.is_authenticated else None,
+            entreprise=profil.entreprise if profil else None,
+        )
 
     def get_queryset(self):
         user = self.request.user
@@ -441,6 +472,19 @@ class ProjetViewSet(viewsets.ModelViewSet):
             self.throttle_scope = "assistant_vision"
             return [ScopedRateThrottle()]
         return super().get_throttles()
+
+    @action(detail=True, methods=["get"], url_path="analyse-coherence", url_name="analyse-coherence")
+    def analyse_coherence(self, request, pk=None):
+        projet = self.get_object()
+        try:
+            resultat = analyser_projet_coherence(projet)
+            return Response(resultat, status=status.HTTP_200_OK)
+        except Exception as exc:
+            logger.exception("Erreur lors de l'analyse de cohérence du projet")
+            return Response(
+                {"detail": "Une erreur interne est survenue lors de l'analyse de cohérence."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=["post"])
     def recalculer(self, request, pk=None):
@@ -576,6 +620,7 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 )
                 elements_crees.append(poutre)
 
+        # 3. Poutres selon l'axe Y
         for i in range(nb_x + 1):
             for j in range(nb_y):
                 largeur_influence = portee_x if 0 < i < nb_x else portee_x / 2
@@ -791,17 +836,39 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             )
 
+        t0 = time.time()
         try:
             image_bytes = fichier.read()
             mime_type = fichier.content_type
 
             resultat = analyser_plan_2d(image_bytes, mime_type)
             resultat["mode_import"] = "VISION"
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint=f"/api/projets/{pk}/analyser-plan/",
+                source=resultat.get("source", "MOCK"),
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(resultat, status=status.HTTP_200_OK)
         except ValueError as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint=f"/api/projets/{pk}/analyser-plan/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as exc:
             logger.exception("Erreur inattendue lors de l'analyse de l'image du plan")
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint=f"/api/projets/{pk}/analyser-plan/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(
                 {"detail": "Une erreur interne est survenue lors du traitement de l'image."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -1014,8 +1081,18 @@ class EntrepriseParametresView(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     permission_classes = [EstAdminCabinet]
 
+    def _entreprise_courante(self, request) -> EntrepriseParametres:
+        """Entreprise du Profil de l'utilisateur connecté. Repli sur
+        l'entreprise legacy (pk=1) pour DEMO_MODE ou un utilisateur encore
+        sans Profil -- ne casse pas les comptes créés avant ce sprint."""
+        user = request.user
+        profil = getattr(user, "profil", None) if user and user.is_authenticated else None
+        if profil is not None:
+            return profil.entreprise
+        return EntrepriseParametres.get_solo()
+
     def get(self, request):
-        entreprise = EntrepriseParametres.get_solo()
+        entreprise = self._entreprise_courante(request)
         serializer = EntrepriseParametresSerializer(entreprise, context={"request": request})
         return Response(serializer.data)
 
@@ -1026,7 +1103,7 @@ class EntrepriseParametresView(APIView):
         return self._update(request, partial=True)
 
     def _update(self, request, partial):
-        entreprise = EntrepriseParametres.get_solo()
+        entreprise = self._entreprise_courante(request)
         serializer = EntrepriseParametresSerializer(
             entreprise, data=request.data, partial=partial, context={"request": request}
         )
@@ -1077,15 +1154,37 @@ class AssistantStructurerView(APIView):
                 {"detail": "La description ne doit pas dépasser 1000 caractères."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        t0 = time.time()
         try:
             res = structurer_description_projet(description)
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/structurer-projet/",
+                source=res.get("source", "MOCK"),
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(res, status=status.HTTP_200_OK)
         except LLMServiceError as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/structurer-projet/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(
                 {"detail": str(exc), "code": exc.code},
                 status=exc.status_code,
             )
         except Exception as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/structurer-projet/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -1111,6 +1210,7 @@ class AssistantExpliquerView(APIView):
                 {"detail": "Cet élément n'a aucun calcul disponible à expliquer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        t0 = time.time()
         try:
             elem_payload = {
                 "repere": element.identifiant,
@@ -1125,13 +1225,34 @@ class AssistantExpliquerView(APIView):
                 "resultats": element.resultat_calcul or {},
             }
             res = expliquer_resultat_element(elem_payload)
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/expliquer-element/",
+                source=res.get("source", "MOCK"),
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(res, status=status.HTTP_200_OK)
         except LLMServiceError as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/expliquer-element/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(
                 {"detail": str(exc), "code": exc.code},
                 status=exc.status_code,
             )
         except Exception as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/expliquer-element/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -1156,18 +1277,47 @@ class AssistantSuggererPosteView(APIView):
                 {"detail": "La description ne doit pas dépasser 500 caractères."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        t0 = time.time()
         try:
             res = suggerer_poste_complementaire(description)
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/suggerer-poste/",
+                source=res.get("source", "MOCK"),
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(res, status=status.HTTP_200_OK)
         except LLMServiceError as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/suggerer-poste/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(
                 {"detail": str(exc), "code": exc.code},
                 status=exc.status_code,
             )
         except ValueError as exc:
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/suggerer-poste/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as exc:
             logger.exception("Erreur inattendue dans AssistantSuggererPosteView")
+            duree_ms = int((time.time() - t0) * 1000)
+            enregistrer_appel_ia(
+                endpoint="/api/assistant/suggerer-poste/",
+                source="FALLBACK_LOCAL",
+                utilisateur=request.user,
+                duree_ms=duree_ms,
+            )
             return Response(
                 {"detail": "Erreur interne du service d'assistance IA."},
                 status=status.HTTP_502_BAD_GATEWAY,

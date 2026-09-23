@@ -1,4 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import LandingPage from './components/LandingPage';
+import LoginPage from './components/LoginPage';
+import RegisterPage from './components/RegisterPage';
+import ForgotPasswordPage from './components/ForgotPasswordPage';
+import ActivateAccountPage from './components/ActivateAccountPage';
+import ResetPasswordConfirmPage from './components/ResetPasswordConfirmPage';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import DashboardView from './components/DashboardView';
@@ -9,17 +15,57 @@ import Step3_ValidationLock from './components/Step3_ValidationLock';
 import StepPlanFondation from './components/StepPlanFondation';
 import Step4_DQEExport from './components/Step4_DQEExport';
 import SettingsEntreprise from './components/settingsentreprise';
+import TeamManagementView from './components/TeamManagementView';
 import { dqeService } from './api/dqeService';
 
+// Liens à usage unique envoyés par le backend (voir auth_views.py) :
+// /activer-compte?uid=...&token=... et
+// /reinitialiser-mot-de-passe?uid=...&token=... -- pas de routeur dans
+// cette app, donc on les détecte une fois au chargement.
+const DEEP_LINK_PATHS = {
+  '/activer-compte': 'activer-compte',
+  '/reinitialiser-mot-de-passe': 'reinitialiser-mot-de-passe',
+};
+
 export default function App() {
-  // Persistence de la vue active au rafraîchissement (F5)
+  // Persistence de la vue active au rafraîchissement (F5). Une vraie
+  // authentification existe maintenant (JWT) : un visiteur non connecté
+  // ne doit jamais retomber directement sur le tableau de bord, même si
+  // c'était la dernière vue enregistrée avant expiration de sa session.
   const [activeView, setActiveView] = useState(() => {
+    const vueLien = DEEP_LINK_PATHS[window.location.pathname];
+    if (vueLien) return vueLien;
+    if (!dqeService.isAuthenticated()) return 'landing';
     return localStorage.getItem('dqe_active_view') || 'dashboard';
   });
 
+  // uid/token du lien d'activation ou de réinitialisation, lus une seule
+  // fois (ces vues sont éphémères, jamais rechargées depuis le stockage).
+  const [deepLinkParams] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return { uid: params.get('uid'), token: params.get('token') };
+  });
+
   useEffect(() => {
+    // Ne pas persister les vues éphémères liées à un lien à usage unique :
+    // recharger la page plus tard ne doit pas y retomber.
+    if (activeView === 'activer-compte' || activeView === 'reinitialiser-mot-de-passe') return;
     localStorage.setItem('dqe_active_view', activeView);
   }, [activeView]);
+
+  // Session expirée / refresh token révoqué (déclenché par dqeService's
+  // apiFetch) -- renvoie proprement à la landing plutôt que de laisser
+  // l'utilisateur face à des appels API qui échouent en boucle.
+  useEffect(() => {
+    const onAuthExpired = () => setActiveView('landing');
+    window.addEventListener('dqe:auth-expired', onAuthExpired);
+    return () => window.removeEventListener('dqe:auth-expired', onAuthExpired);
+  }, []);
+
+  const handleLogout = async () => {
+    await dqeService.logout();
+    setActiveView('landing');
+  };
 
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -56,6 +102,38 @@ export default function App() {
   // Verrouillage et validation
   const [validationError, setValidationError] = useState(null);
   const [validatingId, setValidatingId] = useState(null);
+
+  // Entreprise réelle (dqeService.getEntreprise) -- affichée dans la Sidebar
+  // à la place d'un nom de personne codé en dur. Pas de donnée inventée :
+  // si l'entreprise n'est pas encore configurée, entreprise reste null et
+  // la Sidebar l'indique honnêtement.
+  const [entreprise, setEntreprise] = useState(null);
+  const [entrepriseLoading, setEntrepriseLoading] = useState(true);
+
+  useEffect(() => {
+    let annule = false;
+    dqeService.getEntreprise()
+      .then((data) => { if (!annule) setEntreprise(data || null); })
+      .catch(() => { if (!annule) setEntreprise(null); })
+      .finally(() => { if (!annule) setEntrepriseLoading(false); });
+    return () => { annule = true; };
+  }, []);
+
+  // Profil de l'utilisateur connecté (rôle, entreprise) -- nécessaire pour
+  // savoir s'il faut afficher "Équipe" dans la Sidebar (réservé Admin).
+  // Pas de donnée inventée : reste null tant que l'appel n'a pas répondu
+  // ou si l'utilisateur n'est pas authentifié.
+  const [moiProfil, setMoiProfil] = useState(null);
+
+  useEffect(() => {
+    let annule = false;
+    if (!dqeService.isAuthenticated()) return undefined;
+    dqeService.getMoi()
+      .then((data) => { if (!annule) setMoiProfil(data || null); })
+      .catch(() => { if (!annule) setMoiProfil(null); });
+    return () => { annule = true; };
+  }, [activeView === 'landing' || activeView === 'login']);
+
 
   // Postes de main d'œuvre saisis manuellement
   const [postesMainDoeuvre, setPostesMainDoeuvre] = useState([]);
@@ -168,7 +246,7 @@ export default function App() {
   const toggleLock = async (id, category) => {
     const key = categoryToKey(category);
     const item = (sections[key] || []).find((el) => el.id === id);
-    if (!item) return;
+    if (!item) return false;
 
     setValidationError(null);
     let resultatManuel = null;
@@ -178,7 +256,7 @@ export default function App() {
         const manuel = buildResultatManuel(item, category);
         if (manuel.error) {
           setValidationError(`${item.name} : ${manuel.error}`);
-          return;
+          return false;
         }
         resultatManuel = manuel.value;
       }
@@ -189,7 +267,7 @@ export default function App() {
       } catch (err) {
         setValidationError(`Impossible de valider ${item.name} : ${err.message}`);
         setValidatingId(null);
-        return;
+        return false;
       }
       setValidatingId(null);
     }
@@ -208,6 +286,7 @@ export default function App() {
         return updated;
       }),
     }));
+    return true;
   };
 
   const toggleLockAll = async (lockState) => {
@@ -228,7 +307,7 @@ export default function App() {
           const manuel = buildResultatManuel(el, category);
           if (manuel.error) {
             setValidationError(`${el.name} : ${manuel.error}`);
-            return;
+            return false;
           }
           manuels.set(el.elementId, manuel.value);
         }
@@ -242,7 +321,7 @@ export default function App() {
         );
       } catch (err) {
         setValidationError(`Erreur lors de la validation groupée : ${err.message}`);
-        return;
+        return false;
       }
 
       setSections((prev) => ({
@@ -263,7 +342,7 @@ export default function App() {
             : { ...el, locked: true }
         ),
       }));
-      return;
+      return true;
     }
 
     setSections((prev) => ({
@@ -272,6 +351,7 @@ export default function App() {
       poutres: prev.poutres.map((item) => ({ ...item, locked: lockState })),
       semelles: prev.semelles.map((item) => ({ ...item, locked: lockState })),
     }));
+    return true;
   };
 
   const updateSection = (id, category, field, value) => {
@@ -291,6 +371,68 @@ export default function App() {
   ];
   const lockedCount = allElements.filter((e) => e.locked).length;
 
+  if (activeView === 'landing') {
+    return (
+      <LandingPage
+        // "Commencer un projet" suppose désormais un vrai compte (les
+        // projets sont rattachés à une entreprise) -- vers l'inscription
+        // si non connecté, direct au tableau de bord sinon.
+        onGetStarted={() => setActiveView(dqeService.isAuthenticated() ? 'dashboard' : 'register')}
+        onLogin={() => setActiveView('login')}
+      />
+    );
+  }
+
+  if (activeView === 'login') {
+    return (
+      <LoginPage
+        onEnterApp={() => setActiveView('dashboard')}
+        onBackToLanding={() => setActiveView('landing')}
+        onGoToRegister={() => setActiveView('register')}
+        onGoToForgotPassword={() => setActiveView('forgot-password')}
+      />
+    );
+  }
+
+  if (activeView === 'register') {
+    return (
+      <RegisterPage
+        onEnterApp={() => setActiveView('dashboard')}
+        onBackToLanding={() => setActiveView('landing')}
+        onGoToLogin={() => setActiveView('login')}
+      />
+    );
+  }
+
+  if (activeView === 'forgot-password') {
+    return (
+      <ForgotPasswordPage
+        onBackToLanding={() => setActiveView('landing')}
+        onGoToLogin={() => setActiveView('login')}
+      />
+    );
+  }
+
+  if (activeView === 'activer-compte') {
+    return (
+      <ActivateAccountPage
+        uid={deepLinkParams.uid}
+        token={deepLinkParams.token}
+        onGoToLogin={() => setActiveView('login')}
+      />
+    );
+  }
+
+  if (activeView === 'reinitialiser-mot-de-passe') {
+    return (
+      <ResetPasswordConfirmPage
+        uid={deepLinkParams.uid}
+        token={deepLinkParams.token}
+        onGoToLogin={() => setActiveView('login')}
+      />
+    );
+  }
+
   return (
     <div className="app-layout">
       <Sidebar
@@ -300,6 +442,10 @@ export default function App() {
         setIsCollapsed={setIsCollapsed}
         lockedCount={lockedCount}
         totalCount={allElements.length}
+        entreprise={entreprise}
+        entrepriseLoading={entrepriseLoading}
+        onLogout={handleLogout}
+        moiProfil={moiProfil}
       />
 
       <div className="main-wrapper">
@@ -350,6 +496,7 @@ export default function App() {
           {activeView === 'step3' && (
             <Step3_ValidationLock
               sections={sections}
+              projetId={sections?.projetId || projectData?.id}
               toggleLock={toggleLock}
               toggleLockAll={toggleLockAll}
               updateSection={updateSection}
@@ -389,6 +536,10 @@ export default function App() {
 
           {activeView === 'settingsEntreprise' && (
             <SettingsEntreprise />
+          )}
+
+          {activeView === 'equipe' && (
+            <TeamManagementView moiProfil={moiProfil} />
           )}
         </main>
       </div>

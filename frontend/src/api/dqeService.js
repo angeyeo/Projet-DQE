@@ -12,15 +12,137 @@
 // - GET|POST|DELETE /api/postes-complementaires/
 // - POST /api/assistant/structurer-projet/
 // - POST /api/assistant/expliquer-element/
+// - POST /api/assistant/suggerer-poste/
+// - POST /api/projets/{id}/analyser_plan_image/ (Vision IA)
+// - GET  /api/projets/{id}/analyse-coherence/ (Contrôle de cohérence)
+// - POST /api/elements/{id}/expliquer-coherence/ (Explication IA d'un signal)
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
 
+// --- Authentification JWT (sprint Comptes & Permissions) ---------------
+// Jetons stockés en localStorage : survivent au rechargement de page. Un
+// vrai backend d'auth existe maintenant (voir projets/auth_views.py),
+// donc toutes les routes métier ci-dessous passent par apiFetch, qui
+// attache le token et gère le rafraîchissement silencieux sur 401.
+
+const ACCESS_KEY = 'dqe_access_token';
+const REFRESH_KEY = 'dqe_refresh_token';
+
+function getAccessToken() {
+  return localStorage.getItem(ACCESS_KEY);
+}
+
+function getRefreshToken() {
+  return localStorage.getItem(REFRESH_KEY);
+}
+
+function setTokens({ access, refresh }) {
+  if (access) localStorage.setItem(ACCESS_KEY, access);
+  if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
+}
+
+function clearTokens() {
+  localStorage.removeItem(ACCESS_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+}
+
+function isAuthenticated() {
+  return !!getAccessToken();
+}
+
+// Rafraîchit le token d'accès via le refresh token. Renvoie le nouveau
+// access token, ou null si le refresh a échoué (token expiré/révoqué).
+async function rafraichirToken() {
+  const refresh = getRefreshToken();
+  if (!refresh) return null;
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/token/refresh/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    setTokens({ access: data.access, refresh: data.refresh });
+    return data.access;
+  } catch {
+    return null;
+  }
+}
+
+// Fetch "public" -- n'attache jamais de token. Nécessaire pour les
+// routes AllowAny (login, inscription, mot de passe oublié...) : un
+// access token expiré présent en localStorage ferait échouer
+// l'authentification JWT avant même d'atteindre la vue AllowAny.
+async function publicFetch(url, options = {}) {
+  return fetch(url, options);
+}
+
+// Fetch authentifié -- attache le token courant, rafraîchit une fois et
+// réessaie sur 401, puis prévient l'app (événement) si la session est
+// définitivement expirée pour qu'elle renvoie l'utilisateur au login.
+async function apiFetch(url, options = {}) {
+  const access = getAccessToken();
+  const headers = { ...(options.headers || {}) };
+  if (access) headers['Authorization'] = `Bearer ${access}`;
+
+  let response = await fetch(url, { ...options, headers });
+
+  if (response.status === 401 && getRefreshToken()) {
+    const nouvelAccess = await rafraichirToken();
+    if (nouvelAccess) {
+      response = await fetch(url, {
+        ...options,
+        headers: { ...(options.headers || {}), Authorization: `Bearer ${nouvelAccess}` },
+      });
+    }
+  }
+
+  if (response.status === 401) {
+    clearTokens();
+    window.dispatchEvent(new CustomEvent('dqe:auth-expired'));
+  }
+
+  return response;
+}
+
 async function postJSON(url, body) {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
+    err.status = response.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+// Variante de postJSON pour les routes AllowAny (mot de passe oublié,
+// réinitialisation, activation) -- utilise publicFetch, jamais apiFetch,
+// pour la même raison que le login (cf. publicFetch ci-dessus).
+async function postJSONPublic(url, body) {
+  const response = await publicFetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
+    err.status = response.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+async function getJSON(url) {
+  const response = await apiFetch(url);
   const data = await response.json().catch(() => null);
   if (!response.ok) {
     const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
@@ -48,7 +170,7 @@ export const dqeService = {
   // manuelle) -- generer_trame/ et importer_plan (confirmer) lisent ces
   // champs directement sur le Projet, pas depuis la requête.
   patchProjet: async (projetId, champs) => {
-    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/`, {
+    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(champs),
@@ -110,7 +232,7 @@ export const dqeService = {
     }
     const formData = new FormData();
     formData.append('fichier', file);
-    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, {
+    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, {
       method: 'POST',
       body: formData,
     });
@@ -133,10 +255,47 @@ export const dqeService = {
     return postJSON(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, { confirmer: true });
   },
 
+  // Vision IA -- envoie une image de plan (JPG/PNG) à l'endpoint Gemini
+  // Vision pour lecture OCR des annotations (repères + dimensions entre
+  // parenthèses, ex: "S1(170x170x40)"). Ne pré-remplit PAS nb_travees_x/y
+  // (le backend ne renvoie pas ce format pour cet endpoint) -- il renvoie
+  // une liste d'annotations lues à vérifier manuellement par l'ingénieur.
+  // Cette fonction n'existait pas alors qu'elle était déjà appelée par
+  // Step1_Parametres.jsx, ce qui provoquait un crash ("dqeService.analyserPlanImage
+  // is not a function") dès qu'un utilisateur déposait une image de plan.
+  analyserPlanImage: async (projetId, file) => {
+    if (!projetId) {
+      throw new Error("Aucun projet actif -- impossible d'analyser une image sans projetId.");
+    }
+    const formData = new FormData();
+    formData.append('fichier', file);
+    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/analyser_plan_image/`, {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const msg = (data && (data.erreur || data.detail)) || (
+        response.status === 413
+          ? "L'image envoyée est trop volumineuse."
+          : response.status === 429
+          ? "Trop de requêtes effectuées. Veuillez patienter avant de réessayer."
+          : response.status === 400
+          ? "Fichier ou format d'image non supporté."
+          : `Erreur ${response.status}`
+      );
+      const err = new Error(msg);
+      err.status = response.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  },
+
   // Postes complémentaires (Jour 2.1)
   listerPostesComplementaires: async (projetId) => {
     if (!projetId) return [];
-    const response = await fetch(`${API_BASE_URL}/postes-complementaires/?projet=${projetId}`);
+    const response = await apiFetch(`${API_BASE_URL}/postes-complementaires/?projet=${projetId}`);
     const data = await response.json().catch(() => null);
     if (!response.ok) {
       throw new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
@@ -166,7 +325,7 @@ export const dqeService = {
   },
 
   supprimerPosteComplementaire: async (posteId) => {
-    const response = await fetch(`${API_BASE_URL}/postes-complementaires/${posteId}/`, {
+    const response = await apiFetch(`${API_BASE_URL}/postes-complementaires/${posteId}/`, {
       method: 'DELETE',
     });
     if (!response.ok && response.status !== 204) {
@@ -184,7 +343,7 @@ export const dqeService = {
   // Suggestion de chaînage automatique (Jour 2.2)
   recupererChainageSuggere: async (projetId) => {
     if (!projetId) return 0;
-    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/chainage_suggere/`);
+    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/chainage_suggere/`);
     const data = await response.json().catch(() => null);
     if (!response.ok) {
       throw new Error((data && data.erreur) || `Erreur ${response.status}`);
@@ -195,7 +354,7 @@ export const dqeService = {
   // Plan de fondation (Jour 3.1)
   recupererPlanFondation: async (projetId) => {
     if (!projetId) return null;
-    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/`);
+    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/`);
     const data = await response.json().catch(() => null);
     if (!response.ok) {
       throw new Error((data && data.erreur) || `Erreur ${response.status}`);
@@ -211,7 +370,7 @@ export const dqeService = {
     // réservé par la négociation de contenu de DRF et déclenche un Http404 avant
     // même d'atteindre la vue (voir projets/views.py::plan_fondation). C'était la
     // cause du bouton de téléchargement DXF qui ne fonctionnait pas.
-    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?export=dxf`);
+    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?export=dxf`);
     if (!response.ok) {
       const data = await response.json().catch(() => null);
       throw new Error((data && data.erreur) || `Erreur ${response.status}`);
@@ -259,10 +418,32 @@ export const dqeService = {
     });
   },
 
+  // Suggestion de poste complémentaire par Assistant IA -- l'ingénieur décrit
+  // le poste en langage naturel, l'IA propose designation/unite/lot/confiance.
+  // Cette fonction n'existait pas du tout : appel jamais câblé côté service.
+  suggererPosteIA: async (descriptionText) => {
+    return postJSON(`${API_BASE_URL}/assistant/suggerer-poste/`, {
+      description: descriptionText,
+    });
+  },
+
+  // Contrôle de cohérence structurelle -- analyse tous les éléments validés
+  // d'un projet et remonte des signaux (CRITIQUE/ATTENTION/INFORMATION/...).
+  // Appelée par Step3_ValidationLock.jsx mais n'existait pas encore ici.
+  analyserCoherenceProjet: async (projetId) => {
+    return getJSON(`${API_BASE_URL}/projets/${projetId}/analyse-coherence/`);
+  },
+
+  // Explication IA d'un signal de cohérence pour un élément donné.
+  // Appelée par Step3_ValidationLock.jsx mais n'existait pas encore ici.
+  expliquerCoherenceElement: async (elementId) => {
+    return postJSON(`${API_BASE_URL}/elements/${elementId}/expliquer-coherence/`);
+  },
+
   // Paramètres entreprise (logo + coordonnées) utilisés en en-tête des
   // exports DQE -- voir projets/models.py::EntrepriseParametres.
   getEntreprise: async () => {
-    const response = await fetch(`${API_BASE_URL}/entreprise/`);
+    const response = await apiFetch(`${API_BASE_URL}/entreprise/`);
     const data = await response.json().catch(() => null);
     if (!response.ok) {
       const err = new Error((data && data.detail) || `Erreur ${response.status}`);
@@ -283,7 +464,7 @@ export const dqeService = {
     if (logoFile) {
       formData.append('logo', logoFile);
     }
-    const response = await fetch(`${API_BASE_URL}/entreprise/`, {
+    const response = await apiFetch(`${API_BASE_URL}/entreprise/`, {
       method: 'PATCH',
       body: formData,
     });
@@ -306,7 +487,7 @@ export const dqeService = {
       throw new Error(`Format d'export invalide : "${format}" (attendu : "pdf" ou "excel").`);
     }
 
-    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/generer_dqe/?export=${format}`, {
+    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/generer_dqe/?export=${format}`, {
       method: 'GET',
     });
 
@@ -337,7 +518,7 @@ export const dqeService = {
     if (!projetId) {
       throw new Error("Aucun projetId actif -- impossible de calculer le DQE sans projet.");
     }
-    const response = await fetch(`${API_BASE_URL}/projets/${projetId}/generer_dqe/`, {
+    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/generer_dqe/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -348,6 +529,113 @@ export const dqeService = {
       throw err;
     }
     return parseDQEResponse(data);
+  },
+
+  // === Authentification & Comptes (sprint Comptes & Permissions) =======
+  // Toutes ces routes existent réellement côté backend (projets/auth_views.py)
+  // -- ce n'était pas le cas quand LoginPage/RegisterPage/ForgotPasswordPage
+  // ont été créées ; elles doivent maintenant appeler ces fonctions au lieu
+  // de leur ancien état "pas encore branché".
+
+  isAuthenticated,
+
+  // Connexion classique (JWT). Retourne {access, refresh} et les stocke.
+  login: async (username, motDePasse) => {
+    const response = await publicFetch(`${API_BASE_URL}/auth/token/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password: motDePasse }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const err = new Error((data && data.detail) || "Identifiants incorrects.");
+      err.status = response.status;
+      err.data = data;
+      throw err;
+    }
+    setTokens(data);
+    return data;
+  },
+
+  // Déconnexion : révoque le refresh token côté serveur (liste noire),
+  // puis nettoie le stockage local dans tous les cas.
+  logout: async () => {
+    const refresh = getRefreshToken();
+    try {
+      if (refresh) {
+        await apiFetch(`${API_BASE_URL}/auth/logout/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh }),
+        });
+      }
+    } finally {
+      clearTokens();
+    }
+  },
+
+  // Inscription d'un nouveau cabinet + premier compte Admin.
+  inscription: async ({ nomEntreprise, username, email, motDePasse }) => {
+    const response = await publicFetch(`${API_BASE_URL}/auth/inscription/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nom_entreprise: nomEntreprise,
+        username,
+        email,
+        mot_de_passe: motDePasse,
+      }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const err = new Error("Impossible de créer le compte.");
+      err.status = response.status;
+      err.data = data; // erreurs par champ (nom_entreprise, username, mot_de_passe...)
+      throw err;
+    }
+    setTokens(data);
+    return data;
+  },
+
+  // Demande de réinitialisation -- ne révèle jamais si l'email existe.
+  demanderReinitialisation: async (email) => {
+    return postJSONPublic(`${API_BASE_URL}/auth/mot-de-passe-oublie/`, { email });
+  },
+
+  confirmerReinitialisation: async ({ uid, token, nouveauMotDePasse }) => {
+    return postJSONPublic(`${API_BASE_URL}/auth/reinitialiser-mot-de-passe/`, {
+      uid,
+      token,
+      nouveau_mot_de_passe: nouveauMotDePasse,
+    });
+  },
+
+  activerCompte: async ({ uid, token, motDePasse }) => {
+    return postJSONPublic(`${API_BASE_URL}/auth/activer/`, {
+      uid,
+      token,
+      mot_de_passe: motDePasse,
+    });
+  },
+
+  changerMotDePasse: async ({ ancienMotDePasse, nouveauMotDePasse }) => {
+    return postJSON(`${API_BASE_URL}/auth/changer-mot-de-passe/`, {
+      ancien_mot_de_passe: ancienMotDePasse,
+      nouveau_mot_de_passe: nouveauMotDePasse,
+    });
+  },
+
+  // Réservé aux comptes Admin du cabinet.
+  inviterUtilisateur: async ({ email, role }) => {
+    return postJSON(`${API_BASE_URL}/auth/inviter/`, { email, role });
+  },
+
+  listerMembres: async () => {
+    return getJSON(`${API_BASE_URL}/auth/membres/`);
+  },
+
+  desactiverMembre: async (userId) => {
+    return postJSON(`${API_BASE_URL}/auth/membres/${userId}/desactiver/`);
   },
 };
 
@@ -430,7 +718,12 @@ function parseDQEResponse(data) {
       total: `${Number(l.montant).toLocaleString()} FCFA`,
     })),
     montantTotalFCFA: `${Number(data.total_general).toLocaleString()} FCFA`,
-    explicationIA:
+    // NB : ce champ n'est PAS généré par l'assistant IA -- c'est une phrase
+    // fixe décrivant le moteur de calcul. Il s'appelait "explicationIA" et
+    // était affiché sous un badge "Sparkles / DKE IA" dans Step4_DQEExport.jsx,
+    // ce qui laissait croire à tort qu'une IA avait produit ce texte alors
+    // qu'aucun appel à /assistant/expliquer-element/ n'était jamais fait ici.
+    syntheseCalcul:
       'Devis calculé par le moteur de calcul (BAEL 91) à partir des sections validées et verrouillées.',
   };
 }
