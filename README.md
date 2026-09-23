@@ -1,139 +1,107 @@
-# Projet DQE — Backend & API REST
+# Comment passer de l'aperçu actuel à un rendu façon plan de coffrage professionnel
 
-Module backend Django dédié au dimensionnement structurel BTP, à l'exécution du moteur de calcul et à la génération automatique de Devis Quantitatifs Estimatifs (DQE).
+## Le point de départ à corriger d'abord : deux rendus différents
+
+Il y a deux choses distinctes dans l'app, à ne pas confondre :
+1. **L'aperçu SVG dans le navigateur** (ce que montre ta capture) -- une vue rapide et volontairement
+   simplifiée, jamais destinée à remplacer un plan technique.
+2. **Le vrai fichier DXF téléchargé** -- ouvrable dans AutoCAD/DraftSight, qui contenait déjà, avant
+   même cette session, des éléments professionnels que l'aperçu web ne montre pas : cotations réelles
+   (entités DXF, pas du texte), joints de dilatation, contour du dallage avec épaisseur pré-dimensionnée,
+   calques séparés par type d'ouvrage.
+
+Ce qui manquait pour se rapprocher de ton exemple (`01-ENSEMBLE_FONDATION_COFFRAGE_GENERAL.pdf`) :
+**le système d'axes de repère** (lettres A à O en bordure verticale, chiffres 1 à 11 en bordure
+horizontale, avec bulles aux extrémités) -- l'élément le plus immédiatement reconnaissable d'un plan
+de coffrage professionnel, et celui qui permet à un maçon de se repérer sur le chantier ("le poteau
+en C-4").
+
+## Ce que j'ai fait
+
+Ajouté `_dessiner_axes_reperes()` dans `projets/services/plan_fondation.py` : elle regroupe les
+positions réelles des semelles par alignement (comme le fait déjà `detecter_parametres_trame()` pour
+la trame, mais avec une tolérance plus large et purement pour l'annotation visuelle), trace une ligne
+de grille par alignement, et place des bulles numérotées (colonnes) ou lettrées (lignes) à leurs
+extrémités -- exactement la convention de ton exemple.
+
+**Testé sur ton vrai fichier IFC**, DXF régénéré et converti en image pour vérification :
+
+- Avant : semelles et chaînage seuls, sans aucun repère de position
+- Après : voir `avant_apres_axes_reperes.png` -- axes A à G et 1 à 7 apparaissent, avec les cotations
+  déjà existantes maintenant bien plus lisibles en contexte
+
+267/267 tests Django toujours au vert après l'ajout (aucun test existant ne portait sur les axes, donc
+aucune régression possible ; à compléter par un nouveau test dédié si vous voulez figer ce
+comportement).
+
+## Fichier modifié
+
+| Fichier fourni | Chemin de destination |
+|---|---|
+| `plan_fondation.py` | `projets/services/plan_fondation.py` |
+
+Nouveau paramètre exposé sur `generer_plan_fondation_dxf()` : `dessiner_axes_reperes=True` (par
+défaut) et `tolerance_axe_reperes_m=0.4` (ajustable si un bâtiment très irrégulier génère trop d'axes
+pour rester lisible -- voir docstring de la fonction).
+
+## Ce qu'il reste pour se rapprocher encore plus de ton exemple
+
+Par ordre d'impact visuel probable :
+
+1. **Identifiants trop verbeux** -- le plan actuel affiche des identifiants générés automatiquement
+   du type `S_2VVrsGkR196O0CK5J8YgjG`, alors que ton exemple utilise des labels courts et groupés par
+   taille (`S1`, `S2`, `S3`...). Sur le rendu de test, ça surcharge visiblement le plan et fait se
+   chevaucher les textes. Piste : grouper les semelles par plage de dimensions (ex. arrondir `cote_cm`
+   au multiple de 10 supérieur) et leur donner un nom de type court (S1, S2, S3...) plutôt qu'un nom
+   individuel par semelle -- garder l'identifiant complet uniquement dans le tableau de coordonnées,
+   pas sur le dessin.
+2. **Cartouche (titre, échelle, date, numéro de plan)** -- absent du DXF actuel, présent dans tout
+   plan professionnel déposé.
+3. **Repères sur les poteaux également**, pas seulement sur les axes de la grille (ton exemple nomme
+   aussi chaque poteau : P1, P2, P3 groupés par type).
+
+Je peux implémenter le point 1 (regroupement des labels par taille) dès que vous voulez -- c'est le
+changement qui rapprocherait le plus visiblement le rendu de ton exemple, plus encore que les axes.
 
 ---
 
-## 🚀 Livrables de la Phase 2 (Backend DRF — Samuel YEO)
+## Mise à jour -- point 1 fait : regroupement des labels par taille (S1, S2, S3... / P1, P2...)
 
-Cette mise à jour intègre l'ensemble des fonctionnalités backend requises pour la Phase 2 afin de prendre en charge des cas de calcul BTP complexes.
+Ajouté `_grouper_par_type()` dans le même fichier : arrondit chaque dimension au pas supérieur
+(configurable), regroupe les semelles/poteaux par taille standardisée, et attribue un label court
+(la plus grande en premier -- même convention que ton exemple). Le dessin affiche maintenant
+`S1(160x160x35)` au lieu de `S_2VVrsGkR196O0CK5J8YgjG` -- l'identifiant complet reste disponible dans
+le tableau de coordonnées de l'app pour la traçabilité, il n'encombre plus le dessin.
 
-### 📌 Module 6 : Lien Semelle-Poteau en Base de Données
-- **Modèle Data** : Ajout du champ `poteau_associe` (`ForeignKey`) sur `ElementStructurel` pointant vers l'élément poteau supporté.
-- **Service Calcul** : Propagation automatique de la dimension calculée du poteau (`cote_cm`) lors du pré-dimensionnement de la semelle associée dans `services/calculations.py`.
-- **API Serializer** : Exposition du champ `poteau_associe` dans `ElementStructurelSerializer`.
+Une nomenclature (légende) est ajoutée en bas du plan, listant chaque type avec ses dimensions et le
+nombre d'éléments concernés -- équivalent simplifié d'une nomenclature de plan de coffrage.
 
-### 📌 Module 7 : Dalles Pleines à l'API REST
-- **Modèle Data** : Ajout du type d'élément `DALLE` (`dalle`) dans l'énumération des choix du modèle.
-- **Raccordement Moteur** : Connexion sécurisée de l'action `/calculer/` avec la fonction `predimensionner_dalle()` du moteur de calcul via import dynamique.
+**Nouveau paramètre à régler avec un technicien** : `pas_cm_regroupement_semelles` (5 cm par défaut).
+Sur ton fichier de test, un pas de 5 cm donne 14 types différents (matériellement optimal, mais
+visuellement chargé) ; un pas de 20 cm ramène à 7 types, très proche des 5 de ton exemple -- au prix
+d'un léger surdimensionnement de certaines semelles (arrondi plus généreux). C'est un vrai choix de
+compromis matière/simplicité de chantier, pas une valeur techniquement "correcte" en soi -- à trancher
+avec un technicien BTP avant de fixer une valeur par défaut définitive en production.
 
-### 📌 Module 4 : Semelles Filantes
-- **Modèle Data** : Intégration du type d'élément `SEMELLE_FILANTE` (`semelle_filante`).
-- **Raccordement Moteur** : Gestion des charges linéaires continues ($kN/m$) via `dimensionner_semelle_filante()` avec gestion d'import sécurisé.
+Testé sur ton vrai fichier IFC avec les deux pas (voir `avant_apres_labels_groupes.png` pour la
+comparaison GUID vs labels groupés, `apercu_plan_final.png` pour le rendu avec pas=20cm). 267/267
+tests Django toujours au vert.
 
-### 📌 Module 2 : Charges Permanentes Composées (Multi-couches)
-- **Modèle Data** : Création du modèle `CoucheCharge` (désignation, épaisseur en cm, poids volumique en $kN/m^3$) relié aux projets et éléments.
-- **Service Calcul** : Implémentation du calcul automatique de la charge permanente surfacique cumulée $G$ ($kN/m^2$).
-- **API REST** : Exposition du ViewSet `/api/couches-charges/` dans `views.py` et enregistrement de la route dans `api/urls.py`.
 
----
+# Module de Rendu et Structuration des Plans (Fondation / Coffrage)
 
-## 🧪 Validation & Suite de Tests
-- **Périmètre couvert** : Endpoints REST API, verrous logiciels de validation, génération DQE, Assistant IA et intégration du Moteur BTP.
-- **Résultat** : **100 % de réussite (59 tests sur 59 validés au vert — `OK`)**.
----
+## 📌 Description
+Ce module gère le calcul, la structuration et le rendu graphique des plans de fondation et de coffrage pour les projets de BTP.
 
-## ⚙️ Configuration de l'environnement (`.env`)
+## 🛠️ Fonctionnalités clés
+- Génération et positionnement automatique des axes (A, B, C, etc.) et des cotations.
+- Association des éléments structurels (poteaux, semelles, couches de charges).
+- Restitution graphique dynamique (vue plan détaillée).
+- API d'analyse d'image et de génération de DQE associés.
 
-Le projet utilise `python-dotenv` pour charger automatiquement les variables d'environnement depuis un fichier `.env` à la racine du projet.
-
-### Première installation (tous les développeurs)
-
-```bash
-# 1. Copier le template
-cp .env.example .env
-
-# 2. Installer les dépendances
-pip install -r requirements.txt
-```
-
-Le fichier `.env` n'est **jamais commité** (il est dans `.gitignore`). Il reste local à chaque machine.
-
-### Configuration pour la démo devant le jury
-
-Ouvrir le fichier `.env` et vérifier que ces deux lignes sont présentes :
-
-```env
-DEMO_MODE=True
-LLM_PROVIDER=mock
-```
-
-| Variable | Valeur démo | Explication |
-|---|---|---|
-| `DEMO_MODE` | `True` | Désactive l'authentification sur les endpoints IA |
-| `LLM_PROVIDER` | `mock` | Utilise le client IA local (pas besoin de clé API) |
-
-> ⚠️ **Si `DEMO_MODE` n'est pas à `True`, les endpoints IA renverront 401 Unauthorized.**
-
-### Configuration pour le smoke test Gemini réel
-
-Pour tester avec la vraie API Google Gemini :
-
-```env
-DEMO_MODE=True
-LLM_PROVIDER=gemini
-LLM_API_KEY=VOTRE_CLE_API_GOOGLE
-```
-
-> ⚠️ **Ne jamais commiter la clé API. Vérifier avec `git diff` avant tout commit.**
-
-### Résumé des variables disponibles
-
-| Variable | Défaut | Description |
-|---|---|---|
-| `DEMO_MODE` | `False` | `True` pour désactiver l'auth sur les endpoints IA |
-| `LLM_PROVIDER` | `mock` | `mock` (simulation locale) ou `gemini` (API réelle) |
-| `LLM_API_KEY` | _(vide)_ | Clé API Google Gemini (requise si `LLM_PROVIDER=gemini`) |
-| `LLM_MODEL` | `gemini-3.5-flash` | Modèle Gemini à utiliser |
-| `LLM_TIMEOUT_SECONDS` | `20` | Timeout des appels LLM en secondes |
-| `LLM_MAX_RESPONSE_BYTES` | `65536` | Taille max de la réponse LLM |
-
-## 🚂 Déploiement Railway (React + Django)
-
-Le dépôt est organisé comme un monorepo avec un backend Django à la racine et un frontend React/Vite dans `frontend/`.
-
-### Services Railway
-
-- **Backend Django** : racine du dépôt (`/`), domaine conseillé `api.ivoireinnovationbtp.com`.
-- **Frontend React** : Root Directory `/frontend`, domaine conseillé `www.ivoireinnovationbtp.com`.
-- **PostgreSQL** : service PostgreSQL Railway.
-
-### Variables Backend
-
-```env
-SECRET_KEY=<secret Railway>
-DEBUG=False
-ALLOWED_HOSTS=api.ivoireinnovationbtp.com
-CORS_ALLOWED_ORIGINS=https://www.ivoireinnovationbtp.com
-CSRF_TRUSTED_ORIGINS=https://www.ivoireinnovationbtp.com
-DATABASE_URL=${{Postgres.DATABASE_URL}}
-DATABASE_SSL_REQUIRE=True
-DEMO_MODE=False
-LLM_PROVIDER=gemini
-LLM_API_KEY=<clé Gemini>
-LLM_MODEL=gemini-3.5-flash
-LLM_TIMEOUT_SECONDS=60
-LLM_MAX_RESPONSE_BYTES=65536
-PLAN_IMAGE_MAX_BYTES=5242880
-```
-
-### Variable Frontend
-
-```env
-VITE_API_URL=https://api.ivoireinnovationbtp.com/api
-```
-
-Le fichier `frontend/Dockerfile` construit Vite puis sert `dist/` avec Caddy, avec fallback SPA vers `index.html`.
+## 🚀 Utilisation / Endpoints principaux
+- `/api/projets/{id}/analyser_plan_image/` : Analyse l'image du plan.
+- `/api/projets/{id}/generer_dqe/` : Génère le devis quantitatif et estimatif (DQE).
 
 
 
-
-
-
-
-### 🔧 Correctifs Backend - Sprint (Samuel)
-- **Sécurisation de la génération de trame (`generer_trame`) :**
-  - Ajout de valeurs de secours par défaut sur les paramètres de trame (`nb_travees_x/y`, `portee_x/y`, `hauteur_etage`, `nb_niveaux`).
-  - Garantie d'un dictionnaire `resultat_calcul` non vide pour chaque élément créé (évite le bug des "0 éléments calculés" à l'Étape 2).
-- **Export DXF (`plan_fondation`) :**
-  - Exposition de l'en-tête HTTP `Access-Control-Expose-Headers: Content-Disposition` pour permettre au frontend de récupérer le nom du fichier `.dxf`.
