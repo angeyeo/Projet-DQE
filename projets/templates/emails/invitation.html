@@ -1,0 +1,25 @@
+{% extends "emails/base_email.html" %}
+{% block titre %}Invitation -- {{ entreprise_nom }}{% endblock %}
+{% block content %}
+  <h1>Vous êtes invité(e) !</h1>
+  <p>Bonjour,</p>
+  <p>
+    Vous avez été invité(e) à rejoindre le cabinet <strong>{{ entreprise_nom }}</strong>
+    sur <strong>Projet DQE</strong> en tant que <strong>{{ role_label }}</strong>.
+  </p>
+  <table role="presentation" class="btn-wrap" cellpadding="0" cellspacing="0">
+    <tr>
+      <td>
+        <a href="{{ lien_activation }}" class="btn"
+           style="display:inline-block;background-color:#E8871E;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;padding:13px 30px;border-radius:6px;">
+          Activer mon compte
+        </a>
+      </td>
+    </tr>
+  </table>
+  <p class="link-fallback">
+    Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br>
+    <a href="{{ lien_activation }}">{{ lien_activation }}</a>
+  </p>
+  <p>Ce lien est à usage unique. Si vous n'êtes pas concerné(e) par cette invitation, ignorez simplement cet email.</p>
+{% endblock %}

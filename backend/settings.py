@@ -88,6 +88,30 @@ SIMPLE_JWT = {
 # Limite d'upload pour les images de plans (Phase A Vision)
 PLAN_IMAGE_MAX_BYTES = int(os.getenv("PLAN_IMAGE_MAX_BYTES", str(5 * 1024 * 1024))) # 5 Mo par défaut
 
+# --- Envoi d'email (invitations, réinitialisation de mot de passe) ---
+# Sans EMAIL_HOST défini (dev/tests), on retombe sur le backend "console" :
+# aucun envoi réel, les emails sont juste affichés dans les logs du serveur.
+# projets/auth_views.py considère ce cas comme "pas de SMTP configuré" et
+# garde alors l'ancien comportement (lien renvoyé dans la réponse JSON en
+# secours) -- voir _email_reellement_configure().
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+if EMAIL_HOST:
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+    EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+    EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").strip().lower() == "true"
+    EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "False").strip().lower() == "true"
+    EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT_SECONDS", "10"))
+    DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER)
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+    DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@projet-dqe.local")
+
+# Domaine du frontend, utilisé pour construire les liens absolus envoyés
+# par email (activation de compte, réinitialisation de mot de passe).
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',

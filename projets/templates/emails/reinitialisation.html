@@ -1,0 +1,25 @@
+{% extends "emails/base_email.html" %}
+{% block titre %}Réinitialisation de mot de passe{% endblock %}
+{% block content %}
+  <h1>Réinitialisation de votre mot de passe</h1>
+  <p>Bonjour,</p>
+  <p>
+    Une demande de réinitialisation de mot de passe a été effectuée pour le compte
+    associé à cette adresse email sur <strong>Projet DQE</strong>.
+  </p>
+  <table role="presentation" class="btn-wrap" cellpadding="0" cellspacing="0">
+    <tr>
+      <td>
+        <a href="{{ lien_reinitialisation }}" class="btn"
+           style="display:inline-block;background-color:#E8871E;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;padding:13px 30px;border-radius:6px;">
+          Réinitialiser mon mot de passe
+        </a>
+      </td>
+    </tr>
+  </table>
+  <p class="link-fallback">
+    Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br>
+    <a href="{{ lien_reinitialisation }}">{{ lien_reinitialisation }}</a>
+  </p>
+  <p>Si vous n'êtes pas à l'origine de cette demande, ignorez simplement cet email -- votre mot de passe restera inchangé.</p>
+{% endblock %}
