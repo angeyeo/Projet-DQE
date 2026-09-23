@@ -1,18 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, ArrowRight, Download, CheckCircle, AlertTriangle, Grid } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Download, CheckCircle, AlertTriangle, Grid, FileText, Layers } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
 
 export default function StepPlanFondation({ projetId, sections, onBack, onNext }) {
   const [planData, setPlanData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [downloadingDxf, setDownloadingDxf] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [validating, setValidating] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState(null);
+
+  // Utilisation d'une URL relative gérée par le proxy Vite
+  const baseUrl = `/api/projets/${projetId}/plan_fondation/`;
 
   useEffect(() => {
     if (projetId) {
       chargerPlanFondation();
+      chargerApercuPdf();
     }
+
+    // Nettoyage de l'URL Blob en mémoire à la destruction du composant
+    return () => {
+      if (pdfPreviewUrl) {
+        window.URL.revokeObjectURL(pdfPreviewUrl);
+      }
+    };
   }, [projetId]);
 
   const chargerPlanFondation = async () => {
@@ -29,18 +42,57 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
     }
   };
 
+  // Charge le PDF en Blob pour contourner les erreurs "127.0.0.1 a refusé de se connecter" dans l'iframe
+  const chargerApercuPdf = async () => {
+    try {
+      const response = await fetch(`${baseUrl}?export=pdf`);
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        setPdfPreviewUrl(url);
+      }
+    } catch (err) {
+      console.error("Erreur lors du chargement du blob PDF pour l'aperçu :", err);
+    }
+  };
+
   const handleDownloadDXF = async () => {
     if (!projetId) {
       alert("Projet non enregistré sur le serveur backend.");
       return;
     }
-    setDownloading(true);
+    setDownloadingDxf(true);
     try {
       await dqeService.telechargerPlanFondationDXF(projetId);
     } catch (err) {
       alert("Erreur lors du téléchargement du fichier DXF : " + err.message);
     } finally {
-      setDownloading(false);
+      setDownloadingDxf(false);
+    }
+  };
+
+  const handleDownloadPDF = async () => {
+    if (!projetId) {
+      alert("Projet non enregistré sur le serveur backend.");
+      return;
+    }
+    setDownloadingPdf(true);
+    try {
+      const response = await fetch(`${baseUrl}?export=pdf`);
+      if (!response.ok) throw new Error("Erreur HTTP lors du téléchargement");
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `Plan_Coffrage_${projetId}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("Erreur lors du téléchargement du fichier PDF : " + err.message);
+    } finally {
+      setDownloadingPdf(false);
     }
   };
 
@@ -64,12 +116,12 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
   const listSemelles = (planData && planData.semelles) || (sections && sections.semelles) || [];
 
   return (
-    <div className="glass-panel">
+    <div className="glass-panel" style={{ padding: '1.5rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
           <div className="badge badge-info" style={{ marginBottom: '0.4rem' }}>Étape 3bis — Plan de Fondation</div>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 700 }}>
-            Plan de Fondation & Implantation de la Trame (.DXF)
+            Plan de Fondation & Coffrage Général (.PDF / .DXF)
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
             Positions en coordonnées réelles calculées selon la trame structurelle de l'ouvrage.
@@ -80,16 +132,30 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
           </div>
         </div>
 
-        <button
-          type="button"
-          className="btn btn-secondary"
-          onClick={handleDownloadDXF}
-          disabled={downloading}
-          style={{ gap: '0.5rem', border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)' }}
-        >
-          <Download size={18} />
-          <span>{downloading ? 'Téléchargement...' : 'Télécharger le plan (.DXF)'}</span>
-        </button>
+        {/* Boutons d'exportation */}
+        <div style={{ display: 'flex', gap: '0.75rem' }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={handleDownloadPDF}
+            disabled={downloadingPdf}
+            style={{ gap: '0.5rem' }}
+          >
+            <FileText size={18} />
+            <span>{downloadingPdf ? 'Téléchargement...' : 'Télécharger (.PDF)'}</span>
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={handleDownloadDXF}
+            disabled={downloadingDxf}
+            style={{ gap: '0.5rem', border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)' }}
+          >
+            <Download size={18} />
+            <span>{downloadingDxf ? 'Téléchargement...' : 'Télécharger (.DXF)'}</span>
+          </button>
+        </div>
       </div>
 
       {errorMsg && (
@@ -98,60 +164,44 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
         </div>
       )}
 
-      {/* Rendu Graphique SVG */}
-      {listSemelles.length > 0 && (() => {
-        // Les positions réelles issues de l'IFC peuvent être exprimées dans un
-        // repère de site avec de grands offsets (ex. -234 m, -44 m -- géoréférencement
-        // ArchiCAD/Revit), pas forcément proches de (0,0). L'ancien code multipliait
-        // position_x/position_y bruts par un facteur fixe (x40) sans normaliser par
-        // rapport au bâtiment : le dessin entier sortait alors du viewBox et l'aperçu
-        // restait vide, quelle que soit la trame réelle. On normalise ici par rapport
-        // au rectangle englobant des semelles, puis on choisit une échelle qui fait
-        // tenir tout le bâtiment dans le viewBox.
-        const avecPosition = listSemelles.filter(
-          (s) => s.position_x !== undefined && s.position_y !== undefined
-        );
-        const xs = avecPosition.map((s) => parseFloat(s.position_x));
-        const ys = avecPosition.map((s) => parseFloat(s.position_y));
-        const minX = xs.length ? Math.min(...xs) : 0;
-        const minY = ys.length ? Math.min(...ys) : 0;
-        const spanX = xs.length ? Math.max(...xs) - minX : 0;
-        const spanY = ys.length ? Math.max(...ys) - minY : 0;
-        const LARGEUR_DESSIN = 300; // zone utile dans le viewBox (-30 -30 360 240)
-        const HAUTEUR_DESSIN = 180;
-        const echelle = Math.min(
-          spanX > 0 ? LARGEUR_DESSIN / spanX : 40,
-          spanY > 0 ? HAUTEUR_DESSIN / spanY : 40,
-          40 // ne jamais zoomer plus que l'ancien facteur fixe sur un petit bâtiment
-        );
-
-        return (
-          <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
-            <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text-muted)' }}>
-              Aperçu Graphique de l'Implantation des Semelles (Trame)
-            </h4>
-            <svg viewBox="-30 -30 360 240" style={{ width: '100%', maxWidth: 480, background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--core-border)', borderRadius: '12px', padding: '0.5rem' }}>
-              {listSemelles.map((s, idx) => {
-                const posX = (s.position_x !== undefined ? (parseFloat(s.position_x) - minX) * echelle : (idx % 3) * 80) + 20;
-                const posY = (s.position_y !== undefined ? (parseFloat(s.position_y) - minY) * echelle : Math.floor(idx / 3) * 70) + 20;
-                const size = 14; // taille de repère fixe et lisible -- la vraie dimension (cote_cm) est déjà donnée dans le tableau ci-dessous, pas nécessaire de la reproduire à l'échelle du bâtiment ici
-                return (
-                  <g key={s.identifiant || idx} transform={`translate(${posX}, ${posY})`}>
-                    <rect
-                      x={-size / 2} y={-size / 2}
-                      width={size} height={size}
-                      fill="rgba(59, 130, 246, 0.2)" stroke="#3b82f6" strokeWidth="1.5" rx="3"
-                    />
-                    <text x="0" y={-size / 2 - 4} fontSize="9" fontWeight="bold" fill="#93c5fd" textAnchor="middle">
-                      {s.identifiant || s.id || `S${idx + 1}`}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
+      {/* Aperçu du Plan de Coffrage Intégré via Blob URL */}
+      <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
+        <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+          <Layers size={18} color="var(--accent-primary)" />
+          <span>Aperçu Graphique du Plan de Coffrage BTP</span>
+        </h4>
+        
+        {projetId ? (
+          <div 
+            style={{ 
+              width: '100%', 
+              height: '600px', 
+              borderRadius: '12px', 
+              overflow: 'hidden', 
+              border: '1px solid var(--core-border)',
+              background: '#ffffff'
+            }}
+          >
+            {pdfPreviewUrl ? (
+              <iframe 
+                src={`${pdfPreviewUrl}#toolbar=0&navpanes=0`} 
+                title="Aperçu Plan de Fondation"
+                width="100%" 
+                height="100%" 
+                style={{ border: 'none' }}
+              />
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748b', fontSize: '0.9rem' }}>
+                Chargement du rendu vectoriel du plan...
+              </div>
+            )}
           </div>
-        );
-      })()}
+        ) : (
+          <div style={{ padding: '2rem', background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--core-border)', borderRadius: '12px', color: 'var(--text-muted)' }}>
+            Enregistrez le projet pour afficher l'aperçu du plan de coffrage.
+          </div>
+        )}
+      </div>
 
       {/* Tableau des semelles */}
       <div style={{ marginBottom: '2rem' }}>
@@ -201,6 +251,7 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
         )}
       </div>
 
+      {/* Navigation */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <button type="button" className="btn btn-secondary" onClick={onBack}>
           <ArrowLeft size={18} />

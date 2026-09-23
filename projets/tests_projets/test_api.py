@@ -10,11 +10,24 @@ vue -> service -> moteur_calcul fonctionne correctement de bout en bout.
 from rest_framework.test import APITestCase
 from rest_framework import status
 from unittest.mock import patch
+from django.contrib.auth.models import User
 
-from projets.models import Projet, ElementStructurel
+from projets.models import Projet, ElementStructurel, Entreprise, Profil
 
 
 class TestProjetAPI(APITestCase):
+    def setUp(self):
+        self.user, _ = User.objects.get_or_create(username="api_tester", defaults={"email": "test@api.com"})
+        self.entreprise, _ = Entreprise.objects.get_or_create(
+            code_cabinet="CAB-API-TEST",
+            defaults={"nom": "Cabinet Test API"}
+        )
+        Profil.objects.get_or_create(
+            user=self.user,
+            defaults={"entreprise": self.entreprise, "role": "INGENIEUR"}
+        )
+        self.client.force_authenticate(user=self.user)
+
     def test_creer_projet(self):
         response = self.client.post(
             "/api/projets/",
@@ -24,7 +37,13 @@ class TestProjetAPI(APITestCase):
         self.assertEqual(Projet.objects.count(), 1)
 
     def test_lister_projets(self):
-        Projet.objects.create(nom="A", usage_batiment="bureau", nb_niveaux=1)
+        Projet.objects.create(
+            nom="A", 
+            usage_batiment="bureau", 
+            nb_niveaux=1,
+            entreprise=self.entreprise,
+            cree_par=self.user
+        )
         response = self.client.get("/api/projets/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
@@ -32,8 +51,23 @@ class TestProjetAPI(APITestCase):
 
 class TestElementStructurelAPI(APITestCase):
     def setUp(self):
+        self.user, _ = User.objects.get_or_create(username="api_tester", defaults={"email": "test@api.com"})
+        self.entreprise, _ = Entreprise.objects.get_or_create(
+            code_cabinet="CAB-API-TEST",
+            defaults={"nom": "Cabinet Test API"}
+        )
+        Profil.objects.get_or_create(
+            user=self.user,
+            defaults={"entreprise": self.entreprise, "role": "INGENIEUR"}
+        )
+        self.client.force_authenticate(user=self.user)
+
         self.projet = Projet.objects.create(
-            nom="Immeuble test", usage_batiment="habitation", nb_niveaux=2
+            nom="Immeuble test", 
+            usage_batiment="habitation", 
+            nb_niveaux=2,
+            entreprise=self.entreprise,
+            cree_par=self.user
         )
 
     def test_creer_element(self):
@@ -114,5 +148,5 @@ class TestElementStructurelAPI(APITestCase):
         ElementStructurel.objects.create(
             projet=self.projet, type_element="poteau", identifiant="P1"
         )
-        response = self.client.get(f"/api/projets/{self.projet.id}/generer_dqe/")
+        response = self.client.get(f"/api/projets/{self.projet.id}/generer-dqe/")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
