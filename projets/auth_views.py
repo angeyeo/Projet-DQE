@@ -98,8 +98,9 @@ class InscriptionEntrepriseView(APIView):
     POST /api/auth/inscription/
     Crée une nouvelle entreprise (cabinet) + son premier compte, en rôle
     Admin. C'est la vue derrière RegisterPage.jsx (frontend) une fois
-    branchée -- avant ce sprint, ce bouton faisait juste entrer dans
-    l'app sans rien créer côté serveur.
+    branchée. Envoie aussi un email de bienvenue si un email est fourni
+    et qu'un backend SMTP est configuré (voir _envoyer_email) -- ne bloque
+    jamais l'inscription si l'envoi échoue, l'inscription reste valide.
     """
 
     permission_classes = [AllowAny]
@@ -133,12 +134,25 @@ class InscriptionEntrepriseView(APIView):
             user = User.objects.create_user(username=username, email=email, password=mot_de_passe)
             profil = Profil.objects.create(utilisateur=user, entreprise=entreprise, role=Profil.Role.ADMIN)
 
+        email_envoye = False
+        if email:
+            email_envoye = _envoyer_email(
+                destinataire=email,
+                sujet=f"Bienvenue sur Projet DQE, {nom_entreprise} !",
+                template_base="emails/bienvenue",
+                contexte={
+                    "entreprise_nom": nom_entreprise,
+                    "lien_application": settings.FRONTEND_URL,
+                },
+            )
+
         refresh = RefreshToken.for_user(user)
         return Response(
             {
                 "profil": _profil_serialise(profil),
                 "access": str(refresh.access_token),
                 "refresh": str(refresh),
+                "email_envoye": email_envoye,
             },
             status=status.HTTP_201_CREATED,
         )

@@ -391,6 +391,21 @@ class EnvoiEmailTestCase(APITestCase):
         self.demo.__exit__()
 
     @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_inscription_envoie_un_email_de_bienvenue(self):
+        mail.outbox = []
+        insc = self.client.post("/api/auth/inscription/", {
+            "nom_entreprise": "BATI-TEST SARL",
+            "username": "admin_mail0",
+            "email": "admin_mail0@bati-test.ci",
+            "mot_de_passe": "UnMotDePasseSolide2026!",
+        }, format="json")
+        self.assertEqual(insc.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(insc.data["email_envoye"])
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["admin_mail0@bati-test.ci"])
+        self.assertIn("BATI-TEST SARL", mail.outbox[0].body)
+
+    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
     def test_invitation_envoie_reellement_un_email(self):
         insc = self.client.post("/api/auth/inscription/", {
             "nom_entreprise": "BATI-TEST SARL",
