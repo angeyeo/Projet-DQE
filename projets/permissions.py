@@ -1,5 +1,5 @@
 from rest_framework import permissions
-
+from rest_framework.permissions import BasePermission
 
 class EstMembreEntreprise(permissions.BasePermission):
     """
@@ -37,3 +37,21 @@ class PeutValiderElement(permissions.BasePermission):
             
         profil = getattr(request.user, 'profil', None)
         return bool(profil and profil.role in ['ADMIN', 'INGENIEUR'])
+
+class EstAuthentifieOuDemoMode(BasePermission):
+    """
+    Permet l'accès si l'utilisateur est authentifié OU si le mode démo est actif.
+    """
+    def has_permission(self, request, view):
+        # Vérifie si le mode démo est actif dans les paramètres ou les vues, 
+        # ou adapte selon la logique de ton équipe :
+        from django.conf import settings
+        if getattr(settings, 'DEMO_MODE', False):
+            return True
+        return request.user and request.user.is_authenticated
+
+class EstAdminEntreprise(EstAdminCabinet):
+    """
+    Alias pour compatibilité avec auth_views.py
+    """
+    pass

@@ -8,6 +8,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from projets.views import (
     ProjetViewSet,
@@ -67,57 +68,41 @@ router.register(r"admin/utilisateurs", AdminUserManagementViewSet, basename="adm
 
 urlpatterns = [
     # Assistant IA & Divers
-    path(
-        "assistant/structurer-projet/",
-        AssistantStructurerView.as_view(),
-        name="assistant-structurer-projet",
-    ),
-    path(
-        "assistant/expliquer-element/",
-        AssistantExpliquerView.as_view(),
-        name="assistant-expliquer-element",
-    ),
-    path(
-        "assistant/structurer/",
-        AssistantStructurerView.as_view(),
-        name="assistant-structurer",
-    ),
-    path(
-        "assistant/expliquer/",
-        AssistantExpliquerView.as_view(),
-        name="assistant-expliquer",
-    ),
-    path(
-        "assistant/suggerer-poste/",
-        AssistantSuggererPosteView.as_view(),
-        name="assistant-suggerer-poste",
-    ),
+    path("assistant/structurer-projet/", AssistantStructurerView.as_view(), name="assistant-structurer-projet"),
+    path("assistant/expliquer-element/", AssistantExpliquerView.as_view(), name="assistant-expliquer-element"),
+    path("assistant/structurer/", AssistantStructurerView.as_view(), name="assistant-structurer"),
+    path("assistant/expliquer/", AssistantExpliquerView.as_view(), name="assistant-expliquer"),
+    path("assistant/suggerer-poste/", AssistantSuggererPosteView.as_view(), name="assistant-suggerer-poste"),
 
     # Paramètres Entreprise
-    path(
-        "entreprise/",
-        EntrepriseParametresView.as_view(),
-        name="entreprise-parametres",
-    ),
-    path(
-        "parametres/",
-        EntrepriseParametresView.as_view(),
-        name="parametres-entreprise",
-    ),
+    path("entreprise/", EntrepriseParametresView.as_view(), name="entreprise-parametres"),
+    path("parametres/", EntrepriseParametresView.as_view(), name="parametres-entreprise"),
 
-    # Authentification / Profil & Mot de passe
-    path(
-        "auth/profil/",
-        gerer_profil_utilisateur,
-        name="profil-utilisateur",
-    ),
-    path(
-        "auth/change-password/",
-        changer_mot_de_passe,
-        name="change-password",
-    ),
+    # Authentification / JWT & Flux Complet Sprint 2
+    path("auth/register/", InscriptionEntrepriseView.as_view(), name="auth-register"),
+    path("auth/login/", TokenObtainPairView.as_view(), name="auth-login"),
+    path("auth/token/", TokenObtainPairView.as_view(), name="token-obtain-pair"),
+    path("auth/token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
+    path("auth/invite/", InviterUtilisateurView.as_view(), name="auth-invite"),
+    path("auth/activate/", ActiverCompteView.as_view(), name="auth-activate"),
+    path("auth/members/", MembresEntrepriseView.as_view(), name="auth-members"),
+    path("auth/members/<int:pk>/desactiver/", DesactiverUtilisateurView.as_view(), name="auth-desactiver"),
+    path("auth/profil/", gerer_profil_utilisateur, name="profil-utilisateur"),
+    path("auth/change-password/", ChangerMotDePasseView.as_view(), name="auth-password-change"),
+    path("auth/password-reset-request/", DemanderReinitialisationView.as_view(), name="auth-password-reset-request"),
+    path("auth/password-reset-confirm/", ConfirmerReinitialisationView.as_view(), name="auth-password-reset-confirm"),
+    path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("auth/forgot-password/", demander_reinitialisation_mdp, name="forgot-password"),
-    
-    # Router DRF global (gère automatiquement /projets/{pk}/analyser_plan_image/ et /projets/{pk}/generer_dqe/)
+
+    # Router DRF global
     path("", include(router.urls)),
+
+    # Routes d'authentification / Membres (Support français et anglais pour stopper les 404)
+    path("auth/register/", InscriptionEntrepriseView.as_view(), name="auth-register"),
+    path("auth/invite/", InviterUtilisateurView.as_view(), name="auth-invite"),
+    path("auth/activate/", ActiverCompteView.as_view(), name="auth-activate"),
+    path("auth/members/", MembresEntrepriseView.as_view(), name="auth-members"),
+    path("auth/membres/", MembresEntrepriseView.as_view(), name="auth-membres-fr"), # <--- Ajouté ici
+    path("auth/members/<int:pk>/desactiver/", DesactiverUtilisateurView.as_view(), name="auth-desactiver"),
+    path("auth/membres/<int:pk>/desactiver/", DesactiverUtilisateurView.as_view(), name="auth-desactiver-fr"), # <--- Ajouté ici
 ]

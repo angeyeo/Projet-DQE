@@ -41,7 +41,7 @@ from .serializers import (
     EntrepriseParametresSerializer,
     ProfilSerializer,
 )
-from .permissions import EstMembreEntreprise, EstAdminCabinet, PeutValiderElement
+from .permissions import EstMembreEntreprise, EstAdminCabinet, PeutValiderElement, EstAuthentifieOuDemoMode
 from .services import calculer_element, recalculer_projet, CalculNonDisponible
 from .services.dqe_calculator import calculer_projet_dqe
 from .services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel

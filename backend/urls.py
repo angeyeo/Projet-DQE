@@ -13,6 +13,7 @@ from projets.views import (
     MeView,
     ProjetViewSet
 )
+from projets.auth_views import InscriptionEntrepriseView, LogoutView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -21,9 +22,13 @@ urlpatterns = [
     path("api/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/token/verify/", TokenVerifyView.as_view(), name="token_verify"),
-    
-    # Endpoint utilisateur courant
     path("api/me/", MeView.as_view(), name="user-me"),
+    
+    # Routes d'authentification directes à la racine (pour stopper les 404 des tests)
+    path("auth/register/", InscriptionEntrepriseView.as_view(), name="root-auth-register"),
+    path("auth/login/", TokenObtainPairView.as_view(), name="root-auth-login"),
+    path("auth/logout/", LogoutView.as_view(), name="root-auth-logout"),
+    path("auth/token/", TokenObtainPairView.as_view(), name="root-token"),
     
     # Routes principales de l'API (projets, éléments, etc.)
     path("api/", include("api.urls")),
