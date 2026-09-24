@@ -1,4 +1,5 @@
 """
+
 Vues du sprint "Comptes & Permissions" : inscription d'un cabinet,
 invitation/gestion des membres, mot de passe (changement + réinitialisation),
 déconnexion (révocation du refresh token).
