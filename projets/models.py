@@ -1,4 +1,41 @@
 from django.db import models
+from django.contrib.auth.models import User
+
+
+class Entreprise(models.Model):
+    """
+    Représente un cabinet d'ingénierie ou une entreprise BTP (Multi-tenant)
+    """
+    nom = models.CharField(max_length=255)
+    code_cabinet = models.CharField(max_length=50, unique=True, blank=True, null=True)
+    adresse = models.TextField(blank=True, null=True)
+    telephone = models.CharField(max_length=50, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    date_creation = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.nom
+
+
+class Profil(models.Model):
+    """
+    Extension du modèle User Django avec Rôles BTP et rattachement au Cabinet
+    """
+    class Role(models.TextChoices):
+        ADMIN = "ADMIN", "Administrateur Cabinet"
+        INGENIEUR = "INGENIEUR", "Ingénieur d'Études"
+        TECHNICIEN = "TECHNICIEN", "Technicien / Dessinateur"
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profil")
+    entreprise = models.ForeignKey(
+        Entreprise, on_delete=models.CASCADE, related_name="membres", null=True, blank=True
+    )
+    role = models.CharField(max_length=20, choices=Role.choices, default=Role.INGENIEUR)
+    telephone = models.CharField(max_length=30, blank=True, null=True)
+
+    def __str__(self):
+        entreprise_nom = self.entreprise.nom if self.entreprise else 'Sans Cabinet'
+        return f"{self.user.username} ({self.get_role_display()}) - {entreprise_nom}"
 
 
 class Projet(models.Model):
@@ -7,11 +44,18 @@ class Projet(models.Model):
     usage_batiment = models.CharField(max_length=100, default="habitation")
     nb_niveaux = models.PositiveIntegerField(default=1)
 
-    # Numéro de devis affiché sur les exports DQE (ex. "0017-2026").
-    # Laissé vide, on retombe sur "DQE-PROJET-<id>" à l'export.
+    # Scoping Multi-tenant & Auteur (Sprint 1)
+    entreprise = models.ForeignKey(
+        Entreprise, on_delete=models.CASCADE, related_name="projets", null=True, blank=True
+    )
+    cree_par = models.ForeignKey(
+        User, on_delete=models.SET_NULL, related_name="projets_crees", null=True, blank=True
+    )
+
+    # Numéro de devis affiché sur les exports DQE (ex. "0017-2026")
     numero_devis = models.CharField(max_length=50, blank=True)
 
-    # Extension Trame Structurelle (Jour 1)
+    # Extension Trame Structurelle
     nb_travees_x = models.PositiveIntegerField(default=1)
     nb_travees_y = models.PositiveIntegerField(default=1)
     portee_x = models.FloatField(default=4.0, help_text="Portée en mètres, direction X")
@@ -23,13 +67,10 @@ class Projet(models.Model):
         help_text="kN/m² -- si vide, déduit de usage_batiment",
     )
 
-    # Validation du plan de fondation (Jour 3 pré-intégré)
+    # Validation du plan de fondation
     plan_fondation_valide = models.BooleanField(default=False)
 
-    # Import de plan (Phase A/B -- voir ProjetViewSet.importer_plan) : trace
-    # le fichier IFC déposé par l'utilisateur. Conservé pour audit et pour
-    # que la confirmation (Phase B) puisse relire les positions réelles
-    # sans redemander le fichier au technicien.
+    # Import de plan IFC / Image
     fichier_import_origine = models.FileField(
         upload_to="imports_ifc/", null=True, blank=True
     )
@@ -68,14 +109,7 @@ class ElementStructurel(models.Model):
         SEMELLE = "semelle", "Semelle Isolée"
         DALLE = "dalle", "Dalle Pleine"
         SEMELLE_FILANTE = "semelle_filante", "Semelle Filante"
-        # AJOUTÉ (Phase C) : longrine -- même physique qu'une poutre
-        # (flexion simple BAEL), juste à un autre niveau (liaison entre
-        # semelles) -- pas de nouvelle formule, réutilise dimensionner_poutre().
         LONGRINE = "longrine", "Longrine"
-        # AJOUTÉ (Phase C) : chaînage promu en élément identifié (repère
-        # CH1 individuel, ligne DQE dédiée) -- avant, uniquement un poste
-        # ratio global (voir postes_ratio.calculer_poste_ratio("chainage", ...),
-        # qui reste disponible pour un usage en lot forfaitaire non identifié).
         CHAINAGE = "chainage", "Chaînage"
 
     class Statut(models.TextChoices):
@@ -90,13 +124,12 @@ class ElementStructurel(models.Model):
     projet = models.ForeignKey(
         Projet, on_delete=models.CASCADE, related_name="elements"
     )
-    identifiant = models.CharField(max_length=50)  # ex: "P1", "N1_S1"
+    identifiant = models.CharField(max_length=50)
     type_element = models.CharField(max_length=20, choices=TypeElement.choices)
     statut = models.CharField(
         max_length=10, choices=Statut.choices, default=Statut.PROPOSE
     )
 
-    # Position relative & coordonnées réelles sur la trame
     position = models.CharField(
         max_length=20, choices=Position.choices, null=True, blank=True
     )
@@ -105,7 +138,6 @@ class ElementStructurel(models.Model):
     )
     position_y = models.FloatField(null=True, blank=True, help_text="mètres")
 
-    # Lien Semelle -> Poteau supporté
     poteau_associe = models.ForeignKey(
         "self",
         on_delete=models.SET_NULL,
@@ -114,16 +146,6 @@ class ElementStructurel(models.Model):
         related_name="semelles_associees",
     )
 
-    # Extrémités d'un ouvrage linéaire (poutre, longrine, chaînage
-    # identifié) -- Phase C de la feuille de route "Import plan
-    # automatique". Sans ça, une poutre n'était connue que par son
-    # centre (position_x/y) et sa portée : impossible de tracer le bon
-    # segment dans le plan de coffrage DXF (voir
-    # projets/services/plan_fondation.py, generer_plan_fondation_dxf).
-    # Renseignés par ProjetViewSet.generer_trame et .importer_plan ;
-    # None pour un poteau/une semelle (non concernés) ou un ouvrage créé
-    # avant ce champ (donnée historique, tracé alors omis du DXF plutôt
-    # que de planter -- voir _ouvrages_lineaires_pour_dxf).
     poteau_origine = models.ForeignKey(
         "self",
         on_delete=models.SET_NULL,
@@ -139,7 +161,7 @@ class ElementStructurel(models.Model):
         related_name="ouvrages_destination",
     )
 
-    # Inputs techniques de dimensionnement
+    # Inputs techniques
     hauteur_poteau = models.FloatField(null=True, blank=True)
     charge_calculee = models.FloatField(null=True, blank=True)
     portee = models.FloatField(null=True, blank=True)
@@ -148,44 +170,16 @@ class ElementStructurel(models.Model):
     longueur_m = models.FloatField("Longueur (m)", null=True, blank=True)
     surface_m2 = models.FloatField("Surface (m²)", null=True, blank=True)
 
-    # AJOUTÉ (Module 1 -- descente de charges complète, voir
-    # projets/services/calculations.py: degression_renseignee() et
-    # calculer_element()) : trame autour d'un POTEAU, nécessaire pour
-    # déclencher calculer_descente_charges_complete() (moteur_calcul/
-    # formules/descente_charges.py) au lieu de la charge_calculee brute
-    # historique. Sans objet pour les autres types d'éléments -- restent
-    # à None, jamais lus par calculer_element() en dehors du cas POTEAU.
-    portee_gauche = models.FloatField(
-        null=True, blank=True, help_text="mètres -- portée de la travée à gauche de ce poteau"
-    )
-    portee_droite = models.FloatField(
-        null=True, blank=True, help_text="mètres -- portée de la travée à droite de ce poteau"
-    )
-    portee_avant = models.FloatField(
-        null=True, blank=True, help_text="mètres -- portée de la travée à l'avant de ce poteau"
-    )
-    portee_arriere = models.FloatField(
-        null=True, blank=True, help_text="mètres -- portée de la travée à l'arrière de ce poteau"
-    )
-    epaisseur_dalle = models.FloatField(
-        null=True, blank=True,
-        help_text="mètres -- ignoré si des CoucheCharge sont liées à cet élément (Module 2)",
-    )
-    nb_niveaux_charges = models.PositiveIntegerField(
-        null=True, blank=True,
-        help_text="Nombre de niveaux (toiture comprise) dont la charge descend sur ce poteau",
-    )
-    avec_degression = models.BooleanField(
-        default=True,
-        help_text="Applique la loi de dégression NF P06-001 sur les charges d'exploitation cumulées",
-    )
-    usage_toiture = models.CharField(
-        max_length=100, null=True, blank=True,
-        help_text="Usage du niveau le plus haut si différent des étages courants "
-                   "(ex. 'toiture_terrasse') -- vide = même usage que le projet",
-    )
+    portee_gauche = models.FloatField(null=True, blank=True, help_text="mètres")
+    portee_droite = models.FloatField(null=True, blank=True, help_text="mètres")
+    portee_avant = models.FloatField(null=True, blank=True, help_text="mètres")
+    portee_arriere = models.FloatField(null=True, blank=True, help_text="mètres")
+    epaisseur_dalle = models.FloatField(null=True, blank=True, help_text="mètres")
+    nb_niveaux_charges = models.PositiveIntegerField(null=True, blank=True)
+    avec_degression = models.BooleanField(default=True)
+    usage_toiture = models.CharField(max_length=100, null=True, blank=True)
 
-    # Résultats stockés au format JSON
+    # Résultats JSON
     resultat_calcul = models.JSONField(null=True, blank=True)
     resultat_valide = models.JSONField(null=True, blank=True)
 
@@ -195,15 +189,8 @@ class ElementStructurel(models.Model):
     def __str__(self):
         return f"{self.identifiant} ({self.get_type_element_display()})"
 
-class CoucheCharge(models.Model):
-    """Module 2 : Couches de charges permanentes composées (multi-couches)"""
 
-    # AJOUTÉ (Module 1, câblage dégression) : rendu optionnel. Une
-    # CoucheCharge liée à un `element` peut retrouver son projet via
-    # element.projet -- exiger `projet` en plus était redondant et
-    # empêchait de créer une couche uniquement avec `element` (cas
-    # d'usage réel : composition du plancher d'un poteau précis, voir
-    # projets/services/calculations.py: _couches_permanentes_pour_descente()).
+class CoucheCharge(models.Model):
     projet = models.ForeignKey(
         Projet, on_delete=models.CASCADE, related_name="couches_charges",
         null=True, blank=True,
@@ -228,8 +215,6 @@ class CoucheCharge(models.Model):
 
 
 class PosteComplementaire(models.Model):
-    """Remplace l'ancien PosteMainDoeuvre par la gestion par Lots BTP et Mode Simple/Ratio"""
-
     class Lot(models.TextChoices):
         GENERALITES = "lot_00_generalites", "Généralités"
         TERRASSEMENT = "lot_01_terrassement", "Terrassement"
@@ -285,18 +270,6 @@ class PosteComplementaire(models.Model):
 
 
 class EntrepriseParametres(models.Model):
-    """
-    Cabinet (entreprise) : en-tête personnalisable pour les exports DQE
-    (PDF/Excel) -- logo et coordonnées -- ET tenant du système multi-
-    cabinet (sprint Comptes & Permissions) : un Profil et des Projets
-    peuvent être rattachés à chaque ligne.
-
-    AVANT ce sprint : modèle "singleton" forcé à pk=1 (une seule
-    entreprise possible). Le forçage a été retiré pour permettre
-    plusieurs cabinets ; get_solo() reste comme repli pour les
-    utilisateurs sans Profil -- voir EntrepriseParametresView.
-    """
-
     logo = models.ImageField(upload_to="logos/", null=True, blank=True)
     nom = models.CharField(max_length=200, blank=True)
     siege_social = models.CharField(max_length=255, blank=True)
@@ -309,6 +282,8 @@ class EntrepriseParametres(models.Model):
     capital_social = models.CharField(max_length=100, blank=True)
 
     date_modification = models.DateTimeField(auto_now=True)
+
+
 
     @classmethod
     def get_solo(cls) -> "EntrepriseParametres":

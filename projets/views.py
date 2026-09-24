@@ -1341,7 +1341,7 @@ class AdminUserManagementViewSet(viewsets.ModelViewSet):
         """Endpoint réservé à l'admin pour inviter un utilisateur dans le cabinet"""
         try:
             admin_profil = request.user.profil
-            if admin_profil.role not in ['ADMIN', 'MANAGER']:
+            if admin_profil.role != Profil.Role.ADMIN:
                 return Response(
                     {"detail": "Action réservée aux administrateurs du cabinet."},
                     status=status.HTTP_403_FORBIDDEN

@@ -1,6 +1,9 @@
 from rest_framework import permissions
 from rest_framework.permissions import BasePermission
 
+ROLE_ADMIN = 'admin'
+ROLE_INGENIEUR = 'ingenieur'
+
 class EstMembreEntreprise(permissions.BasePermission):
     """
     Vérifie que l'utilisateur est authentifié et rattaché à un cabinet d'ingénierie.
@@ -24,7 +27,7 @@ class EstAdminCabinet(permissions.BasePermission):
             return False
         
         profil = getattr(request.user, 'profil', None)
-        return bool(profil and profil.role == 'ADMIN')
+        return bool(profil and profil.role == ROLE_ADMIN)
 
 
 class PeutValiderElement(permissions.BasePermission):
@@ -36,7 +39,7 @@ class PeutValiderElement(permissions.BasePermission):
             return False
             
         profil = getattr(request.user, 'profil', None)
-        return bool(profil and profil.role in ['ADMIN', 'INGENIEUR'])
+        return bool(profil and profil.role in (ROLE_ADMIN, ROLE_INGENIEUR))
 
 class EstAuthentifieOuDemoMode(BasePermission):
     """

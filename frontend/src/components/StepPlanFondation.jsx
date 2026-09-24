@@ -11,9 +11,6 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
   const [errorMsg, setErrorMsg] = useState(null);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState(null);
 
-  // Utilisation d'une URL relative gérée par le proxy Vite
-  const baseUrl = `/api/projets/${projetId}/plan_fondation/`;
-
   useEffect(() => {
     if (projetId) {
       chargerPlanFondation();
@@ -45,12 +42,9 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
   // Charge le PDF en Blob pour contourner les erreurs "127.0.0.1 a refusé de se connecter" dans l'iframe
   const chargerApercuPdf = async () => {
     try {
-      const response = await fetch(`${baseUrl}?export=pdf`);
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        setPdfPreviewUrl(url);
-      }
+      const blob = await dqeService.recupererPlanFondationPDF(projetId);
+      const url = window.URL.createObjectURL(blob);
+      setPdfPreviewUrl(url);
     } catch (err) {
       console.error("Erreur lors du chargement du blob PDF pour l'aperçu :", err);
     }
@@ -78,9 +72,7 @@ export default function StepPlanFondation({ projetId, sections, onBack, onNext }
     }
     setDownloadingPdf(true);
     try {
-      const response = await fetch(`${baseUrl}?export=pdf`);
-      if (!response.ok) throw new Error("Erreur HTTP lors du téléchargement");
-      const blob = await response.blob();
+      const blob = await dqeService.recupererPlanFondationPDF(projetId);
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;

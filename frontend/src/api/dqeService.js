@@ -362,6 +362,20 @@ export const dqeService = {
     return data;
   },
 
+  // PDF du plan de coffrage : renvoie un Blob (fetch authentifié via apiFetch,
+  // un fetch() brut n'envoie pas le jeton JWT et renvoie 401).
+  recupererPlanFondationPDF: async (projetId) => {
+    if (!projetId) {
+      throw new Error("Aucun projet actif -- impossible de récupérer le PDF sans projetId.");
+    }
+    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?export=pdf`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
+    }
+    return response.blob();
+  },
+
   telechargerPlanFondationDXF: async (projetId) => {
     if (!projetId) {
       throw new Error("Aucun projet actif -- impossible de télécharger le plan sans projetId.");

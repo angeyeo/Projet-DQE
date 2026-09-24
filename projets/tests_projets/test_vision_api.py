@@ -10,7 +10,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from PIL import Image
 
-from projets.models import Projet, ElementStructurel
+from projets.models import Projet, ElementStructurel, Profil
 from projets.services.assistant_ia.client import LLMServiceError, MockAIClient
 
 
@@ -42,8 +42,8 @@ class TestVisionAPI(APITestCase):
         )
         self.user = User.objects.create_user(username="testuser", password="password123")
         Profil.objects.get_or_create(
-            user=self.user,
-            defaults={"entreprise": self.entreprise, "role": "INGENIEUR"}
+            utilisateur=self.user,
+            defaults={"entreprise": self.entreprise, "role": Profil.Role.INGENIEUR}
         )
         self.client.force_authenticate(user=self.user)
 

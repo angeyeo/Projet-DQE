@@ -23,8 +23,8 @@ class TestProjetAPI(APITestCase):
             defaults={"nom": "Cabinet Test API"}
         )
         Profil.objects.get_or_create(
-            user=self.user,
-            defaults={"entreprise": self.entreprise, "role": "INGENIEUR"}
+            utilisateur=self.user,
+            defaults={"entreprise": self.entreprise, "role": Profil.Role.INGENIEUR}
         )
         self.client.force_authenticate(user=self.user)
 
@@ -57,8 +57,8 @@ class TestElementStructurelAPI(APITestCase):
             defaults={"nom": "Cabinet Test API"}
         )
         Profil.objects.get_or_create(
-            user=self.user,
-            defaults={"entreprise": self.entreprise, "role": "INGENIEUR"}
+            utilisateur=self.user,
+            defaults={"entreprise": self.entreprise, "role": Profil.Role.INGENIEUR}
         )
         self.client.force_authenticate(user=self.user)
 
