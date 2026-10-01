@@ -15,6 +15,7 @@ SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-insecure-key-change-me")
 
 # Mode DEBUG forcé à True par défaut en local pour voir les erreurs explicites
 DEBUG = os.getenv("DEBUG", "True").strip().lower() == "true"
+DEBUG = True
 
 ALLOWED_HOSTS = [
     host.strip()

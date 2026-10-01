@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Building2, UploadCloud, Save, Loader2, CheckCircle2, AlertCircle, Image as ImageIcon } from 'lucide-react';
+import { Building2, UploadCloud, Save, Loader2, CheckCircle2, AlertCircle, Image as ImageIcon, Coins } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
 
 const CHAMPS_VIDES = {
@@ -14,8 +14,22 @@ const CHAMPS_VIDES = {
   capital_social: '',
 };
 
+// Postes connus du moteur de calcul (projets/services/dqe_calculator.py ::
+// PRIX_UNITAIRES_DEFAUT). Le placeholder affiche le défaut : un champ
+// laissé vide n'écrase rien, le cabinet retombe dessus.
+const POSTES_PRIX = [
+  { cle: 'beton_m3', label: 'Béton', unite: 'FCFA / m³', defaut: 100000 },
+  { cle: 'acier_kg', label: 'Acier (armatures)', unite: 'FCFA / kg', defaut: 800 },
+  { cle: 'coffrage_m2', label: 'Coffrage', unite: 'FCFA / m²', defaut: 12000 },
+  { cle: 'agglos_pleins_m3', label: 'Agglos pleins', unite: 'FCFA / m³', defaut: 9000 },
+  { cle: 'agglos_15_creux_m2', label: 'Agglos 15 creux', unite: 'FCFA / m²', defaut: 8000 },
+  { cle: 'agglos_10_creux_m2', label: 'Agglos 10 creux', unite: 'FCFA / m²', defaut: 6000 },
+  { cle: 'enduit_m2', label: 'Enduit', unite: 'FCFA / m²', defaut: 3500 },
+];
+
 export default function SettingsEntreprise() {
   const [champs, setChamps] = useState(CHAMPS_VIDES);
+  const [prix, setPrix] = useState({});
   const [logoUrl, setLogoUrl] = useState(null);
   const [logoFile, setLogoFile] = useState(null);
   const [logoPreview, setLogoPreview] = useState(null);
@@ -42,10 +56,11 @@ export default function SettingsEntreprise() {
           capital_social: data.capital_social || '',
         });
         setLogoUrl(data.logo || null);
+        setPrix(data.prix_unitaires || {});
       })
       .catch(() => {
         // Fallback silencieux sans déclencher de toast rouge si l'entreprise n'existe pas encore
-        if (!annule) setChamps(CHAMPS_VIDES);
+        if (!annule) { setChamps(CHAMPS_VIDES); setPrix({}); }
       })
       .finally(() => {
         if (!annule) setChargement(false);
@@ -56,6 +71,22 @@ export default function SettingsEntreprise() {
   const handleChamp = (cle) => (e) => {
     setSucces(false);
     setChamps((prev) => ({ ...prev, [cle]: e.target.value }));
+  };
+
+  // Laisser le champ vide = ne pas surcharger ce poste (le cabinet retombe
+  // sur le barème par défaut du moteur, voir get_prix_unitaires()).
+  const handlePrix = (cle) => (e) => {
+    setSucces(false);
+    const valeur = e.target.value;
+    setPrix((prev) => {
+      const suivant = { ...prev };
+      if (valeur === '') {
+        delete suivant[cle];
+      } else {
+        suivant[cle] = Number(valeur);
+      }
+      return suivant;
+    });
   };
 
   const handleLogoChange = (e) => {
@@ -76,8 +107,9 @@ export default function SettingsEntreprise() {
     setSucces(false);
     setEnregistrement(true);
     try {
-      const data = await dqeService.updateEntreprise(champs, logoFile);
+      const data = await dqeService.updateEntreprise({ ...champs, prix_unitaires: prix }, logoFile);
       setLogoUrl(data.logo || logoUrl);
+      setPrix(data.prix_unitaires || prix);
       setLogoFile(null);
       setLogoPreview(null);
       setSucces(true);
@@ -205,6 +237,33 @@ export default function SettingsEntreprise() {
           <label className="form-label">CB N°</label>
           <input type="text" className="form-control" value={champs.cb} onChange={handleChamp('cb')} />
         </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', margin: '2rem 0 0.5rem' }}>
+        <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
+          <Coins size={20} />
+        </div>
+        <h2 style={{ fontSize: '1.4rem', fontWeight: 700 }}>Tarifs du cabinet</h2>
+      </div>
+      <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+        Ces prix sont propres à votre cabinet et n'affectent aucun autre cabinet. Laissez un champ
+        vide pour utiliser le tarif par défaut (affiché en grisé) dans vos DQE.
+      </p>
+      <div className="grid-2">
+        {POSTES_PRIX.map(({ cle, label, unite, defaut }) => (
+          <div className="form-group" key={cle}>
+            <label className="form-label">{label} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({unite})</span></label>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              className="form-control"
+              value={prix[cle] ?? ''}
+              onChange={handlePrix(cle)}
+              placeholder={`Défaut : ${defaut.toLocaleString('fr-FR')}`}
+            />
+          </div>
+        ))}
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
