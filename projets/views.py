@@ -966,7 +966,16 @@ class ProjetViewSet(viewsets.ModelViewSet):
         export_format = request.query_params.get("export") or (
             request.data.get("export") if isinstance(request.data, dict) else None
         )
-        dqe_data = calculer_projet_dqe(projet)
+        # Barème du cabinet propriétaire du projet (projet.entreprise), avec
+        # repli sur celui du profil de l'utilisateur courant, puis sur le
+        # barème par défaut du moteur si aucun cabinet n'est rattaché
+        # (comptes legacy / DEMO_MODE) -- jamais un barème partagé entre
+        # cabinets.
+        entreprise = getattr(projet, "entreprise", None) or getattr(
+            getattr(request.user, "profil", None), "entreprise", None
+        )
+        prix_unitaires = entreprise.get_prix_unitaires() if entreprise else None
+        dqe_data = calculer_projet_dqe(projet, prix_unitaires=prix_unitaires)
 
         if export_format is None:
             return Response(dqe_data, status=status.HTTP_200_OK)

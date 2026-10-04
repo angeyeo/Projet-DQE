@@ -473,7 +473,10 @@ export const dqeService = {
   updateEntreprise: async (champs, logoFile) => {
     const formData = new FormData();
     Object.entries(champs || {}).forEach(([cle, valeur]) => {
-      formData.append(cle, valeur ?? '');
+      // `prix_unitaires` est un objet (JSONField côté backend) : DRF
+      // relit une chaîne JSON même reçue via multipart/form-data, les
+      // autres champs restent de simples chaînes.
+      formData.append(cle, cle === 'prix_unitaires' ? JSON.stringify(valeur || {}) : (valeur ?? ''));
     });
     if (logoFile) {
       formData.append('logo', logoFile);
