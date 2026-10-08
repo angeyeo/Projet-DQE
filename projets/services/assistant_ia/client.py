@@ -341,8 +341,15 @@ class GeminiAIClient(BaseAIClient):
 
 
 def get_ai_client() -> BaseAIClient:
-    """Instancie le client LLM selon les variables d'environnement."""
-    provider = os.getenv("LLM_PROVIDER", "mock").strip().lower()
+    """Instancie le client LLM selon les variables d'environnement.
+
+    Plus de repli implicite sur le client simulé : sans LLM_PROVIDER,
+    l'assistant est "non configuré" (erreur 503 explicite). Le client
+    MOCK n'est utilisé que si LLM_PROVIDER=mock est demandé
+    explicitement (tests, démonstration) -- et chaque réponse porte
+    alors source="MOCK", affichée comme telle par l'interface.
+    """
+    provider = os.getenv("LLM_PROVIDER", "").strip().lower()
     api_key = os.getenv("LLM_API_KEY", "").strip()
     model = os.getenv("LLM_MODEL", "").strip()
 
@@ -351,7 +358,13 @@ def get_ai_client() -> BaseAIClient:
     except ValueError:
         timeout = 60
 
-    if provider == "mock" or not provider:
+    if not provider:
+        raise LLMServiceError(
+            "L'assistant IA n'est pas configuré sur ce serveur (variable LLM_PROVIDER absente).",
+            code="LLM_NON_CONFIGURE",
+            status_code=503,
+        )
+    if provider == "mock":
         return MockAIClient()
 
     if not api_key:

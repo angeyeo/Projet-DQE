@@ -22,6 +22,7 @@ from ..constantes import (
     LF_SUR_L0_DEFAUT,
     ELANCEMENT_MAX_METHODE_SIMPLIFIEE,
 )
+from ..unites import cm2_vers_m2, cm_vers_m, kn_vers_mn, m2_vers_cm2, mpa_vers_kn_cm2
 from ..validators import EntreeInvalide
 from ..tables_acier import proposer_barres
 
@@ -121,7 +122,7 @@ def verifier_flambement(cote_cm, hauteur_poteau, charge_calculee, resistance_bet
     alpha = calculer_coefficient_flambement(elancement)
 
     fc28 = resistance_beton or RESISTANCE_BETON_DEFAUT
-    fc28_kn_cm2 = fc28 * 0.1  # MPa -> kN/cm²
+    fc28_kn_cm2 = mpa_vers_kn_cm2(fc28)
 
     # Br : 1 cm retiré de chaque face, sur les deux directions
     br_cm2 = max(cote_cm - 2, 1) * max((profondeur_cm or cote_cm) - 2, 1)
@@ -195,9 +196,9 @@ def calculer_section_acier(charge_calculee, cote_cm, alpha, resistance_beton=Non
     fc28 = resistance_beton or RESISTANCE_BETON_DEFAUT
     fe = limite_elastique_acier or LIMITE_ELASTIQUE_ACIER
 
-    nu_mn = charge_calculee / 1000  # kN -> MN
+    nu_mn = kn_vers_mn(charge_calculee)
     br_cm2 = max(cote_cm - 2, 1) * max(profondeur_cm - 2, 1)
-    br_m2 = br_cm2 / 10000  # cm² -> m²
+    br_m2 = cm2_vers_m2(br_cm2)
 
     fsu = fe / GAMMA_ACIER  # MPa
 
@@ -205,10 +206,10 @@ def calculer_section_acier(charge_calculee, cote_cm, alpha, resistance_beton=Non
     alpha2 = alpha
 
     section_theorique_m2 = (nu_mn / alpha2 - br_m2 * fc28 / (0.9 * GAMMA_BETON)) / fsu
-    section_theorique_cm2 = section_theorique_m2 * 10000
+    section_theorique_cm2 = m2_vers_cm2(section_theorique_m2)
 
     b_cm2 = cote_cm * profondeur_cm
-    perimetre_m = 2 * 0.01 * (cote_cm + profondeur_cm)
+    perimetre_m = 2 * cm_vers_m(cote_cm + profondeur_cm)
     section_4u = 4 * perimetre_m
     section_02pct = 0.002 * b_cm2
     section_min = max(section_4u, section_02pct)
@@ -310,7 +311,7 @@ def dimensionner_poteau_rectangulaire(
     fc28 = resistance_beton or RESISTANCE_BETON_DEFAUT
 
     section_theorique_cm2 = (
-        charge_calculee / (0.7 * fc28 * 0.1) * COEFFICIENT_SECURITE_POTEAU_RAPIDE
+        charge_calculee / (0.7 * mpa_vers_kn_cm2(fc28)) * COEFFICIENT_SECURITE_POTEAU_RAPIDE
     )
 
     if largeur_imposee_cm:

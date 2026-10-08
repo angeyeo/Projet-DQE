@@ -10,7 +10,9 @@ from projets.views import (
     AssistantExpliquerView,
     AssistantSuggererPosteView,
     EntrepriseParametresView,
+    ReferentielView,
 )
+from projets.analytics_views import AnalyticsCabinetView, AnalyticsProjetView, AnalyticsStaffView
 from projets.auth_views import (
     InscriptionEntrepriseView,
     InviterUtilisateurView,
@@ -78,6 +80,10 @@ urlpatterns = [
         EntrepriseParametresView.as_view(),
         name="entreprise-parametres",
     ),
+    path("referentiel/", ReferentielView.as_view(), name="referentiel"),
+    path("analytics/cabinet/", AnalyticsCabinetView.as_view(), name="analytics-cabinet"),
+    path("analytics/projets/<int:pk>/", AnalyticsProjetView.as_view(), name="analytics-projet"),
+    path("analytics/staff/", AnalyticsStaffView.as_view(), name="analytics-staff"),
 
     # --- Auth JWT (sprint Comptes & Permissions) ---
     path("auth/token/", TokenObtainPairView.as_view(), name="token-obtain-pair"),

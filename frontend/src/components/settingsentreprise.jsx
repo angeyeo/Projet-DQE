@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Building2, UploadCloud, Save, Loader2, CheckCircle2, AlertCircle, Image as ImageIcon, Coins } from 'lucide-react';
+import { Building2, UploadCloud, Save, Loader2, Image as ImageIcon, Coins } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
+import useReferentiel from '../hooks/useReferentiel';
+import Alerte from './ui/Alerte';
 
 const CHAMPS_VIDES = {
   nom: '',
@@ -12,24 +14,23 @@ const CHAMPS_VIDES = {
   cc: '',
   cb: '',
   capital_social: '',
+  nature_prix: 'vente_ht',
+  taux_marge_pct: '',
+  taux_tva_pct: '',
 };
 
-// Postes connus du moteur de calcul (projets/services/dqe_calculator.py ::
-// PRIX_UNITAIRES_DEFAUT). Le placeholder affiche le défaut : un champ
-// laissé vide n'écrase rien, le cabinet retombe dessus.
-const POSTES_PRIX = [
-  { cle: 'beton_m3', label: 'Béton', unite: 'FCFA / m³', defaut: 100000 },
-  { cle: 'acier_kg', label: 'Acier (armatures)', unite: 'FCFA / kg', defaut: 800 },
-  { cle: 'coffrage_m2', label: 'Coffrage', unite: 'FCFA / m²', defaut: 12000 },
-  { cle: 'agglos_pleins_m3', label: 'Agglos pleins', unite: 'FCFA / m³', defaut: 9000 },
-  { cle: 'agglos_15_creux_m2', label: 'Agglos 15 creux', unite: 'FCFA / m²', defaut: 8000 },
-  { cle: 'agglos_10_creux_m2', label: 'Agglos 10 creux', unite: 'FCFA / m²', defaut: 6000 },
-  { cle: 'enduit_m2', label: 'Enduit', unite: 'FCFA / m²', defaut: 3500 },
-];
+// Unité affichée à partir du suffixe de la clé du barème (beton_m3...).
+const uniteDeCle = (cle) => {
+  const suffixe = cle.split('_').pop();
+  return { m3: 'FCFA / m³', m2: 'FCFA / m²', kg: 'FCFA / kg', ml: 'FCFA / ml', u: 'FCFA / u' }[suffixe] || 'FCFA';
+};
 
-export default function SettingsEntreprise() {
+export default function SettingsEntreprise({ estAdmin }) {
+  const { data: referentiel, erreur: erreurReferentiel } = useReferentiel();
   const [champs, setChamps] = useState(CHAMPS_VIDES);
   const [prix, setPrix] = useState({});
+  const [meta, setMeta] = useState({});
+  const [origines, setOrigines] = useState({});
   const [logoUrl, setLogoUrl] = useState(null);
   const [logoFile, setLogoFile] = useState(null);
   const [logoPreview, setLogoPreview] = useState(null);
@@ -54,13 +55,16 @@ export default function SettingsEntreprise() {
           cc: data.cc || '',
           cb: data.cb || '',
           capital_social: data.capital_social || '',
+          nature_prix: data.nature_prix || 'vente_ht',
+          taux_marge_pct: data.taux_marge_pct ?? '',
+          taux_tva_pct: data.taux_tva_pct ?? '',
         });
+        setMeta(data.prix_unitaires_meta || {});
         setLogoUrl(data.logo || null);
         setPrix(data.prix_unitaires || {});
       })
-      .catch(() => {
-        // Fallback silencieux sans déclencher de toast rouge si l'entreprise n'existe pas encore
-        if (!annule) { setChamps(CHAMPS_VIDES); setPrix({}); }
+      .catch((err) => {
+        if (!annule) setErreur(`Impossible de charger les paramètres du cabinet : ${err.message}`);
       })
       .finally(() => {
         if (!annule) setChargement(false);
@@ -73,11 +77,12 @@ export default function SettingsEntreprise() {
     setChamps((prev) => ({ ...prev, [cle]: e.target.value }));
   };
 
-  // Laisser le champ vide = ne pas surcharger ce poste (le cabinet retombe
-  // sur le barème par défaut du moteur, voir get_prix_unitaires()).
+  // Champ vide = prix NON RENSEIGNÉ : aucun DQE ne pourra utiliser ce poste
+  // (le moteur n'a plus de barème par défaut).
   const handlePrix = (cle) => (e) => {
     setSucces(false);
     const valeur = e.target.value;
+    setOrigines((o) => { const n = { ...o }; delete n[cle]; return n; });
     setPrix((prev) => {
       const suivant = { ...prev };
       if (valeur === '') {
@@ -107,7 +112,9 @@ export default function SettingsEntreprise() {
     setSucces(false);
     setEnregistrement(true);
     try {
-      const data = await dqeService.updateEntreprise({ ...champs, prix_unitaires: prix }, logoFile);
+      const data = await dqeService.updateEntreprise({ ...champs, prix_unitaires: prix, prix_origines: origines }, logoFile);
+      setMeta(data.prix_unitaires_meta || {});
+      setOrigines({});
       setLogoUrl(data.logo || logoUrl);
       setPrix(data.prix_unitaires || prix);
       setLogoFile(null);
@@ -121,6 +128,27 @@ export default function SettingsEntreprise() {
   };
 
   const apercuLogo = logoPreview || logoUrl;
+  const clesPrix = referentiel?.cles_prix || [];
+  const reference = referentiel?.prix_reference;
+  const manquants = clesPrix.filter(({ cle }) => prix[cle] === undefined || prix[cle] === null || prix[cle] === '');
+
+  // Pré-remplissage EXPLICITE (bouton) avec le barème de référence documenté,
+  // uniquement pour les champs vides. Rien n'est enregistré sans « Enregistrer ».
+  const preremplir = () => {
+    setSucces(false);
+    setPrix((prev) => {
+      const suivant = { ...prev };
+      const marques = {};
+      Object.entries(reference?.valeurs || {}).forEach(([cle, v]) => {
+        if (suivant[cle] === undefined || suivant[cle] === '' || suivant[cle] === null) {
+          suivant[cle] = v;
+          marques[cle] = 'reference';
+        }
+      });
+      setOrigines((o) => ({ ...o, ...marques }));
+      return suivant;
+    });
+  };
 
   if (chargement) {
     return (
@@ -143,19 +171,9 @@ export default function SettingsEntreprise() {
         Votre logo et vos coordonnées apparaîtront en en-tête de tous les exports DQE (PDF et Excel).
       </p>
 
-      {erreur && (
-        <div style={{ padding: '1rem 1.25rem', borderRadius: '12px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', marginBottom: '1.5rem', display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-          <AlertCircle size={20} color="#ef4444" style={{ flexShrink: 0, marginTop: '0.1rem' }} />
-          <span style={{ fontSize: '0.88rem', color: '#fca5a5' }}>{erreur}</span>
-        </div>
-      )}
-
-      {succes && (
-        <div style={{ padding: '1rem 1.25rem', borderRadius: '12px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.35)', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <CheckCircle2 size={20} color="#10b981" style={{ flexShrink: 0 }} />
-          <span style={{ fontSize: '0.88rem', color: '#6ee7b7' }}>Paramètres enregistrés.</span>
-        </div>
-      )}
+      {erreur && <Alerte type="erreur">{erreur}</Alerte>}
+      {succes && <Alerte type="succes">Paramètres enregistrés.</Alerte>}
+      {!estAdmin && <Alerte type="info">Lecture seule : seul un administrateur du cabinet peut modifier ces paramètres.</Alerte>}
 
       {/* Logo */}
       <div className="form-group">
@@ -202,40 +220,40 @@ export default function SettingsEntreprise() {
 
       <div className="grid-2">
         <div className="form-group">
-          <label className="form-label">Nom de l'entreprise</label>
-          <input type="text" className="form-control" value={champs.nom} onChange={handleChamp('nom')} placeholder="ex: BATI-PRO SARL" />
+          <label className="form-label" htmlFor="ent-nom">Nom de l'entreprise</label>
+          <input id="ent-nom" disabled={!estAdmin} type="text" className="form-control" value={champs.nom} onChange={handleChamp('nom')} placeholder="ex: BATI-PRO SARL" />
         </div>
         <div className="form-group">
-          <label className="form-label">Siège social</label>
-          <input type="text" className="form-control" value={champs.siege_social} onChange={handleChamp('siege_social')} placeholder="ex: Cocody, Abidjan" />
+          <label className="form-label" htmlFor="ent-siege_social">Siège social</label>
+          <input id="ent-siege_social" disabled={!estAdmin} type="text" className="form-control" value={champs.siege_social} onChange={handleChamp('siege_social')} placeholder="ex: Cocody, Abidjan" />
         </div>
         <div className="form-group">
-          <label className="form-label">Téléphone</label>
-          <input type="text" className="form-control" value={champs.telephone} onChange={handleChamp('telephone')} placeholder="ex: 07 00 00 00 00" />
+          <label className="form-label" htmlFor="ent-telephone">Téléphone</label>
+          <input id="ent-telephone" disabled={!estAdmin} type="text" className="form-control" value={champs.telephone} onChange={handleChamp('telephone')} placeholder="ex: 07 00 00 00 00" />
         </div>
         <div className="form-group">
-          <label className="form-label">Email</label>
-          <input type="email" className="form-control" value={champs.email} onChange={handleChamp('email')} placeholder="ex: contact@entreprise.ci" />
+          <label className="form-label" htmlFor="ent-email">Email</label>
+          <input id="ent-email" disabled={!estAdmin} type="email" className="form-control" value={champs.email} onChange={handleChamp('email')} placeholder="ex: contact@entreprise.ci" />
         </div>
         <div className="form-group">
-          <label className="form-label">Site web</label>
-          <input type="text" className="form-control" value={champs.site_web} onChange={handleChamp('site_web')} placeholder="ex: www.entreprise.ci" />
+          <label className="form-label" htmlFor="ent-site_web">Site web</label>
+          <input id="ent-site_web" disabled={!estAdmin} type="text" className="form-control" value={champs.site_web} onChange={handleChamp('site_web')} placeholder="ex: www.entreprise.ci" />
         </div>
         <div className="form-group">
-          <label className="form-label">Capital social</label>
-          <input type="text" className="form-control" value={champs.capital_social} onChange={handleChamp('capital_social')} placeholder="ex: 1 000 000 FCFA" />
+          <label className="form-label" htmlFor="ent-capital_social">Capital social</label>
+          <input id="ent-capital_social" disabled={!estAdmin} type="text" className="form-control" value={champs.capital_social} onChange={handleChamp('capital_social')} placeholder="ex: 1 000 000 FCFA" />
         </div>
         <div className="form-group">
-          <label className="form-label">N° R.C.C.M</label>
-          <input type="text" className="form-control" value={champs.rccm} onChange={handleChamp('rccm')} placeholder="ex: CI-ABJ-2024-B-1234" />
+          <label className="form-label" htmlFor="ent-rccm">N° R.C.C.M</label>
+          <input id="ent-rccm" disabled={!estAdmin} type="text" className="form-control" value={champs.rccm} onChange={handleChamp('rccm')} placeholder="ex: CI-ABJ-2024-B-1234" />
         </div>
         <div className="form-group">
-          <label className="form-label">CC N°</label>
-          <input type="text" className="form-control" value={champs.cc} onChange={handleChamp('cc')} />
+          <label className="form-label" htmlFor="ent-cc">CC N°</label>
+          <input id="ent-cc" disabled={!estAdmin} type="text" className="form-control" value={champs.cc} onChange={handleChamp('cc')} />
         </div>
         <div className="form-group">
-          <label className="form-label">CB N°</label>
-          <input type="text" className="form-control" value={champs.cb} onChange={handleChamp('cb')} />
+          <label className="form-label" htmlFor="ent-cb">CB N°</label>
+          <input id="ent-cb" disabled={!estAdmin} type="text" className="form-control" value={champs.cb} onChange={handleChamp('cb')} />
         </div>
       </div>
 
@@ -245,29 +263,56 @@ export default function SettingsEntreprise() {
         </div>
         <h2 style={{ fontSize: '1.4rem', fontWeight: 700 }}>Tarifs du cabinet</h2>
       </div>
-      <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-        Ces prix sont propres à votre cabinet et n'affectent aucun autre cabinet. Laissez un champ
-        vide pour utiliser le tarif par défaut (affiché en grisé) dans vos DQE.
+      <p className="texte-discret">
+        Ces prix sont propres à votre cabinet. Un prix non renseigné bloque le DQE des ouvrages qui l'utilisent :
+        le logiciel n'applique jamais de prix par défaut.
       </p>
+      {erreurReferentiel && <Alerte type="erreur">Liste des prix indisponible : {erreurReferentiel}</Alerte>}
+      {manquants.length > 0 && (
+        <Alerte type="attention" titre={`${manquants.length} prix non renseigné(s)`}
+          action={estAdmin && reference ? { libelle: 'Pré-remplir avec le barème de référence', onClick: preremplir } : undefined}>
+          {reference && <>Barème de référence disponible : {reference.source}. Vérifiez chaque valeur avant d'enregistrer.</>}
+          {reference?.avertissements?.length > 0 && <ul className="alerte-liste">{reference.avertissements.map((a) => <li key={a}>{a}</li>)}</ul>}
+        </Alerte>
+      )}
       <div className="grid-2">
-        {POSTES_PRIX.map(({ cle, label, unite, defaut }) => (
+        {clesPrix.map(({ cle, libelle }) => (
           <div className="form-group" key={cle}>
-            <label className="form-label">{label} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({unite})</span></label>
-            <input
-              type="number"
-              min="0"
-              step="1"
-              className="form-control"
-              value={prix[cle] ?? ''}
-              onChange={handlePrix(cle)}
-              placeholder={`Défaut : ${defaut.toLocaleString('fr-FR')}`}
-            />
+            <label className="form-label" htmlFor={`prix-${cle}`}>{libelle} <span className="texte-discret">({uniteDeCle(cle)})</span></label>
+            <input id={`prix-${cle}`} type="number" min="0" step="1" className="form-control" disabled={!estAdmin}
+              value={prix[cle] ?? ''} onChange={handlePrix(cle)} placeholder="Non renseigné : bloque le DQE" />
+            <small className="aide-champ">
+              {origines[cle] === 'reference' ? 'Pré-rempli avec le barème de référence — non enregistré'
+                : meta[cle] ? `${meta[cle].source === 'reference' ? 'Barème de référence' : 'Saisi'} le ${meta[cle].date}${meta[cle].auteur ? ` par ${meta[cle].auteur}` : ''}`
+                  : prix[cle] != null && prix[cle] !== '' ? 'Date de saisie non tracée (antérieure au suivi)' : ''}
+            </small>
           </div>
         ))}
       </div>
 
+      <h3 className="sous-titre">Prix de vente et taxes</h3>
+      <div className="grid-3">
+        <div className="form-group">
+          <label className="form-label" htmlFor="ent-nature">Nature des prix du barème</label>
+          <select id="ent-nature" className="form-select" disabled={!estAdmin} value={champs.nature_prix} onChange={handleChamp('nature_prix')}>
+            <option value="vente_ht">Prix de vente HT (fourni-posé)</option>
+            <option value="debourse_sec">Déboursé sec (coût de revient)</option>
+          </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="ent-marge">Marge sur déboursé (%)</label>
+          <input id="ent-marge" type="number" min="0" step="0.1" className="form-control" disabled={!estAdmin || champs.nature_prix !== 'debourse_sec'}
+            value={champs.taux_marge_pct} onChange={handleChamp('taux_marge_pct')} placeholder="non renseignée" />
+        </div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="ent-tva">TVA (%)</label>
+          <input id="ent-tva" type="number" min="0" max="100" step="0.1" className="form-control" disabled={!estAdmin}
+            value={champs.taux_tva_pct} onChange={handleChamp('taux_tva_pct')} placeholder="vide : TTC non calculé" />
+        </div>
+      </div>
+
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-        <button className="btn btn-primary" onClick={handleEnregistrer} disabled={enregistrement}>
+        <button type="button" className="btn btn-primary" onClick={handleEnregistrer} disabled={enregistrement || !estAdmin}>
           {enregistrement ? <Loader2 size={18} className="spin" /> : <Save size={18} />}
           <span>{enregistrement ? 'Enregistrement...' : 'Enregistrer'}</span>
         </button>

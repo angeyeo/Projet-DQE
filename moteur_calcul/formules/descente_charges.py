@@ -6,11 +6,15 @@ Formules basées sur le document "reference_technique_BAEL_EC2_DQE"
 """
 
 from ..constantes import (
+    CHARGE_EXPLOITATION_TOITURE_KN_M2,
     CHARGES_EXPLOITATION,
     POIDS_VOLUMIQUE_BETON,
     COEFFICIENT_G_ELU,
     COEFFICIENT_Q_ELU,
-    COEFFICIENTS_DEGRESSION,
+    COEFFICIENT_DEGRESSION_MINIMUM,
+    COEFFICIENTS_DEGRESSION_AU_DELA,
+    COEFFICIENTS_DEGRESSION_PAR_ETAGE,
+    NB_ETAGES_DEGRESSION_VALIDES,
     USAGES_AVEC_DEGRESSION,
     POIDS_COUCHES_COURANTES,
 )
@@ -170,20 +174,33 @@ def degression_applicable(usage_batiment):
     return usage_batiment in USAGES_AVEC_DEGRESSION
 
 
+def coefficient_degression_etage(rang):
+    """
+    Coefficient appliqué à la charge d'exploitation de l'étage de rang
+    `rang` (1 = étage juste sous la toiture), règle validée par le
+    technicien BTP : 1 ; 0,9 ; 0,8 ; 0,7 -- puis 0,6 et 0,5 minimum
+    au-delà du 4e étage (continuation NON validée, signalée).
+    """
+    if rang is None or rang < 1:
+        raise ValueError("Le rang d'un étage commence à 1 (étage juste sous la toiture).")
+    if rang <= len(COEFFICIENTS_DEGRESSION_PAR_ETAGE):
+        return COEFFICIENTS_DEGRESSION_PAR_ETAGE[rang - 1]
+    au_dela = rang - len(COEFFICIENTS_DEGRESSION_PAR_ETAGE)
+    if au_dela <= len(COEFFICIENTS_DEGRESSION_AU_DELA):
+        return COEFFICIENTS_DEGRESSION_AU_DELA[au_dela - 1]
+    return COEFFICIENT_DEGRESSION_MINIMUM
+
+
 def coefficient_degression(nb_etages_charges):
     """
-    Coefficient de dégression appliqué à la SOMME des charges
-    d'exploitation des étages situés au-dessus de l'appui considéré
-    (toiture non comprise, elle n'est jamais dégressée).
+    Coefficient ÉQUIVALENT appliqué à la SOMME des charges d'exploitation
+    de n étages identiques situés au-dessus de l'appui (toiture non
+    comprise, jamais dégressée) :
 
-    Loi NF P06-001 (voir constantes.COEFFICIENTS_DEGRESSION) :
-        n <= 4 : valeur du tableau (1,00 / 0,95 / 0,90 / 0,85)
-        n >= 5 : coef = (3 + n) / (2 x n)
+        c(n) = (k1 + ... + kn) / n,  k_i = coefficient_degression_etage(i)
 
-    Paramètres
-    ----------
-    nb_etages_charges : int
-        Nombre d'étages chargés au-dessus de l'appui (n).
+    Donne 1,00 / 0,95 / 0,90 / 0,85 pour n = 1..4 et (3 + n)/(2n) au-delà
+    (forme NF P06-001) -- les deux écritures sont identiques.
 
     Retour : coefficient entre 0,5 et 1,0 (sans dimension).
     """
@@ -191,9 +208,8 @@ def coefficient_degression(nb_etages_charges):
         raise ValueError("Le nombre d'étages chargés doit être positif ou nul.")
     if nb_etages_charges == 0:
         return 1.0
-    if nb_etages_charges <= len(COEFFICIENTS_DEGRESSION):
-        return COEFFICIENTS_DEGRESSION[nb_etages_charges - 1]
-    return (3 + nb_etages_charges) / (2 * nb_etages_charges)
+    total = sum(coefficient_degression_etage(i) for i in range(1, nb_etages_charges + 1))
+    return round(total / nb_etages_charges, 6)
 
 
 def cumuler_charges_exploitation_degressives(
@@ -234,20 +250,29 @@ def cumuler_charges_exploitation_degressives(
 
     appliquer = usage_batiment is None or degression_applicable(usage_batiment)
 
+    # Règle validée : chaque étage reçoit SON coefficient (1 ; 0,9 ; 0,8 ;
+    # 0,7 ...) en descendant. "coefficients" garde la forme équivalente
+    # « coefficient sur la somme » (= Σ k_i Q_i / Σ Q_i) pour l'affichage.
     cumuls = [charge_toiture_kn]
     coefficients = [1.0]
+    coefficients_etages = []
     somme_etages = 0.0
+    somme_ponderee = 0.0
 
-    for index, charge_etage in enumerate(charges_etages_kn, start=1):
+    for rang, charge_etage in enumerate(charges_etages_kn, start=1):
+        k = coefficient_degression_etage(rang) if appliquer else 1.0
+        coefficients_etages.append(k)
         somme_etages += charge_etage
-        coef = coefficient_degression(index) if appliquer else 1.0
-        coefficients.append(coef)
-        cumuls.append(charge_toiture_kn + coef * somme_etages)
+        somme_ponderee += k * charge_etage
+        coefficients.append(round(somme_ponderee / somme_etages, 6) if somme_etages else 1.0)
+        cumuls.append(charge_toiture_kn + somme_ponderee)
 
     return {
         "cumuls_kn": [round(c, 2) for c in cumuls],
         "coefficients": coefficients,
+        "coefficients_par_etage": coefficients_etages,
         "degression_appliquee": appliquer and len(charges_etages_kn) > 1,
+        "au_dela_regle_validee": appliquer and len(charges_etages_kn) > NB_ETAGES_DEGRESSION_VALIDES,
     }
 
 
@@ -331,9 +356,10 @@ def calculer_descente_charges_complete(
         Sans effet si l'usage ne l'autorise pas, ou s'il n'y a qu'un
         seul étage sous la toiture.
     usage_toiture : str, optionnel
-        Usage du niveau le plus haut, s'il diffère (typiquement
+        Usage du niveau le plus haut, s'il est précisé (typiquement
         "toiture_terrasse" ou "toiture_inaccessible"). Par défaut,
-        même usage que les étages.
+        Q toiture = 1,5 kN/m² (constantes.CHARGE_EXPLOITATION_TOITURE_KN_M2,
+        valeur validée par le technicien BTP).
     couches_permanentes : list[dict], optionnel
         Composition du plancher courant, si elle est connue -- voir
         calculer_charge_permanente_composee(). Remplace le calcul
@@ -367,10 +393,12 @@ def calculer_descente_charges_complete(
         charge_g = calculer_charge_permanente(surface, epaisseur_dalle)
 
     charge_q_etage = calculer_charge_exploitation(surface, usage_batiment)
+    # Toiture : usage explicite de l'élément, sinon Q = 1,5 kN/m² (valeur
+    # validée par le technicien BTP, quel que soit l'usage des étages).
     charge_q_toiture = (
         calculer_charge_exploitation(surface, usage_toiture)
         if usage_toiture
-        else charge_q_etage
+        else surface * CHARGE_EXPLOITATION_TOITURE_KN_M2
     )
 
     charge_elu_niveau = calculer_charge_ponderee_elu(charge_g, charge_q_etage)
@@ -397,6 +425,7 @@ def calculer_descente_charges_complete(
         "surface_influence_m2": round(surface, 2),
         "charge_permanente_par_niveau_kn": round(charge_g, 2),
         "charge_exploitation_par_niveau_kn": round(charge_q_etage, 2),
+        "charge_exploitation_toiture_kn": round(charge_q_toiture, 2),
         "charge_elu_par_niveau_kn": round(charge_elu_niveau, 2),
         "charge_permanente_cumulee_kn": round(charge_g_cumulee, 2),
         "charge_exploitation_cumulee_kn": round(charge_q_cumulee, 2),

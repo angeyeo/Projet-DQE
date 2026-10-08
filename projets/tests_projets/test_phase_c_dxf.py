@@ -12,6 +12,7 @@ from rest_framework.test import APITestCase
 
 from projets.models import Projet, ElementStructurel
 from projets.views import _ouvrages_lineaires_pour_dxf
+from projets.tests_projets.utils import authentifier
 
 run = ifcopenshell.api.run
 
@@ -49,8 +50,10 @@ class TestPoteauOrigineDestinationGenererTrame(APITestCase):
     """generer_trame/ doit relier chaque poutre à ses 2 poteaux exacts."""
 
     def setUp(self):
+        self.user, self.cabinet = authentifier(self)
         self.projet = Projet.objects.create(
             nom="Villa test", nb_travees_x=2, nb_travees_y=1, portee_x=5.0, portee_y=4.0,
+            usage_batiment="habitation", nb_niveaux=1, hauteur_etage=3.0, entreprise=self.cabinet,
         )
 
     def test_poutres_px_relient_les_bons_poteaux_en_x(self):
@@ -74,7 +77,11 @@ class TestPoteauOrigineDestinationImporterPlan(APITestCase):
     """importer_plan/ (confirmation) doit aussi relier les poutres réelles."""
 
     def setUp(self):
-        self.projet = Projet.objects.create(nom="Villa test", hauteur_etage=3.0, nb_niveaux=1)
+        self.user, self.cabinet = authentifier(self)
+        self.projet = Projet.objects.create(
+            nom="Villa test", hauteur_etage=3.0, nb_niveaux=1, usage_batiment="habitation",
+            entreprise=self.cabinet,
+        )
         self.ifc_bytes = _construire_ifc_bytes(xs=[0.0, 5.0], ys=[0.0, 4.0])
 
     def test_poutre_reelle_a_ses_2_poteaux_renseignes(self):
@@ -96,8 +103,10 @@ class TestOuvragesLineairesPourDxf(APITestCase):
     """Adaptateur _ouvrages_lineaires_pour_dxf() et export DXF de bout en bout."""
 
     def setUp(self):
+        self.user, self.cabinet = authentifier(self)
         self.projet = Projet.objects.create(
             nom="Villa test", nb_travees_x=1, nb_travees_y=1, portee_x=4.0, portee_y=3.0,
+            usage_batiment="habitation", nb_niveaux=1, hauteur_etage=3.0, entreprise=self.cabinet,
         )
 
     def test_adaptateur_regroupe_par_type_avec_coordonnees_des_2_poteaux(self):

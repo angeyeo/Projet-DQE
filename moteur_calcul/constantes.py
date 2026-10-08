@@ -111,26 +111,37 @@ DELAI_APPLICATION_CHARGES_SUPPOSE = "superieur_90_jours"
 
 # --- Dégression des charges d'exploitation (Phase 2, module 1) ---
 #
-# Loi de dégression NF P06-001 : sur un bâtiment à plusieurs niveaux,
-# tous les étages ne sont pas à pleine charge d'exploitation en même
-# temps ; la charge cumulée qui descend sur un appui est donc réduite
-# au fur et à mesure qu'on descend.
+# Sur un bâtiment à plusieurs niveaux, tous les étages ne sont pas à
+# pleine charge d'exploitation en même temps ; la charge cumulée qui
+# descend sur un appui est donc réduite au fur et à mesure qu'on descend.
 #
-#   Sous le niveau n (n = nombre d'étages chargés au-dessus, toiture
-#   exclue) :   Q_cumulé = Q_toiture + coef(n) x (Q1 + ... + Qn)
+# RÈGLE VALIDÉE PAR LE TECHNICIEN BTP (07/10/2026) pour la Côte
+# d'Ivoire : coefficients 1 ; 0,9 ; 0,8 ; 0,7 appliqués ÉTAGE PAR
+# ÉTAGE, en descendant depuis la toiture (jamais dégressée) :
 #
-#   coef(n) = valeur du tableau ci-dessous pour n <= 4
-#   coef(n) = (3 + n) / (2 x n) pour n >= 5   (les deux se rejoignent
-#             à n=5 : (3+5)/10 = 0,80)
+#   Q_cumulé sous l'étage n = Q0 + 1,0 Q1 + 0,9 Q2 + 0,8 Q3 + 0,7 Q4 + ...
 #
-# ATTENTION -- HYPOTHÈSE À CONFIRMER : ce sont les coefficients de la
-# règle française. La feuille de route évoque une suite légèrement
-# différente (1 / 0,9 / 0,8 / 0,7) pour la Côte d'Ivoire. Tant que le
-# technicien BTP n'a pas tranché, on applique la règle française
-# (documentée et plus prudente que 0,9/0,8/0,7). Pour basculer, il
-# suffit de remplacer cette liste et la formule dans
-# descente_charges.coefficient_degression().
+# Au-delà du 4e étage, le technicien n'a pas donné de valeur : on
+# poursuit la loi classique (0,6 puis 0,5 minimum) -- À CONFIRMER, et
+# signalé dans les hypothèses de tout projet concerné (R+5 et plus).
+#
+# Pour des étages identiques, cette règle donne EXACTEMENT les mêmes
+# cumuls que la forme NF P06-001 « Q0 + c(n) × (Q1 + ... + Qn) » avec
+# c(n) = 1 ; 0,95 ; 0,90 ; 0,85 puis (3 + n)/(2n) : les deux
+# écritures sont équivalentes (vérifié dans les tests).
+COEFFICIENTS_DEGRESSION_PAR_ETAGE = (1.0, 0.9, 0.8, 0.7)   # validés technicien
+COEFFICIENTS_DEGRESSION_AU_DELA = (0.6,)                   # non validés -- à confirmer
+COEFFICIENT_DEGRESSION_MINIMUM = 0.5                       # non validé -- à confirmer
+NB_ETAGES_DEGRESSION_VALIDES = len(COEFFICIENTS_DEGRESSION_PAR_ETAGE)
+
+# Forme « coefficient appliqué à la somme » (équivalente, conservée pour
+# compatibilité de coefficient_degression()) : c(n) = Σ k_i / n.
 COEFFICIENTS_DEGRESSION = [1.00, 0.95, 0.90, 0.85]  # n = 1, 2, 3, 4
+
+# Charge d'exploitation de la toiture (dernier niveau), en kN/m² --
+# VALIDÉE PAR LE TECHNICIEN BTP (07/10/2026) : Q = 1,5 kN/m², quel que
+# soit l'usage des étages.
+CHARGE_EXPLOITATION_TOITURE_KN_M2 = 1.5
 
 # La dégression suppose des occupations indépendantes d'un niveau à
 # l'autre. Elle ne s'applique PAS aux usages où tous les niveaux
@@ -174,6 +185,12 @@ CONTRAINTE_SOL_DEFAUT = 180.0  # valeur milieu utilisée si non renseignée
 LARGEUR_MIN_SEMELLE_FILANTE_CM = 40
 HAUTEUR_MIN_SEMELLE_CM = 20
 ENROBAGE_SEMELLE_CM = 5  # aciers coulés contre le sol / béton de propreté
+# Ferraillage des semelles isolées -- VALIDÉ PAR LE TECHNICIEN BTP
+# (07/10/2026) : espacement maximal 20 cm (fixe le nombre minimal de
+# barres par direction) et diamètre minimal HA12.
+ESPACEMENT_MAX_BARRES_SEMELLE_CM = 20
+DIAMETRE_MIN_BARRES_SEMELLE_MM = 12
+DIAMETRES_BARRES_SEMELLE_MM = (12, 14, 16)
 
 # Largeur au-delà de laquelle une semelle filante n'a plus de sens
 # constructif : à ce stade les semelles se rejoignent et c'est un
@@ -223,6 +240,9 @@ USAGES_VALIDES = list(CHARGES_EXPLOITATION.keys())
 # mais UN SEUL exemple ne suffit pas à les figer.
 
 # Épaisseur standard d'un mur en agglomérés de 15 (parpaing 15 cm), en m.
+# Les agglos (pleins comme creux) se métrent en m² de mur -- unité
+# VALIDÉE PAR LE TECHNICIEN BTP (07/10/2026) ; l'épaisseur ne sert plus
+# au métré, seulement à la désignation.
 EPAISSEUR_AGGLOS_15_M = 0.15
 EPAISSEUR_AGGLOS_10_M = 0.10
 

@@ -1,6 +1,31 @@
+from django.conf import settings
 from django.db import models
 
+from moteur_calcul.constantes import CHARGES_EXPLOITATION
+
+
+# Nomenclature canonique des usages : les clés de
+# moteur_calcul.constantes.CHARGES_EXPLOITATION (source de vérité unique,
+# partagée par le moteur, l'API, le frontend via /api/referentiel/ et les
+# tests). Avant : le frontend envoyait "commercial" alors que le moteur
+# attend "commerce" -- la charge d'exploitation retombait silencieusement
+# sur celle de l'habitation.
+USAGES_BATIMENT = [(cle, cle.replace("_", " ").capitalize()) for cle in CHARGES_EXPLOITATION]
+
+
 class Entreprise(models.Model):
+    """
+    DÉPRÉCIÉ -- NE PLUS UTILISER.
+
+    Le cabinet canonique est EntrepriseParametres : c'est lui que
+    référencent Projet.entreprise et Profil.entreprise depuis la
+    migration 0015. Ce modèle n'est plus référencé par aucune clé
+    étrangère ; il est conservé uniquement pour ne pas supprimer sa table
+    (et les lignes éventuellement présentes en production) sans
+    validation explicite. Sa suppression fera l'objet d'une migration
+    dédiée après vérification du contenu de la table en production.
+    """
+
     nom = models.CharField(max_length=255)
     code_cabinet = models.CharField(max_length=50, blank=True, null=True, unique=True)
     adresse = models.TextField(blank=True, null=True)
@@ -15,23 +40,64 @@ class Entreprise(models.Model):
 class Projet(models.Model):
     nom = models.CharField(max_length=200)
     description = models.TextField(blank=True)
-    usage_batiment = models.CharField(max_length=100, default="habitation")
-    nb_niveaux = models.PositiveIntegerField(default=1)
+    # Plus de valeur par défaut inventée ("habitation", 1 niveau, 4 m de
+    # portée, 3 m d'étage) : une donnée non saisie reste NULL/vide et les
+    # services qui en ont besoin (generer_trame, importer_plan) renvoient
+    # une erreur explicite listant ce qui manque.
+    usage_batiment = models.CharField(max_length=100, blank=True, choices=USAGES_BATIMENT)
+    nb_niveaux = models.PositiveIntegerField(null=True, blank=True)
 
     # Numéro de devis affiché sur les exports DQE (ex. "0017-2026").
     # Laissé vide, on retombe sur "DQE-PROJET-<id>" à l'export.
     numero_devis = models.CharField(max_length=50, blank=True)
 
     # Extension Trame Structurelle (Jour 1)
-    nb_travees_x = models.PositiveIntegerField(default=1)
-    nb_travees_y = models.PositiveIntegerField(default=1)
-    portee_x = models.FloatField(default=4.0, help_text="Portée en mètres, direction X")
-    portee_y = models.FloatField(default=4.0, help_text="Portée en mètres, direction Y")
-    hauteur_etage = models.FloatField(default=3.0, help_text="Hauteur d'étage en mètres")
+    nb_travees_x = models.PositiveIntegerField(null=True, blank=True)
+    nb_travees_y = models.PositiveIntegerField(null=True, blank=True)
+    portee_x = models.FloatField(null=True, blank=True, help_text="Portée en mètres, direction X")
+    portee_y = models.FloatField(null=True, blank=True, help_text="Portée en mètres, direction Y")
+    hauteur_etage = models.FloatField(null=True, blank=True, help_text="Hauteur d'étage en mètres")
     charge_exploitation = models.FloatField(
         null=True,
         blank=True,
-        help_text="kN/m² -- si vide, déduit de usage_batiment",
+        help_text="kN/m² -- si vide, déduit de usage_batiment (constantes.CHARGES_EXPLOITATION)",
+    )
+    # Contrainte admissible du sol, en kN/m² (1 bar = 100 kN/m²), issue
+    # de l'étude géotechnique. Vide = hypothèse par défaut du moteur
+    # (CONTRAINTE_SOL_DEFAUT), signalée par "hypothese_sol": true dans
+    # chaque résultat de semelle.
+    contrainte_sol_kn_m2 = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="kN/m² (1 bar = 100 kN/m²) -- vide = hypothèse par défaut signalée",
+    )
+
+    # --- Hypothèses de calcul explicites (moteur_calcul/hypotheses.py) ---
+    # G des planchers : composition (prioritaire) > valeur saisie > forfait
+    # du moteur signalé comme HYPOTHÈSE. Jamais de valeur silencieuse.
+    charge_permanente_kn_m2 = models.FloatField(
+        null=True, blank=True,
+        help_text="G des planchers en kN/m² (hors poids propre poutres/poteaux si ajouté séparément)",
+    )
+    couches_permanentes = models.JSONField(
+        default=list, blank=True,
+        help_text="Composition du plancher : [{designation, type | poids_surfacique_kn_m2 | epaisseur_m + poids_volumique_kn_m3}]",
+    )
+    class MethodeSemelles(models.TextChoices):
+        ELU = "ELU", "ELU : A² ≥ Nu / σsol (prudent)"
+        ELS = "ELS", "ELS : A² ≥ Ns / σsol (usage courant)"
+
+    methode_semelles = models.CharField(
+        max_length=3, choices=MethodeSemelles.choices, default=MethodeSemelles.ELU,
+        help_text="Choix métier explicite ; ELU = méthode validée par le technicien BTP (07/10/2026)",
+    )
+    # Défaut True pour les NOUVEAUX projets (le forfait G = 5 kN/m² ne
+    # couvre pas poutres et poteaux -- technicien BTP, 07/10/2026). Les
+    # projets existants gardent leur valeur enregistrée : les basculer est
+    # une décision de production (voir audit_donnees_production).
+    inclure_poids_propre_ossature = models.BooleanField(
+        default=True,
+        help_text="Ajouter le poids propre des poutres, poteaux et semelles à G (False = G l'inclut déjà)",
     )
 
     # Validation du plan de fondation (Jour 3 pré-intégré)
@@ -153,9 +219,18 @@ class ElementStructurel(models.Model):
     # Inputs techniques de dimensionnement
     hauteur_poteau = models.FloatField(null=True, blank=True)
     charge_calculee = models.FloatField(null=True, blank=True)
+    # Effort de service ELS (G + Q, kN) -- requis pour les semelles à l'ELS.
+    charge_service = models.FloatField(null=True, blank=True, help_text="kN, ELS G + Q")
+    # Nombre d'ouvrages identiques représentés par cet élément (ex. le même
+    # poteau ou la même poutre répété à chaque niveau). Le DQE multiplie les
+    # quantités unitaires par ce nombre et l'affiche dans la formule.
+    nombre_identiques = models.PositiveIntegerField(default=1)
     portee = models.FloatField(null=True, blank=True)
     charge_lineaire = models.FloatField(null=True, blank=True)
-    taux_travail_sol = models.FloatField(null=True, blank=True)
+    # Contrainte admissible du sol en kN/m² (unité attendue par
+    # dimensionner_semelle). Avant : les vues écrivaient 0.2 (des MPa),
+    # soit une valeur 1000 fois trop faible pour le moteur.
+    taux_travail_sol = models.FloatField(null=True, blank=True, help_text="kN/m²")
     longueur_m = models.FloatField("Longueur (m)", null=True, blank=True)
     surface_m2 = models.FloatField("Surface (m²)", null=True, blank=True)
 
@@ -263,9 +338,12 @@ class PosteComplementaire(models.Model):
         SIMPLE = "simple", "Poste simple"
         RATIO = "ratio", "Poste à ratio"
 
+    # Nomenclature canonique = clés de moteur_calcul.formules.postes_ratio
+    # .TYPES_POSTES. Avant : "maconnerie_pleine"/"maconnerie_creuse" ici,
+    # "maconnerie" dans le moteur -> aucun poste maçonnerie n'était
+    # calculable (voir migration 0018).
     class TypePoste(models.TextChoices):
-        MACONNERIE_PLEINE = "maconnerie_pleine", "Maçonnerie agglos pleins"
-        MACONNERIE_CREUSE = "maconnerie_creuse", "Maçonnerie agglos creux"
+        MACONNERIE = "maconnerie", "Maçonnerie (agglos pleins en soubassement + creux en élévation)"
         ENDUIT = "enduit", "Enduit"
         CHAINAGE = "chainage", "Chaînage"
         RAIDISSEUR = "raidisseur", "Raidisseur"
@@ -302,10 +380,10 @@ class EntrepriseParametres(models.Model):
     cabinet (sprint Comptes & Permissions) : un Profil et des Projets
     peuvent être rattachés à chaque ligne.
 
-    AVANT ce sprint : modèle "singleton" forcé à pk=1 (une seule
-    entreprise possible). Le forçage a été retiré pour permettre
-    plusieurs cabinets ; get_solo() reste comme repli pour les
-    utilisateurs sans Profil -- voir EntrepriseParametresView.
+    C'est LE modèle canonique du cabinet (tenant). L'ancien repli
+    get_solo() (entreprise pk=1 partagée par tous les utilisateurs sans
+    profil) a été supprimé : il mélangeait les données de cabinets
+    différents.
     """
 
     logo = models.ImageField(upload_to="logos/", null=True, blank=True)
@@ -319,41 +397,48 @@ class EntrepriseParametres(models.Model):
     cb = models.CharField("CB N°", max_length=100, blank=True)
     capital_social = models.CharField(max_length=100, blank=True)
 
-    # Prix unitaires propres à ce cabinet (FCFA), ex. {"beton_m3": 95000,
-    # "ciment_t": 110000, "hourdis_unite": 550, ...}. Un cabinet ne
-    # renseigne que ce qui diffère du barème par défaut : toute clé
-    # absente retombe sur PRIX_UNITAIRES_DEFAUT (projets/services/
-    # dqe_calculator.py) via get_prix_unitaires() -- jamais tout ou rien,
-    # et jamais partagé entre cabinets.
+    # Barème de prix unitaires propre à ce cabinet (FCFA), ex.
+    # {"beton_m3": 95000, "acier_kg": 800}. C'est la SEULE source de prix
+    # du DQE : une clé absente bloque la génération du DQE avec un message
+    # explicite (plus de repli silencieux sur un barème par défaut). Le
+    # barème de référence (dqe_calculator.PRIX_UNITAIRES_REFERENCE) peut
+    # être proposé à l'admin comme point de départ, jamais appliqué à son
+    # insu.
     prix_unitaires = models.JSONField(
         default=dict,
         blank=True,
         help_text=(
-            "Prix unitaires propres à ce cabinet (FCFA), ex. "
-            '{"beton_m3": 95000, "ciment_t": 110000}. Les clés absentes '
-            "retombent sur le barème par défaut du moteur de calcul."
+            "Barème de prix unitaires du cabinet (FCFA), ex. "
+            '{"beton_m3": 95000, "acier_kg": 800}. Toute clé nécessaire au '
+            "DQE et absente ici bloque la génération avec un message explicite."
         ),
+    )
+
+    # Traçabilité des prix : {clé: {"date", "auteur", "source"}} mise à jour
+    # par le serveur à chaque changement de valeur (jamais par le client).
+    prix_unitaires_meta = models.JSONField(default=dict, blank=True)
+
+    class NaturePrix(models.TextChoices):
+        VENTE_HT = "vente_ht", "Prix de vente HT (fourni-posé)"
+        DEBOURSE_SEC = "debourse_sec", "Déboursé sec (coût de revient)"
+
+    # Nature des prix du barème : décide si une marge s'applique. Défaut =
+    # sémantique historique (prix de vente fourni-posé, aucune marge).
+    nature_prix = models.CharField(max_length=20, choices=NaturePrix.choices, default=NaturePrix.VENTE_HT)
+    taux_marge_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text="% appliqué au déboursé sec (frais généraux + bénéfice) -- seulement si nature = déboursé sec",
+    )
+    taux_tva_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text="% de TVA du cabinet -- vide = TTC non calculé (jamais de taux supposé)",
     )
 
     date_modification = models.DateTimeField(auto_now=True)
 
     def get_prix_unitaires(self) -> dict:
-        """Barème effectif de ce cabinet : les prix par défaut du moteur,
-        surchargés clé par clé par ce que CE cabinet a renseigné. Ne
-        touche jamais aux autres cabinets ni au barème par défaut
-        lui-même (celui-ci n'est jamais modifié en place)."""
-        from projets.services.dqe_calculator import PRIX_UNITAIRES_DEFAUT
-
-        return {**PRIX_UNITAIRES_DEFAUT, **(self.prix_unitaires or {})}
-
-    @classmethod
-    def get_solo(cls) -> "EntrepriseParametres":
-        """Entreprise legacy (pk=1) -- repli pour les utilisateurs sans
-        Profil (comptes créés avant ce sprint, ou DEMO_MODE). Pour un
-        accès réellement multi-cabinet, passer par
-        request.user.profil.entreprise plutôt que par cette méthode."""
-        obj, _ = cls.objects.get_or_create(pk=1)
-        return obj
+        """Barème de CE cabinet uniquement -- jamais complété en silence."""
+        return dict(self.prix_unitaires or {})
 
     def __str__(self):
         return self.nom or "Paramètres entreprise"
@@ -437,3 +522,59 @@ class Profil(models.Model):
     @property
     def est_admin(self) -> bool:
         return self.role == self.Role.ADMIN
+
+class EvenementProduit(models.Model):
+    """
+    Journal des événements produit (analytics). Source UNIQUE des
+    statistiques d'adoption : aucune statistique n'est reconstruite par
+    estimation à partir des autres tables. Les chiffres ne sont donc
+    fiables qu'à partir de la date du premier événement enregistré
+    (voir analytics.date_debut_fiabilite()).
+    """
+
+    class Type(models.TextChoices):
+        INSCRIPTION = "inscription", "Inscription d'un cabinet"
+        CONNEXION = "connexion", "Connexion"
+        PROJET_CREE = "projet_cree", "Projet créé"
+        IMPORT_IFC = "import_ifc", "Import IFC confirmé"
+        TRAME_GENEREE = "trame_generee", "Trame générée"
+        ELEMENT_VALIDE = "element_valide", "Élément validé"
+        ELEMENT_DEVERROUILLE = "element_deverrouille", "Élément déverrouillé"
+        DQE_GENERE = "dqe_genere", "DQE généré"
+        DQE_EXPORTE = "dqe_exporte", "DQE exporté"
+        APPEL_IA = "appel_ia", "Appel assistant IA"
+
+    type = models.CharField(max_length=40, choices=Type.choices, db_index=True)
+    date = models.DateTimeField(auto_now_add=True, db_index=True)
+    entreprise = models.ForeignKey(
+        "EntrepriseParametres",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="evenements",
+    )
+    utilisateur = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="evenements_produit",
+    )
+    projet = models.ForeignKey(
+        "Projet",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="evenements",
+    )
+    # Valeurs réellement mesurées au moment de l'événement (ex. montant
+    # total du DQE généré, format d'export, source IA). Jamais estimées.
+    donnees = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-date"]
+        verbose_name = "Événement produit"
+        verbose_name_plural = "Événements produit"
+
+    def __str__(self):
+        return f"{self.get_type_display()} -- {self.date:%Y-%m-%d %H:%M}"

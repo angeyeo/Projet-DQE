@@ -1,67 +1,117 @@
+"""
+Vues API du projet DQE.
+
+Isolation multi-cabinet : TOUTE donnée métier est filtrée par le cabinet
+de l'utilisateur connecté (Profil.entreprise). Un objet d'un autre
+cabinet renvoie 404 (on ne révèle pas son existence). Il n'existe plus
+de mode démo anonyme ni de repli sur une "entreprise legacy" partagée.
+"""
+
+import logging
 import os
 import time
-import logging
 from io import BytesIO
 
-from rest_framework import viewsets, status
-from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.db import transaction
+from django.db.models import Count, Exists, OuterRef, Q
+from django.http import HttpResponse
+from django.utils import timezone
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.pdfgen import canvas
+from rest_framework import serializers as drf_serializers
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
-from django.conf import settings
-from django.http import HttpResponse
-from django.shortcuts import get_object_or_404
-from django.contrib.auth.tokens import default_token_generator
-from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
-from django.utils.encoding import force_bytes, force_str
 
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.pdfgen import canvas
-from reportlab.lib import colors
-from django.db.models import Q
-from django.conf import settings
+from moteur_calcul.constantes import (
+    CHARGE_EXPLOITATION_TOITURE_KN_M2,
+    CHARGES_EXPLOITATION,
+    COEFFICIENT_G_ELS,
+    COEFFICIENT_G_ELU,
+    COEFFICIENT_Q_ELS,
+    COEFFICIENT_Q_ELU,
+    CONTRAINTE_SOL_DEFAUT,
+    POIDS_COUCHES_COURANTES,
+)
+from moteur_calcul.hypotheses import (
+    CONTENU_G_FORFAITAIRE,
+    G_PLANCHER_FORFAITAIRE_KN_M2,
+    METHODE_SEMELLES_PAR_DEFAUT,
+    POIDS_PROPRE_OSSATURE_PAR_DEFAUT,
+)
+from moteur_calcul.formules.postes_ratio import SCHEMA_GEOMETRIE
+from moteur_calcul.validators import EntreeInvalide
 
 from .models import (
-    Projet, 
-    ElementStructurel, 
-    CoucheCharge, 
-    PosteComplementaire, 
-    EntrepriseParametres, 
-    Profil, 
-    Entreprise
+    CoucheCharge,
+    ElementStructurel,
+    EvenementProduit,
+    PosteComplementaire,
+    Projet,
 )
+from .permissions import EstAdminCabinet, EstMembreEntreprise, PeutValiderElement, entreprise_de
 from .serializers import (
-    ProjetSerializer,
+    CoucheChargeSerializer,
     ElementStructurelSerializer,
     ElementValidationSerializer,
-    CoucheChargeSerializer,
-    PosteComplementaireSerializer,
     EntrepriseParametresSerializer,
-    ProfilSerializer,
+    PosteComplementaireSerializer,
+    ProjetResumeSerializer,
+    ProjetSerializer,
 )
-from .permissions import EstMembreEntreprise, EstAdminCabinet, PeutValiderElement, EstAuthentifieOuDemoMode
-from .services import calculer_element, recalculer_projet, CalculNonDisponible
-from .services.dqe_calculator import calculer_projet_dqe
-from .services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
-from .services.assistant_ia.parser import structurer_description_projet
-from .services.assistant_ia.explanations import expliquer_resultat_element
-from .services.assistant_ia.postes import suggerer_poste_complementaire
-from .services.assistant_ia.client import LLMServiceError
-from .services.assistant_ia.vision import analyser_plan_2d
+from .services import CalculNonDisponible, calculer_element, recalculer_projet
 from .services.assistant_ia import (
-    analyser_projet_coherence,
     analyser_element_coherence,
-    expliquer_analyse_coherence,
+    analyser_projet_coherence,
     enregistrer_appel_ia,
+    expliquer_analyse_coherence,
 )
-from moteur_calcul.validators import EntreeInvalide
-from django.contrib.auth.models import User
-from .models import Profil
-from .serializers import AdminInviteUserSerializer, ProfilSerializer
+from .services.assistant_ia.client import LLMServiceError
+from .services.assistant_ia.explanations import expliquer_resultat_element
+from .services.assistant_ia.parser import structurer_description_projet
+from .services.assistant_ia.postes import suggerer_poste_complementaire
+from .services.assistant_ia.vision import analyser_plan_2d
+from .services.dqe_calculator import (
+    DQEIncomplet,
+    LIBELLES_PRIX,
+    PRIX_UNITAIRES_REFERENCE,
+    calculer_projet_dqe,
+)
+from .services.dqe_exporters import exporter_dqe_excel, exporter_dqe_pdf
+from .services.evenements import enregistrer_evenement
+from .services.trame_service import TYPES_TRAME, creer_elements_trame
+from .services.parametres_projet import ParametresIncomplets, parametres_structure
 
 logger = logging.getLogger(__name__)
+
+TypeEv = EvenementProduit.Type
+
+
+def _nom_utilisateur(user) -> str:
+    if not user or not user.is_authenticated:
+        return "Utilisateur inconnu"
+    return user.get_full_name() or user.username
+
+
+def _reponse_parametres_incomplets(exc: ParametresIncomplets):
+    return Response(
+        {"erreur": str(exc), "champs_manquants": exc.manquants},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def _journaliser_ia(request, endpoint, source, t0, succes=True, projet=None):
+    duree_ms = int((time.time() - t0) * 1000)
+    enregistrer_appel_ia(endpoint=endpoint, source=source, utilisateur=request.user, duree_ms=duree_ms)
+    enregistrer_evenement(
+        TypeEv.APPEL_IA, utilisateur=request.user, projet=projet,
+        endpoint=endpoint, source=source, succes=succes, duree_ms=duree_ms,
+    )
 
 
 def _semelles_pour_dxf(semelles) -> list:
@@ -129,7 +179,7 @@ def _ouvrages_lineaires_pour_dxf(elements) -> dict:
     return resultat
 
 
-def _entreprise_export_dict(entreprise: "EntrepriseParametres") -> dict:
+def _entreprise_export_dict(entreprise) -> dict:
     logo_path = None
     if entreprise.logo and hasattr(entreprise.logo, "path"):
         try:
@@ -151,7 +201,19 @@ def _entreprise_export_dict(entreprise: "EntrepriseParametres") -> dict:
     }
 
 
-def generer_pdf_plan_coffrage_general(projet):
+POINTS_PAR_MM = 72 / 25.4
+
+
+def generer_pdf_plan_coffrage_general(projet, *, cabinet_nom, auteur, date_edition):
+    """Plan d'ensemble fondation/coffrage (PDF A4 paysage).
+
+    Le cartouche n'affiche que des données réelles : cabinet du projet,
+    affaire, référence de devis, date d'édition, auteur, et l'échelle
+    EFFECTIVEMENT appliquée au dessin (calculée, plus "1/50" en dur).
+    Les mentions non issues des données (cote "-0.10", "joint de
+    dilatation", sections par défaut 20x40 / 120 cm) ont été retirées.
+    L'appelant garantit que chaque semelle a une position et un côté.
+    """
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=landscape(A4))
     width, height = landscape(A4)
@@ -180,12 +242,13 @@ def generer_pdf_plan_coffrage_general(projet):
     p.line(cart_x, cart_y + 12, cart_x + cart_w, cart_y + 12)
     p.line(cart_x + 95, cart_y, cart_x + 95, cart_y + 12)
 
+    reference = projet.numero_devis or "non attribuée"
     p.setFont("Helvetica-Bold", 7.5)
-    p.drawString(cart_x + 5, cart_y + 30, "PROJET-DQE — SUITE INGÉNIERIE STRUCTURE")
+    p.drawString(cart_x + 5, cart_y + 30, (cabinet_nom or "Cabinet non renseigné").upper()[:40])
     p.setFont("Helvetica", 6.5)
     p.drawString(cart_x + 5, cart_y + 15, f"AFFAIRE : {projet.nom.upper()[:24]}")
-    p.drawString(cart_x + 5, cart_y + 3, "ÉCHELLE : 1/50 | BAEL91/EC2")
-    p.drawString(cart_x + 100, cart_y + 3, "INDICE : EXE-2026")
+    p.drawString(cart_x + 100, cart_y + 15, f"RÉF. : {reference[:18]}")
+    p.drawString(cart_x + 100, cart_y + 3, f"{date_edition:%d/%m/%Y} — {auteur[:14]}")
 
     elements = projet.elements.all()
     semelles = list(elements.filter(type_element=ElementStructurel.TypeElement.SEMELLE))
@@ -211,6 +274,10 @@ def generer_pdf_plan_coffrage_general(projet):
         scale_x = avail_w / span_x
         scale_y = avail_h / span_y
         scale = min(scale_x, scale_y, 28.0)
+        # Échelle réelle du dessin : `scale` points par mètre.
+        echelle = round(1000 / (scale / POINTS_PAR_MM))
+        p.setFont("Helvetica", 6.5)
+        p.drawString(cart_x + 5, cart_y + 3, f"ÉCHELLE : 1/{echelle} (A4 paysage)")
 
         offset_x = zone_x_min + (avail_w - (span_x * scale)) / 2.0
         offset_y = zone_y_max - (avail_h - (span_y * scale)) / 2.0
@@ -283,10 +350,11 @@ def generer_pdf_plan_coffrage_general(projet):
 
         y_c2 = zone_y_max + 30.0
         p.line(zone_x_min, y_c2, zone_x_max, y_c2)
-        total_x_cm = int(round((max_x - min_x) * 100)) or 2000
-        p.line(zone_x_min, y_c2 - 2.5, zone_x_min, y_c2 + 2.5)
-        p.line(zone_x_max, y_c2 - 2.5, zone_x_max, y_c2 + 2.5)
-        p.drawCentredString((zone_x_min + zone_x_max) / 2, y_c2 + 2, str(total_x_cm))
+        total_x_cm = int(round((max_x - min_x) * 100))
+        if total_x_cm > 0:
+            p.line(zone_x_min, y_c2 - 2.5, zone_x_min, y_c2 + 2.5)
+            p.line(zone_x_max, y_c2 - 2.5, zone_x_max, y_c2 + 2.5)
+            p.drawCentredString((zone_x_min + zone_x_max) / 2, y_c2 + 2, str(total_x_cm))
 
         x_cl1 = zone_x_min - 18.0
         p.line(x_cl1, zone_y_min, x_cl1, zone_y_max)
@@ -302,27 +370,6 @@ def generer_pdf_plan_coffrage_general(projet):
             p.drawCentredString(0, 0, str(dist_cm))
             p.restoreState()
 
-        for idx_x in range(len(unique_xs) - 1):
-            for idx_y in range(len(unique_ys) - 1):
-                x1, y1 = to_pdf_coords(unique_xs[idx_x], unique_ys[idx_y])
-                x2, y2 = to_pdf_coords(unique_xs[idx_x + 1], unique_ys[idx_y + 1])
-                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-
-                p.setLineWidth(0.25)
-                p.setFillColor(colors.HexColor("#FFFFFF"))
-                p.circle(cx, cy, 5.5, fill=True, stroke=True)
-                p.line(cx - 5.5, cy, cx + 5.5, cy)
-                p.line(cx, cy - 5.5, cx, cy + 5.5)
-
-                p.setFont("Helvetica-Bold", 4.2)
-                p.setFillColor(colors.HexColor("#000000"))
-                p.drawCentredString(cx, cy - 1.2, "-0.10")
-
-                p.setLineWidth(0.1)
-                p.setStrokeColor(colors.HexColor("#CBD5E1"))
-                p.line(x1, y1, x2, y2)
-                p.line(x1, y2, x2, y1)
-
         p.setLineWidth(1.4)
         p.setStrokeColor(colors.HexColor("#000000"))
         for poutre in poutres:
@@ -333,10 +380,10 @@ def generer_pdf_plan_coffrage_general(projet):
                 x2, y2 = to_pdf_coords(dest.position_x, dest.position_y)
                 p.line(x1, y1, x2, y2)
 
-                res_p = poutre.resultat_calcul or {}
-                b = res_p.get("largeur_cm", 20)
-                h = res_p.get("hauteur_cm", 40)
-                label = f"L ({b}x{h})"
+                res_p = poutre.resultat_valide or poutre.resultat_calcul or {}
+                b = res_p.get("largeur_cm")
+                h = res_p.get("hauteur_cm")
+                label = f"{poutre.identifiant} ({b}x{h})" if b and h else f"{poutre.identifiant} (non dimensionnée)"
 
                 mx, my = (x1 + x2) / 2, (y1 + y2) / 2
                 is_vertical = abs(x2 - x1) < 1.0
@@ -357,9 +404,9 @@ def generer_pdf_plan_coffrage_general(projet):
         for semelle in semelles:
             sx, sy = to_pdf_coords(semelle.position_x, semelle.position_y)
 
-            res = semelle.resultat_calcul or {}
-            cote_sem = float(res.get("cote_cm", 120)) / 100.0 * scale
-            cote_sem = max(cote_sem, 13.0)
+            res = semelle.resultat_valide or semelle.resultat_calcul or {}
+            cote_sem = float(res["cote_cm"]) / 100.0 * scale
+            cote_sem = max(cote_sem, 13.0)  # lisibilité : symbole agrandi si trop petit
 
             p.setLineWidth(0.6)
             p.setStrokeColor(colors.HexColor("#000000"))
@@ -370,20 +417,16 @@ def generer_pdf_plan_coffrage_general(projet):
             p.line(sx - (cote_sem / 2), sy - (cote_sem / 2), sx + (cote_sem / 2), sy + (cote_sem / 2))
             p.line(sx - (cote_sem / 2), sy + (cote_sem / 2), sx + (cote_sem / 2), sy - (cote_sem / 2))
 
-            cote_pot = 6.0
-            p.setFillColor(colors.HexColor("#000000"))
-            p.rect(sx - (cote_pot / 2), sy - (cote_pot / 2), cote_pot, cote_pot, fill=True, stroke=True)
+            poteau = semelle.poteau_associe
+            res_pot = (poteau.resultat_valide or poteau.resultat_calcul or {}) if poteau else {}
+            cote_pot = max(float(res_pot["cote_cm"]) / 100.0 * scale, 3.0) if res_pot.get("cote_cm") else 0
+            if cote_pot:
+                p.setFillColor(colors.HexColor("#000000"))
+                p.rect(sx - (cote_pot / 2), sy - (cote_pot / 2), cote_pot, cote_pot, fill=True, stroke=True)
 
             p.setFont("Helvetica-Bold", 4.8)
             p.setFillColor(colors.HexColor("#000000"))
             p.drawCentredString(sx, sy - (cote_sem / 2) - 4.5, str(semelle.identifiant))
-
-        p.saveState()
-        p.setFont("Helvetica-Bold", 5.5)
-        p.translate(zone_x_min - 32, (zone_y_min + zone_y_max) / 2)
-        p.rotate(90)
-        p.drawString(0, 0, "JOINT DE DILATATION / RUPTURE")
-        p.restoreState()
 
     p.showPage()
     p.save()
@@ -391,80 +434,57 @@ def generer_pdf_plan_coffrage_general(projet):
     return buffer
 
 
-class ProjetViewSet(viewsets.ModelViewSet):
+
+
+
+
+class FiltreCabinetMixin:
+    """get_queryset() limité au cabinet de l'utilisateur.
+
+    `champ_cabinet` : chemin ORM vers EntrepriseParametres depuis le modèle.
+    """
+
+    champ_cabinet = "entreprise"
+
+    def get_queryset(self):
+        entreprise = entreprise_de(self.request.user)
+        if entreprise is None:
+            return self.queryset.none()
+        return self.queryset.filter(**{self.champ_cabinet: entreprise})
+
+
+class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
     queryset = Projet.objects.all()
     serializer_class = ProjetSerializer
-    permission_classes = [EstAuthentifieOuDemoMode, EstMembreEntreprise]
+    permission_classes = [EstMembreEntreprise]
 
     def get_queryset(self):
-        qs = Projet.objects.all()
-        user = self.request.user
-        if not user or not user.is_authenticated:
-            # Anonyme : seulement possible en DEMO_MODE (sinon bloqué en
-            # amont par EstAuthentifieOuDemoMode) -- comportement legacy
-            # inchangé, pas de filtrage.
-            return qs
-        profil = getattr(user, "profil", None)
-        if profil is None:
-            # Utilisateur authentifié sans Profil (comptes créés avant ce
-            # sprint) : pas de filtrage, comportement legacy inchangé.
-            return qs
-        return qs.filter(entreprise_id=profil.entreprise_id)
+        qs = super().get_queryset()
+        if self.action == "list":
+            qs = qs.select_related("cree_par").annotate(
+                a_dqe=Exists(EvenementProduit.objects.filter(projet=OuterRef("pk"), type=TypeEv.DQE_GENERE)),
+                nb_elements=Count("elements", distinct=True),
+                nb_elements_valides=Count(
+                    "elements", filter=Q(elements__statut=ElementStructurel.Statut.VALIDE), distinct=True
+                ),
+            ).order_by("-date_modification")
+        return qs
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ProjetResumeSerializer
+        return ProjetSerializer
 
     def perform_create(self, serializer):
         user = self.request.user
-        profil = getattr(user, "profil", None) if user and user.is_authenticated else None
-        serializer.save(
-            cree_par=user if user and user.is_authenticated else None,
-            entreprise=profil.entreprise if profil else None,
-        )
-
-    def get_queryset(self):
-        user = self.request.user
-        queryset = Projet.objects.all()
-        
-        # Si l'utilisateur n'est pas authentifié ou en test sans forcer l'auth sur ces vieux tests, on retourne tout
-        if not user or not user.is_authenticated:
-            return queryset
-            
-        if user.is_superuser:
-            return queryset
-            
-        # Filtrage par cabinet / entreprise si le profil existe
-        if hasattr(user, 'profil') and user.profil and user.profil.entreprise:
-            queryset = queryset.filter(
-                Q(entreprise=user.profil.entreprise) | Q(cree_par=user) | Q(entreprise__isnull=True)
-            )
-        return queryset
-    
-
-    def perform_create(self, serializer):
-        user = self.request.user
-        if user and user.is_authenticated and hasattr(user, 'profil') and user.profil and user.profil.entreprise:
-            serializer.save(
-                entreprise=user.profil.entreprise,
-                cree_par=user
-            )
-        else:
-            from .models import Entreprise
-            entreprise_legacy, _ = Entreprise.objects.get_or_create(
-                nom="Cabinet d'Ingénierie (Legacy)",
-                defaults={"code_cabinet": "CAB-LEGACY-001"}
-            )
-            valid_user = user if (user and user.is_authenticated and not user.is_anonymous) else None
-            serializer.save(
-                entreprise=entreprise_legacy,
-                cree_par=valid_user
-            )
-
+        projet = serializer.save(entreprise=user.profil.entreprise, cree_par=user)
+        enregistrer_evenement(TypeEv.PROJET_CREE, utilisateur=user, projet=projet)
 
     def get_permissions(self):
-        # En mode test, ou si DEMO_MODE est activé, on autorise l'accès pour fluidifier les tests d'intégration
-        demo_mode = getattr(settings, 'DEMO_MODE', False)
-        if demo_mode:
-            return [AllowAny()]   
-        if self.action == "analyser_plan_image":
-            return [IsAuthenticated()]
+        # Supprimer un projet (et tous ses éléments) est réservé à un
+        # ingénieur ou à l'administrateur du cabinet.
+        if self.action == "destroy":
+            return [PeutValiderElement()]
         return super().get_permissions()
 
     def get_throttles(self):
@@ -477,10 +497,9 @@ class ProjetViewSet(viewsets.ModelViewSet):
     def analyse_coherence(self, request, pk=None):
         projet = self.get_object()
         try:
-            resultat = analyser_projet_coherence(projet)
-            return Response(resultat, status=status.HTTP_200_OK)
-        except Exception as exc:
-            logger.exception("Erreur lors de l'analyse de cohérence du projet")
+            return Response(analyser_projet_coherence(projet), status=status.HTTP_200_OK)
+        except Exception:
+            logger.exception("Erreur lors de l'analyse de cohérence du projet %s", projet.pk)
             return Response(
                 {"detail": "Une erreur interne est survenue lors de l'analyse de cohérence."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -489,171 +508,55 @@ class ProjetViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def recalculer(self, request, pk=None):
         projet = self.get_object()
-        resultats = recalculer_projet(projet)
-        return Response(resultats, status=status.HTTP_200_OK)
+        return Response(recalculer_projet(projet), status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def chainage_suggere(self, request, pk=None):
-        projet = self.get_object()
-        try:
-            from moteur_calcul.formules.postes_ratio import calculer_longueur_chainage
+        from moteur_calcul.formules.trame import calculer_longueur_chainage
 
-            longueur = calculer_longueur_chainage(
-                projet.nb_travees_x or 2,
-                projet.nb_travees_y or 2,
-                projet.portee_x or 5.0,
-                projet.portee_y or 5.0,
-            )
-        except (ImportError, ModuleNotFoundError, AttributeError):
-            longueur = 2 * (
-                (projet.nb_travees_x or 2) * (projet.portee_x or 5.0)
-                + (projet.nb_travees_y or 2) * (projet.portee_y or 5.0)
-            )
+        projet = self.get_object()
+        manquants = [
+            {"champ": c, "libelle": l} for c, l in (
+                ("nb_travees_x", "nombre de travées en X"), ("nb_travees_y", "nombre de travées en Y"),
+                ("portee_x", "portée en X (m)"), ("portee_y", "portée en Y (m)"),
+            ) if not getattr(projet, c)
+        ]
+        if manquants:
+            return _reponse_parametres_incomplets(ParametresIncomplets(manquants))
+        longueur = calculer_longueur_chainage(
+            projet.nb_travees_x, projet.nb_travees_y, projet.portee_x, projet.portee_y
+        )
         return Response({"longueur_m": longueur}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
     def generer_trame(self, request, pk=None):
-        projet = self.get_object()
-        projet.elements.all().delete()
+        """Génère poteaux, semelles et poutres d'une grille régulière.
 
-        elements_crees = []
+        Tout ou rien : si le moteur échoue sur un seul nœud, aucun élément
+        n'est créé et les éléments existants sont conservés (transaction).
+        """
+        projet = self.get_object()
+        try:
+            prm = parametres_structure(projet, avec_grille=True)
+        except ParametresIncomplets as exc:
+            return _reponse_parametres_incomplets(exc)
 
         try:
-            from moteur_calcul.formules.trame import (
-                generer_poteau_sur_grille,
-                generer_poutre_sur_grille,
+            with transaction.atomic():
+                elements_crees, hypotheses = creer_elements_trame(projet, prm)
+        except (ValueError, EntreeInvalide) as exc:
+            return Response(
+                {"erreur": f"Le moteur de calcul a refusé la trame : {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        except (ImportError, ModuleNotFoundError):
-            generer_poteau_sur_grille = None
-            generer_poutre_sur_grille = None
 
-        charge_exp = float(projet.charge_exploitation) if projet.charge_exploitation is not None else 1.5
-        nb_x = int(projet.nb_travees_x) if projet.nb_travees_x is not None else 2
-        nb_y = int(projet.nb_travees_y) if projet.nb_travees_y is not None else 2
-        portee_x = float(projet.portee_x) if projet.portee_x is not None else 5.0
-        portee_y = float(projet.portee_y) if projet.portee_y is not None else 5.0
-        hauteur_etage = float(projet.hauteur_etage) if projet.hauteur_etage is not None else 3.0
-        nb_niveaux = int(projet.nb_niveaux) if projet.nb_niveaux is not None else 1
-        usage_batiment = projet.usage_batiment or "habitations"
-
-        poteaux_par_noeud = {}
-
-        for i in range(nb_x + 1):
-            for j in range(nb_y + 1):
-                x = i * portee_x
-                y = j * portee_y
-
-                if generer_poteau_sur_grille:
-                    try:
-                        donnees = generer_poteau_sur_grille(
-                            i, j, portee_x, portee_y, nb_x, nb_y, charge_exp, hauteur_etage,
-                            nb_niveaux=nb_niveaux, usage_batiment=usage_batiment,
-                        )
-                    except Exception as err:
-                        logger.warning(f"Fallback calcul poteau sur noeud ({i},{j}) : {err}")
-                        donnees = {}
-
-                    charge_elu = donnees.get("charge_elu_kn", 150.0)
-                    res_poteau = donnees.get("resultat_poteau") or {"cote_cm": 25, "acier_cm2": 4.5}
-                    res_semelle = donnees.get("resultat_semelle") or {"cote_cm": 120, "hauteur_cm": 30}
-                else:
-                    charge_elu = 150.0
-                    res_poteau = {"cote_cm": 25, "acier_cm2": 4.5}
-                    res_semelle = {"cote_cm": 120, "hauteur_cm": 30}
-
-                poteau = ElementStructurel.objects.create(
-                    projet=projet,
-                    identifiant=f"P_{i}_{j}",
-                    type_element=ElementStructurel.TypeElement.POTEAU,
-                    position=ElementStructurel.Position.SUPERSTRUCTURE,
-                    position_x=x,
-                    position_y=y,
-                    hauteur_poteau=hauteur_etage,
-                    charge_calculee=charge_elu,
-                    resultat_calcul=res_poteau,
-                )
-                elements_crees.append(poteau)
-                poteaux_par_noeud[(i, j)] = poteau
-
-                semelle = ElementStructurel.objects.create(
-                    projet=projet,
-                    identifiant=f"S_{i}_{j}",
-                    type_element=ElementStructurel.TypeElement.SEMELLE,
-                    position=ElementStructurel.Position.INFRASTRUCTURE,
-                    position_x=x,
-                    position_y=y,
-                    poteau_associe=poteau,
-                    charge_calculee=charge_elu,
-                    taux_travail_sol=0.2,
-                    resultat_calcul=res_semelle,
-                )
-                elements_crees.append(semelle)
-
-        for j in range(nb_y + 1):
-            for i in range(nb_x):
-                largeur_influence = portee_y if 0 < j < nb_y else portee_y / 2
-                if generer_poutre_sur_grille:
-                    try:
-                        donnees = generer_poutre_sur_grille(portee_x, largeur_influence, charge_exp)
-                    except Exception as err:
-                        logger.warning(f"Fallback calcul poutre X ({i},{j}) : {err}")
-                        donnees = {}
-
-                    charge_lineaire = donnees.get("charge_lineaire_kn_m", 20.0)
-                    res_poutre = donnees.get("resultat_poutre") or {"largeur_cm": 20, "hauteur_cm": 40}
-                else:
-                    charge_lineaire = 20.0
-                    res_poutre = {"largeur_cm": 20, "hauteur_cm": 40}
-
-                poutre = ElementStructurel.objects.create(
-                    projet=projet,
-                    identifiant=f"PX_{i}_{j}",
-                    type_element=ElementStructurel.TypeElement.POUTRE,
-                    position=ElementStructurel.Position.SUPERSTRUCTURE,
-                    position_x=(i + 0.5) * portee_x,
-                    position_y=j * portee_y,
-                    portee=portee_x,
-                    charge_lineaire=charge_lineaire,
-                    resultat_calcul=res_poutre,
-                    poteau_origine=poteaux_par_noeud[(i, j)],
-                    poteau_destination=poteaux_par_noeud[(i + 1, j)],
-                )
-                elements_crees.append(poutre)
-
-        # 3. Poutres selon l'axe Y
-        for i in range(nb_x + 1):
-            for j in range(nb_y):
-                largeur_influence = portee_x if 0 < i < nb_x else portee_x / 2
-                if generer_poutre_sur_grille:
-                    try:
-                        donnees = generer_poutre_sur_grille(portee_y, largeur_influence, charge_exp)
-                    except Exception as err:
-                        logger.warning(f"Fallback calcul poutre Y ({i},{j}) : {err}")
-                        donnees = {}
-
-                    charge_lineaire = donnees.get("charge_lineaire_kn_m", 20.0)
-                    res_poutre = donnees.get("resultat_poutre") or {"largeur_cm": 20, "hauteur_cm": 40}
-                else:
-                    charge_lineaire = 20.0
-                    res_poutre = {"largeur_cm": 20, "hauteur_cm": 40}
-
-                poutre = ElementStructurel.objects.create(
-                    projet=projet,
-                    identifiant=f"PY_{i}_{j}",
-                    type_element=ElementStructurel.TypeElement.POUTRE,
-                    position=ElementStructurel.Position.SUPERSTRUCTURE,
-                    position_x=i * portee_x,
-                    position_y=(j + 0.5) * portee_y,
-                    portee=portee_y,
-                    charge_lineaire=charge_lineaire,
-                    resultat_calcul=res_poutre,
-                    poteau_origine=poteaux_par_noeud[(i, j)],
-                    poteau_destination=poteaux_par_noeud[(i, j + 1)],
-                )
-                elements_crees.append(poutre)
-
+        enregistrer_evenement(TypeEv.TRAME_GENEREE, utilisateur=request.user, projet=projet,
+                              nb_elements=len(elements_crees))
         serializer = ElementStructurelSerializer(elements_crees, many=True)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(
+            {"elements": serializer.data, "hypotheses": sorted(set(hypotheses))},
+            status=status.HTTP_201_CREATED,
+        )
 
     @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser, JSONParser])
     def importer_plan(self, request, pk=None):
@@ -665,19 +568,17 @@ class ProjetViewSet(viewsets.ModelViewSet):
 
         if fichier is None and not confirmer:
             return Response(
-                {
-                    "erreur": "Fournissez un fichier IFC (champ \"fichier\") pour "
-                    "un aperçu, ou confirmer=true pour créer les éléments à "
-                    "partir d'un aperçu déjà réalisé."
-                },
+                {"erreur": "Fournissez un fichier IFC (champ \"fichier\") pour un aperçu, ou "
+                           "confirmer=true pour créer les éléments à partir d'un aperçu déjà réalisé."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
             from moteur_calcul.import_ifc.lecture_ifc import (
-                analyser_fichier_ifc,
-                FichierIFCInvalide,
-                AucunPoteauDetecte,
+                AucunPoteauDetecte, FichierIFCInvalide, analyser_fichier_ifc,
+            )
+            from moteur_calcul.formules.trame import (
+                detecter_poutres_adjacentes, generer_poteau_depuis_position_reelle,
             )
         except ImportError as exc:
             return Response(
@@ -692,31 +593,22 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 parametres = analyser_fichier_ifc(projet.fichier_import_origine.path)
             except (FichierIFCInvalide, AucunPoteauDetecte) as exc:
                 return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-
             parametres.pop("poteaux", None)
             return Response(parametres, status=status.HTTP_200_OK)
 
         if not projet.fichier_import_origine:
             return Response(
-                {"erreur": "Aucun plan importé au préalable pour ce projet : "
-                 "envoyez d'abord un fichier IFC à cet endpoint."},
+                {"erreur": "Aucun plan importé au préalable pour ce projet : envoyez d'abord un fichier IFC."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        try:
+            prm = parametres_structure(projet, avec_grille=False)
+        except ParametresIncomplets as exc:
+            return _reponse_parametres_incomplets(exc)
         try:
             resultat = analyser_fichier_ifc(projet.fichier_import_origine.path)
         except (FichierIFCInvalide, AucunPoteauDetecte) as exc:
             return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            from moteur_calcul.formules.trame import (
-                generer_poteau_depuis_position_reelle,
-                detecter_poutres_adjacentes,
-            )
-        except ImportError as exc:
-            return Response(
-                {"erreur": f"Moteur de trame indisponible sur ce serveur : {exc}"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
 
         empreinte = _empreinte_niveau_bas(resultat["poteaux"])
         if not empreinte:
@@ -725,305 +617,343 @@ class ProjetViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        projet.elements.all().delete()
-
-        charge_exp = projet.charge_exploitation or 1.5
-        elements_crees = []
-        poteau_par_guid = {}
+        q = prm["charge_exploitation"]
         avertissements = list(resultat.get("avertissements", []))
-        compteur_poteau = 0
+        hypotheses = list(prm["hypotheses"])
+        elements_crees = []
+        try:
+            with transaction.atomic():
+                projet.elements.filter(type_element__in=TYPES_TRAME).delete()
+                poteau_par_guid = {}
+                compteur = 0
+                for p in empreinte:
+                    try:
+                        d = generer_poteau_depuis_position_reelle(
+                            p, empreinte, q, prm["hauteur_etage"],
+                            nb_niveaux=prm["nb_niveaux"], usage_batiment=prm["usage_batiment"],
+                            taux_travail_sol=prm["contrainte_sol_kn_m2"], hyp=prm["hyp"],
+                        )
+                    except ValueError as exc:
+                        # Poteau sans trame 2D exploitable : signalé, jamais inventé.
+                        avertissements.append(str(exc))
+                        continue
+                    hypotheses.extend(d.get("hypotheses", []))
+                    compteur += 1
+                    poteau = ElementStructurel.objects.create(
+                        projet=projet, identifiant=f"P{compteur}",
+                        type_element=ElementStructurel.TypeElement.POTEAU,
+                        nombre_identiques=prm["nb_niveaux"],
+                        position=ElementStructurel.Position.SUPERSTRUCTURE,
+                        position_x=d["x"], position_y=d["y"],
+                        hauteur_poteau=prm["hauteur_etage"], charge_calculee=d["charge_elu_kn"],
+                        charge_service=d["charge_els_kn"],
+                        resultat_calcul=d["resultat_poteau"],
+                    )
+                    poteau_par_guid[p.get("guid")] = poteau
+                    semelle = ElementStructurel.objects.create(
+                        projet=projet, identifiant=f"S{compteur}",
+                        type_element=ElementStructurel.TypeElement.SEMELLE,
+                        position=ElementStructurel.Position.INFRASTRUCTURE,
+                        position_x=d["x"], position_y=d["y"], poteau_associe=poteau,
+                        charge_calculee=d["charge_elu_kn"], charge_service=d["charge_els_kn"],
+                        taux_travail_sol=prm["contrainte_sol_kn_m2"],
+                        resultat_calcul=d["resultat_semelle"],
+                    )
+                    elements_crees += [poteau, semelle]
 
-        for p in empreinte:
-            try:
-                donnees = generer_poteau_depuis_position_reelle(
-                    p, empreinte, charge_exp, projet.hauteur_etage,
-                    nb_niveaux=projet.nb_niveaux, usage_batiment=projet.usage_batiment,
-                )
-            except ValueError as exc:
-                avertissements.append(str(exc))
-                continue
-
-            compteur_poteau += 1
-            identifiant_poteau = f"P{compteur_poteau}"
-            poteau = ElementStructurel.objects.create(
-                projet=projet,
-                identifiant=identifiant_poteau,
-                type_element=ElementStructurel.TypeElement.POTEAU,
-                position=ElementStructurel.Position.SUPERSTRUCTURE,
-                position_x=donnees["x"],
-                position_y=donnees["y"],
-                hauteur_poteau=projet.hauteur_etage,
-                charge_calculee=donnees["charge_elu_kn"],
-                resultat_calcul=donnees["resultat_poteau"],
+                compteur_poutre = 0
+                for pd in detecter_poutres_adjacentes(empreinte, q, hyp=prm["hyp"]):
+                    origine = poteau_par_guid.get(pd["poteau_origine_guid"])
+                    destination = poteau_par_guid.get(pd["poteau_destination_guid"])
+                    if origine is None or destination is None:
+                        continue
+                    compteur_poutre += 1
+                    elements_crees.append(ElementStructurel.objects.create(
+                        projet=projet,
+                        identifiant=f"{'PX' if pd['axe'] == 'x' else 'PY'}{compteur_poutre}",
+                        type_element=ElementStructurel.TypeElement.POUTRE,
+                        nombre_identiques=prm["nb_niveaux"],
+                        position=ElementStructurel.Position.SUPERSTRUCTURE,
+                        position_x=(origine.position_x + destination.position_x) / 2,
+                        position_y=(origine.position_y + destination.position_y) / 2,
+                        portee=pd["portee_m"], charge_lineaire=pd["charge_lineaire_kn_m"],
+                        resultat_calcul=pd["resultat_poutre"],
+                        poteau_origine=origine, poteau_destination=destination,
+                    ))
+        except (ValueError, EntreeInvalide) as exc:
+            return Response(
+                {"erreur": f"Le moteur de calcul a refusé le plan importé : {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            elements_crees.append(poteau)
-            poteau_par_guid[p.get("guid")] = poteau
 
-            semelle = ElementStructurel.objects.create(
-                projet=projet,
-                identifiant=f"S{compteur_poteau}",
-                type_element=ElementStructurel.TypeElement.SEMELLE,
-                position=ElementStructurel.Position.INFRASTRUCTURE,
-                position_x=donnees["x"],
-                position_y=donnees["y"],
-                poteau_associe=poteau,
-                charge_calculee=donnees["charge_elu_kn"],
-                taux_travail_sol=0.2,
-                resultat_calcul=donnees["resultat_semelle"],
-            )
-            elements_crees.append(semelle)
-
-        compteur_poutre = 0
-        for pd in detecter_poutres_adjacentes(empreinte, charge_exp):
-            origine = poteau_par_guid.get(pd["poteau_origine_guid"])
-            destination = poteau_par_guid.get(pd["poteau_destination_guid"])
-            if origine is None or destination is None:
-                continue
-
-            compteur_poutre += 1
-            prefixe = "PX" if pd["axe"] == "x" else "PY"
-            poutre = ElementStructurel.objects.create(
-                projet=projet,
-                identifiant=f"{prefixe}{compteur_poutre}",
-                type_element=ElementStructurel.TypeElement.POUTRE,
-                position=ElementStructurel.Position.SUPERSTRUCTURE,
-                position_x=(origine.position_x + destination.position_x) / 2,
-                position_y=(origine.position_y + destination.position_y) / 2,
-                portee=pd["portee_m"],
-                charge_lineaire=pd["charge_lineaire_kn_m"],
-                resultat_calcul=pd["resultat_poutre"],
-                poteau_origine=origine,
-                poteau_destination=destination,
-            )
-            elements_crees.append(poutre)
-
+        enregistrer_evenement(TypeEv.IMPORT_IFC, utilisateur=request.user, projet=projet,
+                              nb_elements=len(elements_crees))
         serializer = ElementStructurelSerializer(elements_crees, many=True)
         return Response(
-            {"elements": serializer.data, "avertissements": avertissements},
+            {"elements": serializer.data, "avertissements": avertissements,
+             "hypotheses": sorted(set(hypotheses))},
             status=status.HTTP_201_CREATED,
         )
 
     @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser])
     def analyser_plan_image(self, request, pk=None):
-        import os
         from django.conf import settings
-        
-        demo_env = os.getenv("DEMO_MODE", "True").lower() == "true"
-        demo_setting = getattr(settings, "DEMO_MODE", True)
-        
-        if not demo_env and not demo_setting:
-            if not request.user or not request.user.is_authenticated:
-                return Response(
-                    {"detail": "Les identifiants d'authentification n'ont pas été fournis."},
-                    status=status.HTTP_403_FORBIDDEN
-                )
 
         projet = self.get_object()
-
         fichier = request.FILES.get("fichier")
         if not fichier:
             return Response(
                 {"detail": "Le fichier image est requis dans le champ 'fichier'."},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
-
         max_bytes = getattr(settings, "PLAN_IMAGE_MAX_BYTES", 5 * 1024 * 1024)
         if fichier.size > max_bytes:
             return Response(
-                {
-                    "detail": f"Le fichier est trop volumineux. La taille maximale autorisée est de {max_bytes / (1024 * 1024):.1f} Mo."
-                },
-                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+                {"detail": f"Le fichier est trop volumineux. La taille maximale autorisée est de "
+                           f"{max_bytes / (1024 * 1024):.1f} Mo."},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
 
+        endpoint = f"/api/projets/{projet.pk}/analyser_plan_image/"
         t0 = time.time()
         try:
-            image_bytes = fichier.read()
-            mime_type = fichier.content_type
-
-            resultat = analyser_plan_2d(image_bytes, mime_type)
+            resultat = analyser_plan_2d(fichier.read(), fichier.content_type)
             resultat["mode_import"] = "VISION"
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint=f"/api/projets/{pk}/analyser-plan/",
-                source=resultat.get("source", "MOCK"),
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
+            _journaliser_ia(request, endpoint, resultat.get("source", "INCONNUE"), t0, projet=projet)
             return Response(resultat, status=status.HTTP_200_OK)
+        except LLMServiceError as exc:
+            _journaliser_ia(request, endpoint, "FALLBACK_LOCAL", t0, succes=False, projet=projet)
+            return Response({"detail": str(exc), "code": exc.code}, status=exc.status_code)
         except ValueError as exc:
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint=f"/api/projets/{pk}/analyser-plan/",
-                source="FALLBACK_LOCAL",
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
+            _journaliser_ia(request, endpoint, "FALLBACK_LOCAL", t0, succes=False, projet=projet)
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as exc:
+        except Exception:
             logger.exception("Erreur inattendue lors de l'analyse de l'image du plan")
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint=f"/api/projets/{pk}/analyser-plan/",
-                source="FALLBACK_LOCAL",
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
+            _journaliser_ia(request, endpoint, "FALLBACK_LOCAL", t0, succes=False, projet=projet)
             return Response(
                 {"detail": "Une erreur interne est survenue lors du traitement de l'image."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-            
+
     @action(detail=True, methods=["get"])
     def plan_fondation(self, request, pk=None):
         projet = self.get_object()
         export_format = request.query_params.get("export") or request.query_params.get("format")
+        semelles = projet.elements.filter(type_element=ElementStructurel.TypeElement.SEMELLE)
 
-        semelles = projet.elements.filter(
-            type_element=ElementStructurel.TypeElement.SEMELLE
-        )
-
-        if export_format == "pdf":
-            pdf_buffer = generer_pdf_plan_coffrage_general(projet)
-            response = HttpResponse(pdf_buffer.getvalue(), content_type="application/pdf")
-            response["Content-Disposition"] = f'inline; filename="Plan_Coffrage_{projet.id}.pdf"'
-            response["Access-Control-Expose-Headers"] = "Content-Disposition"
-            return response
-
-        elif export_format == "dxf":
+        if export_format in ("pdf", "dxf"):
             if not semelles.exists():
                 return Response(
                     {"erreur": "Aucune semelle disponible : impossible de générer le plan de fondation."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            incompletes = [
+                s.identifiant for s in semelles
+                if s.position_x is None or s.position_y is None
+                or not (s.resultat_valide or s.resultat_calcul or {}).get("cote_cm")
+            ]
+            if incompletes:
+                return Response(
+                    {"erreur": "Semelles sans position ou sans dimension calculée : "
+                               + ", ".join(incompletes) + ". Calculez-les avant d'exporter le plan.",
+                     "elements": incompletes},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if export_format == "pdf":
+            pdf_buffer = generer_pdf_plan_coffrage_general(
+                projet,
+                cabinet_nom=projet.entreprise.nom if projet.entreprise else "",
+                auteur=_nom_utilisateur(request.user),
+                date_edition=timezone.localdate(),
+            )
+            response = HttpResponse(pdf_buffer.getvalue(), content_type="application/pdf")
+            response["Content-Disposition"] = f'inline; filename="Plan_Coffrage_{projet.id}.pdf"'
+            response["Access-Control-Expose-Headers"] = "Content-Disposition"
+            return response
+
+        if export_format == "dxf":
             try:
                 from projets.services.plan_fondation import generer_plan_fondation_dxf
-
-                ouvrages = _ouvrages_lineaires_pour_dxf(projet.elements.all())
+            except ImportError as exc:
+                # Avant : un DXF VIDE était renvoyé avec un code 200.
+                return Response(
+                    {"erreur": f"Générateur DXF indisponible sur ce serveur : {exc}"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            ouvrages = _ouvrages_lineaires_pour_dxf(projet.elements.all())
+            try:
                 content = generer_plan_fondation_dxf(
                     _semelles_pour_dxf(semelles),
                     poutres=ouvrages["poutres"],
                     longrines=ouvrages["longrines"],
                     chainages_identifies=ouvrages["chainages_identifies"],
                 )
-            except (ImportError, ModuleNotFoundError):
-                content = b"0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nEOF\n"
             except ValueError as err:
                 return Response({"erreur": str(err)}, status=status.HTTP_400_BAD_REQUEST)
-
             response = HttpResponse(content, content_type="application/dxf")
-            response["Content-Disposition"] = (
-                f'attachment; filename="Plan_fondation_{projet.id}.dxf"'
-            )
+            response["Content-Disposition"] = f'attachment; filename="Plan_fondation_{projet.id}.dxf"'
             response["Access-Control-Expose-Headers"] = "Content-Disposition"
             return response
 
+        if export_format:
+            return Response({"erreur": f"Format d'export invalide : {export_format}"},
+                            status=status.HTTP_400_BAD_REQUEST)
         serializer = ElementStructurelSerializer(semelles, many=True)
         return Response({"semelles": serializer.data}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
+    def variantes(self, request, pk=None):
+        """Compare des variantes (G, sol, portées, méthode des semelles...)
+        recalculées par le moteur dans une transaction annulée : rien n'est
+        enregistré. Résultats : totaux DQE, quantités, écarts vs projet actuel."""
+        from .services.variantes import VarianteInvalide, calculer_variantes
+
+        projet = self.get_object()
+        try:
+            resultats = calculer_variantes(projet, request.data.get("variantes"))
+        except VarianteInvalide as exc:
+            return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"variantes": resultats,
+                         "note": "Calcul à titre de comparaison : résultats du moteur non validés par "
+                                 "l'ingénieur, rien n'est enregistré."})
+
+    @action(detail=True, methods=["post"], permission_classes=[PeutValiderElement])
     def valider_plan_fondation(self, request, pk=None):
         projet = self.get_object()
         projet.plan_fondation_valide = True
         projet.save(update_fields=["plan_fondation_valide"])
-        return Response(
-            {"status": "Plan de fondation validé."}, status=status.HTTP_200_OK
-        )
+        return Response({"status": "Plan de fondation validé."}, status=status.HTTP_200_OK)
 
-    @action(
-        detail=True,
-        methods=["get", "post"],
-        url_path="generer-dqe",
-        url_name="generer-dqe",
-    )
+    @action(detail=True, methods=["get", "post"], url_path="generer-dqe", url_name="generer-dqe")
     def generer_dqe(self, request, pk=None):
-        # Si l'appel vient d'un test d'élément structurel ou de projet selon le routeur :
-        try:
-            projet = self.get_object()
-        except Exception:
-            projet = get_object_or_404(Projet, pk=pk)
+        projet = self.get_object()
 
-        if not projet.elements.exists():
+        if not projet.elements.exists() and not projet.postes_complementaires.exists():
             return Response(
-                {"erreur": "Le projet ne contient aucun élément structurel."},
+                {"erreur": "Le projet ne contient aucun élément structurel ni poste : rien à chiffrer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        elements_non_valides = projet.elements.exclude(
-            statut=ElementStructurel.Statut.VALIDE
-        )
-        if elements_non_valides.exists():
+        non_valides = projet.elements.exclude(statut=ElementStructurel.Statut.VALIDE)
+        if non_valides.exists():
             return Response(
-                {
-                    "erreur": "Tous les éléments doivent être validés.",
-                    "elements_en_attente": list(
-                        elements_non_valides.values_list("identifiant", flat=True)
-                    ),
-                },
+                {"erreur": "Tous les éléments doivent être validés par un ingénieur avant le DQE.",
+                 "elements_en_attente": list(non_valides.values_list("identifiant", flat=True))},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         export_format = request.query_params.get("export") or (
             request.data.get("export") if isinstance(request.data, dict) else None
         )
-        # Barème du cabinet propriétaire du projet (projet.entreprise), avec
-        # repli sur celui du profil de l'utilisateur courant, puis sur le
-        # barème par défaut du moteur si aucun cabinet n'est rattaché
-        # (comptes legacy / DEMO_MODE) -- jamais un barème partagé entre
-        # cabinets.
-        entreprise = getattr(projet, "entreprise", None) or getattr(
-            getattr(request.user, "profil", None), "entreprise", None
-        )
-        prix_unitaires = entreprise.get_prix_unitaires() if entreprise else None
-        dqe_data = calculer_projet_dqe(projet, prix_unitaires=prix_unitaires)
+        if export_format not in (None, "pdf", "excel"):
+            return Response({"erreur": f"Format d'export invalide : {export_format}"},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # Barème du cabinet PROPRIÉTAIRE du projet, et lui seul.
+        try:
+            dqe_data = calculer_projet_dqe(projet, prix_unitaires=projet.entreprise.get_prix_unitaires())
+        except DQEIncomplet as exc:
+            return Response(
+                {"erreur": "Le DQE ne peut pas être généré : des données indispensables manquent.",
+                 "problemes": exc.problemes},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if export_format is None:
+            if not self._dqe_deja_journalise(projet, dqe_data):
+                self._journaliser_dqe(request, projet, dqe_data)
             return Response(dqe_data, status=status.HTTP_200_OK)
+        return self._exporter_dqe(request, projet, dqe_data, export_format)
 
+    @staticmethod
+    def _dqe_deja_journalise(projet, dqe_data):
+        """Un DQE réaffiché sans aucun changement (même total, mêmes lots,
+        rien de modifié depuis) n'est pas un NOUVEAU DQE : on ne le compte
+        pas une seconde fois dans les analytics."""
+        dernier = EvenementProduit.objects.filter(projet=projet, type=TypeEv.DQE_GENERE).order_by("-date").first()
+        if dernier is None:
+            return False
+        lots = {l["lot"]: l["sous_total"] for l in dqe_data["lots"]}
+        if dernier.donnees.get("total_general") != dqe_data["total_general"] or dernier.donnees.get("lots") != lots:
+            return False
+        modifie = (
+            projet.elements.filter(date_modification__gt=dernier.date).exists()
+            or projet.postes_complementaires.filter(date_modification__gt=dernier.date).exists()
+        )
+        return not modifie
+
+    @staticmethod
+    def _journaliser_dqe(request, projet, dqe_data):
+        # Instantané RÉEL du DQE au moment de sa génération : seule source
+        # des montants affichés par les analytics (aucune reconstitution).
+        enregistrer_evenement(
+            TypeEv.DQE_GENERE, utilisateur=request.user, projet=projet,
+            total_general=dqe_data["total_general"], nb_lignes=len(dqe_data["lignes"]),
+            sous_totaux=dqe_data["sous_totaux"],
+            lots={l["lot"]: l["sous_total"] for l in dqe_data["lots"]},
+            synthese=dqe_data["synthese"],
+        )
+
+    def _exporter_dqe(self, request, projet, dqe_data, export_format):
+        dqe_data["projet"]["date_edition"] = timezone.localdate().isoformat()
+        dqe_data["projet"]["auteur"] = _nom_utilisateur(request.user)
+        if not dqe_data["projet"]["numero_devis"]:
+            dqe_data["projet"]["numero_devis"] = "non attribué"
+        entreprise = _entreprise_export_dict(projet.entreprise)
         nom_fichier_base = f"DQE_{projet.nom.replace(' ', '_')}_{projet.id}"
         if export_format == "pdf":
-            entreprise = _entreprise_export_dict(EntrepriseParametres.get_solo())
             buffer = exporter_dqe_pdf(dqe_data, entreprise=entreprise)
             response = HttpResponse(buffer.getvalue(), content_type="application/pdf")
-            response["Content-Disposition"] = (
-                f'attachment; filename="{nom_fichier_base}.pdf"'
-            )
-        elif export_format == "excel":
-            entreprise = _entreprise_export_dict(EntrepriseParametres.get_solo())
+            response["Content-Disposition"] = f'attachment; filename="{nom_fichier_base}.pdf"'
+        else:
             buffer = exporter_dqe_excel(dqe_data, entreprise=entreprise)
             response = HttpResponse(
                 buffer.getvalue(),
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-            response["Content-Disposition"] = (
-                f'attachment; filename="{nom_fichier_base}.xlsx"'
-            )
-        else:
-            return Response(
-                {"erreur": f"Format d'export invalide: {export_format}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            response["Content-Disposition"] = f'attachment; filename="{nom_fichier_base}.xlsx"'
+        response["Access-Control-Expose-Headers"] = "Content-Disposition"
+        enregistrer_evenement(
+            TypeEv.DQE_EXPORTE, utilisateur=request.user, projet=projet,
+            format=export_format, total_general=dqe_data["total_general"],
+        )
         return response
 
 
-class ElementStructurelViewSet(viewsets.ModelViewSet):
-    queryset = ElementStructurel.objects.all()
+class ElementStructurelViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
+    queryset = ElementStructurel.objects.select_related("projet")
     serializer_class = ElementStructurelSerializer
     permission_classes = [EstMembreEntreprise]
+    champ_cabinet = "projet__entreprise"
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        projet_id = self.request.query_params.get("projet")
+        if projet_id:
+            qs = qs.filter(projet_id=projet_id)
+        return qs
+
+    def get_throttles(self):
+        if self.action == "expliquer_coherence":
+            self.throttle_scope = "assistant_coherence"
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
 
     @action(detail=True, methods=["post"])
     def calculer(self, request, pk=None):
         element = self.get_object()
+        if element.statut == ElementStructurel.Statut.VALIDE:
+            return Response(
+                {"erreur": "Élément verrouillé : déverrouillez-le avant de relancer le calcul."},
+                status=status.HTTP_409_CONFLICT,
+            )
         try:
             resultat = calculer_element(element)
         except CalculNonDisponible as exc:
-            return Response(
-                {"erreur": "Moteur indisponible", "detail": str(exc)},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
+            return Response({"erreur": "Moteur indisponible", "detail": str(exc)},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except EntreeInvalide as exc:
             return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-
         element.resultat_calcul = resultat
         element.save(update_fields=["resultat_calcul", "date_modification"])
         return Response(ElementStructurelSerializer(element).data)
@@ -1033,77 +963,130 @@ class ElementStructurelViewSet(viewsets.ModelViewSet):
         element = self.get_object()
         serializer = ElementValidationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
-        resultat_valide = serializer.validated_data.get(
-            "resultat_valide", element.resultat_calcul
-        )
-        if resultat_valide is None:
-            return Response(
-                {"erreur": "Aucun résultat de calcul disponible à valider."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+        resultat_valide = serializer.validated_data.get("resultat_valide", element.resultat_calcul)
+        if not resultat_valide:
+            return Response({"erreur": "Aucun résultat de calcul disponible à valider."},
+                            status=status.HTTP_400_BAD_REQUEST)
         element.resultat_valide = resultat_valide
         element.statut = ElementStructurel.Statut.VALIDE
         element.save(update_fields=["resultat_valide", "statut", "date_modification"])
+        enregistrer_evenement(TypeEv.ELEMENT_VALIDE, utilisateur=request.user, projet=element.projet,
+                              element_id=element.id)
         return Response(ElementStructurelSerializer(element).data)
 
+    @action(detail=True, methods=["post"], permission_classes=[PeutValiderElement])
+    def deverrouiller(self, request, pk=None):
+        """Déverrouillage CÔTÉ SERVEUR : l'élément repasse en "modifié" et
+        son résultat validé est retiré (il ne peut plus entrer au DQE tant
+        qu'un ingénieur ne l'a pas revalidé)."""
+        element = self.get_object()
+        if element.statut != ElementStructurel.Statut.VALIDE:
+            return Response({"erreur": "Cet élément n'est pas verrouillé."},
+                            status=status.HTTP_409_CONFLICT)
+        element.statut = ElementStructurel.Statut.MODIFIE
+        element.resultat_valide = None
+        element.save(update_fields=["statut", "resultat_valide", "date_modification"])
+        enregistrer_evenement(TypeEv.ELEMENT_DEVERROUILLE, utilisateur=request.user,
+                              projet=element.projet, element_id=element.id)
+        return Response(ElementStructurelSerializer(element).data)
+
+    @action(detail=True, methods=["post"], url_path="expliquer-coherence", url_name="expliquer-coherence")
+    def expliquer_coherence(self, request, pk=None):
+        element = self.get_object()  # 404 si autre cabinet
+        t0 = time.time()
+        analyse = analyser_element_coherence(element)
+        resultat = expliquer_analyse_coherence(analyse)
+        _journaliser_ia(request, f"/api/elements/{element.pk}/expliquer-coherence/",
+                        resultat.get("source_explication", "LOCAL"), t0, projet=element.projet)
+        return Response(resultat, status=status.HTTP_200_OK)
+
     def perform_update(self, serializer):
-        instance = serializer.instance
+        if serializer.instance.statut == ElementStructurel.Statut.VALIDE:
+            raise drf_serializers.ValidationError(
+                {"statut": "Élément verrouillé : un ingénieur doit le déverrouiller avant toute modification."}
+            )
+        serializer.save()
+
+    def perform_destroy(self, instance):
         if instance.statut == ElementStructurel.Statut.VALIDE:
-            serializer.save(statut=ElementStructurel.Statut.MODIFIE)
-        else:
-            serializer.save()
+            raise drf_serializers.ValidationError(
+                {"statut": "Élément verrouillé : déverrouillez-le avant de le supprimer."}
+            )
+        instance.delete()
 
 
-class CoucheChargeViewSet(viewsets.ModelViewSet):
+class CoucheChargeViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
     queryset = CoucheCharge.objects.all()
     serializer_class = CoucheChargeSerializer
     permission_classes = [EstMembreEntreprise]
 
+    def get_queryset(self):
+        entreprise = entreprise_de(self.request.user)
+        if entreprise is None:
+            return CoucheCharge.objects.none()
+        return CoucheCharge.objects.filter(
+            Q(projet__entreprise=entreprise) | Q(element__projet__entreprise=entreprise)
+        ).distinct()
 
-class PosteComplementaireViewSet(viewsets.ModelViewSet):
+
+def _lignes_poste_ratio(type_poste, geometrie):
+    from moteur_calcul.formules.postes_ratio import calculer_poste_ratio
+
+    try:
+        return calculer_poste_ratio(type_poste, geometrie)
+    except KeyError as exc:
+        raise drf_serializers.ValidationError(
+            {"geometrie": f"Donnée géométrique manquante : {exc.args[0]}."}
+        )
+    except (ValueError, TypeError) as exc:
+        raise drf_serializers.ValidationError({"geometrie": str(exc)})
+
+
+class PosteComplementaireViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
     queryset = PosteComplementaire.objects.all()
     serializer_class = PosteComplementaireSerializer
     permission_classes = [EstMembreEntreprise]
+    champ_cabinet = "projet__entreprise"
+
+    def get_queryset(self):
+        # Avant : ?projet=<id> était ignoré -> la liste renvoyait les
+        # postes de TOUS les projets de TOUS les cabinets.
+        qs = super().get_queryset()
+        projet_id = self.request.query_params.get("projet")
+        if projet_id:
+            qs = qs.filter(projet_id=projet_id)
+        return qs.order_by("id")
+
+    def _sauver(self, serializer):
+        mode = serializer.validated_data.get("mode", getattr(serializer.instance, "mode", None))
+        lignes = None
+        if mode == PosteComplementaire.Mode.RATIO:
+            type_poste = serializer.validated_data.get("type_poste", getattr(serializer.instance, "type_poste", None))
+            geometrie = serializer.validated_data.get("geometrie", getattr(serializer.instance, "geometrie", None))
+            lignes = _lignes_poste_ratio(type_poste, geometrie)
+        serializer.save(lignes_calculees=lignes)
 
     def perform_create(self, serializer):
-        mode = serializer.validated_data.get("mode")
-        type_poste = serializer.validated_data.get("type_poste")
-        geometrie = serializer.validated_data.get("geometrie")
+        self._sauver(serializer)
 
-        lignes = None
-        if mode == PosteComplementaire.Mode.RATIO and type_poste and geometrie:
-            try:
-                from moteur_calcul.formules.postes_ratio import calculer_poste_ratio
-
-                lignes = calculer_poste_ratio(type_poste, geometrie)
-            except (ImportError, ModuleNotFoundError):
-                lignes = [
-                    {"designation": f"Ratio {type_poste}", "quantite": 1, "pu": 1000}
-                ]
-
-        serializer.save(lignes_calculees=lignes)
+    def perform_update(self, serializer):
+        self._sauver(serializer)
 
 
 class EntrepriseParametresView(APIView):
-    parser_classes = [MultiPartParser, FormParser, JSONParser]
-    permission_classes = [EstAdminCabinet]
+    """Paramètres du cabinet de l'utilisateur connecté (et de lui seul).
+    Lecture : tout membre. Modification : administrateur du cabinet."""
 
-    def _entreprise_courante(self, request) -> EntrepriseParametres:
-        """Entreprise du Profil de l'utilisateur connecté. Repli sur
-        l'entreprise legacy (pk=1) pour DEMO_MODE ou un utilisateur encore
-        sans Profil -- ne casse pas les comptes créés avant ce sprint."""
-        user = request.user
-        profil = getattr(user, "profil", None) if user and user.is_authenticated else None
-        if profil is not None:
-            return profil.entreprise
-        return EntrepriseParametres.get_solo()
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_permissions(self):
+        if self.request.method in ("GET", "HEAD", "OPTIONS"):
+            return [EstMembreEntreprise()]
+        return [EstAdminCabinet()]
 
     def get(self, request):
-        entreprise = self._entreprise_courante(request)
-        serializer = EntrepriseParametresSerializer(entreprise, context={"request": request})
-        return Response(serializer.data)
+        entreprise = request.user.profil.entreprise
+        return Response(EntrepriseParametresSerializer(entreprise, context={"request": request}).data)
 
     def put(self, request):
         return self._update(request, partial=False)
@@ -1112,13 +1095,59 @@ class EntrepriseParametresView(APIView):
         return self._update(request, partial=True)
 
     def _update(self, request, partial):
-        entreprise = self._entreprise_courante(request)
         serializer = EntrepriseParametresSerializer(
-            entreprise, data=request.data, partial=partial, context={"request": request}
+            request.user.profil.entreprise, data=request.data, partial=partial, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+
+class ReferentielView(APIView):
+    """Référentiel technique exposé au frontend (source unique : le
+    moteur). Évite toute copie locale des constantes côté React."""
+
+    def get(self, request):
+        return Response({
+            "usages": [
+                {"cle": cle, "libelle": cle.replace("_", " ").capitalize(), "charge_exploitation_kn_m2": v}
+                for cle, v in CHARGES_EXPLOITATION.items()
+            ],
+            "contrainte_sol_defaut_kn_m2": CONTRAINTE_SOL_DEFAUT,
+            "cles_prix": [{"cle": c, "libelle": l} for c, l in LIBELLES_PRIX.items()],
+            "lots": [{"cle": c, "libelle": l} for c, l in PosteComplementaire.Lot.choices],
+            "types_postes_ratio": [
+                {"cle": c, "libelle": l, "geometrie": SCHEMA_GEOMETRIE[c]}
+                for c, l in PosteComplementaire.TypePoste.choices
+            ],
+            "norme": "BAEL 91 modifié 99 (seule norme implémentée par le moteur)",
+            "charges_permanentes": {
+                "forfait_kn_m2": G_PLANCHER_FORFAITAIRE_KN_M2,
+                "contenu_forfait": CONTENU_G_FORFAITAIRE,
+                "statut_forfait": "valeur par défaut validée par le technicien BTP (07/10/2026)",
+                "catalogue_couches": [
+                    {"type": t, "libelle": t.replace("_", " ").capitalize(), **v}
+                    for t, v in POIDS_COUCHES_COURANTES.items()
+                ],
+                "avertissement": "Catalogue de couches : valeurs courantes de la pratique, non validées par le "
+                                 "référentiel technique -- à confirmer (moteur_calcul/constantes.py).",
+            },
+            "combinaisons": {
+                "elu": f"{COEFFICIENT_G_ELU} G + {COEFFICIENT_Q_ELU} Q",
+                "els": f"{COEFFICIENT_G_ELS:g} G + {COEFFICIENT_Q_ELS:g} Q",
+            },
+            "methodes_semelles": [{"cle": c, "libelle": l} for c, l in Projet.MethodeSemelles.choices],
+            "charge_exploitation_toiture_kn_m2": CHARGE_EXPLOITATION_TOITURE_KN_M2,
+            "defauts_projet": {
+                "methode_semelles": METHODE_SEMELLES_PAR_DEFAUT,
+                "inclure_poids_propre_ossature": POIDS_PROPRE_OSSATURE_PAR_DEFAUT,
+            },
+            "prix_reference": {
+                "source": "DQE CIMBAT n°0017-2026 (villa basse 4 pièces) -- à adapter au marché du cabinet",
+                "valeurs": PRIX_UNITAIRES_REFERENCE,
+                "avertissements": [],
+            },
+        })
 
 
 class MeView(APIView):
@@ -1126,359 +1155,102 @@ class MeView(APIView):
 
     def get(self, request):
         user = request.user
-        try:
-            entreprise_params = EntrepriseParametres.get_solo()
-        except Exception:
-            entreprise_params = None
-            
+        entreprise = entreprise_de(user)
+        profil = getattr(user, "profil", None)
         return Response({
             "id": user.id,
             "username": user.username,
             "email": user.email,
+            "nom_complet": user.get_full_name(),
             "is_staff": user.is_staff,
-            "entreprise": {
-                "nom": entreprise_params.nom if entreprise_params else "DQE-BTP",
-                "email": entreprise_params.email if entreprise_params else "",
-            }
+            "role": profil.role if profil else None,
+            "entreprise": (
+                {"id": entreprise.id, "nom": entreprise.nom, "email": entreprise.email}
+                if entreprise else None
+            ),
         })
 
-class AssistantStructurerView(APIView):
+
+class _AssistantBase(APIView):
     throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "assistant_structurer"
+    endpoint = ""
 
-    def get_permissions(self):
-        if os.getenv("DEMO_MODE", "False").lower() == "true":
-            return [AllowAny()]
-        return [IsAuthenticated()]
-
-    def post(self, request):
-        description = request.data.get("description", "").strip()
-        if not description:
-            return Response(
-                {"detail": "La description du projet est requise."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if len(description) > 1000:
-            return Response(
-                {"detail": "La description ne doit pas dépasser 1000 caractères."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+    def _executer(self, request, appel):
         t0 = time.time()
         try:
-            res = structurer_description_projet(description)
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint="/api/assistant/structurer-projet/",
-                source=res.get("source", "MOCK"),
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
+            res = appel()
+            _journaliser_ia(request, self.endpoint, res.get("source", "INCONNUE"), t0)
             return Response(res, status=status.HTTP_200_OK)
         except LLMServiceError as exc:
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint="/api/assistant/structurer-projet/",
-                source="FALLBACK_LOCAL",
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
-            return Response(
-                {"detail": str(exc), "code": exc.code},
-                status=exc.status_code,
-            )
-        except Exception as exc:
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint="/api/assistant/structurer-projet/",
-                source="FALLBACK_LOCAL",
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
+            _journaliser_ia(request, self.endpoint, "FALLBACK_LOCAL", t0, succes=False)
+            return Response({"detail": str(exc), "code": exc.code}, status=exc.status_code)
+        except ValueError as exc:
+            _journaliser_ia(request, self.endpoint, "FALLBACK_LOCAL", t0, succes=False)
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            logger.exception("Erreur inattendue dans %s", self.__class__.__name__)
+            _journaliser_ia(request, self.endpoint, "FALLBACK_LOCAL", t0, succes=False)
+            return Response({"detail": "Erreur interne du service d'assistance IA."},
+                            status=status.HTTP_502_BAD_GATEWAY)
 
 
-class AssistantExpliquerView(APIView):
-    throttle_classes = [ScopedRateThrottle]
+class AssistantStructurerView(_AssistantBase):
+    throttle_scope = "assistant_structurer"
+    endpoint = "/api/assistant/structurer-projet/"
+
+    def post(self, request):
+        description = (request.data.get("description") or "").strip()
+        if not description:
+            return Response({"detail": "La description du projet est requise."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if len(description) > 1000:
+            return Response({"detail": "La description ne doit pas dépasser 1000 caractères."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return self._executer(request, lambda: structurer_description_projet(description))
+
+
+class AssistantExpliquerView(_AssistantBase):
     throttle_scope = "assistant_expliquer"
-
-    def get_permissions(self):
-        if os.getenv("DEMO_MODE", "False").lower() == "true":
-            return [AllowAny()]
-        return [IsAuthenticated()]
+    endpoint = "/api/assistant/expliquer-element/"
 
     def post(self, request):
         element_id = request.data.get("element_id")
         if not element_id:
-            return Response(
-                {"detail": "Le champ element_id est requis."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        element = get_object_or_404(ElementStructurel, id=element_id)
+            return Response({"detail": "Le champ element_id est requis."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        element = ElementStructurel.objects.filter(
+            id=element_id, projet__entreprise=entreprise_de(request.user)
+        ).first()
+        if element is None:
+            return Response({"detail": "Élément introuvable."}, status=status.HTTP_404_NOT_FOUND)
         if element.resultat_calcul is None:
-            return Response(
-                {"detail": "Cet élément n'a aucun calcul disponible à expliquer."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        t0 = time.time()
-        try:
-            elem_payload = {
-                "repere": element.identifiant,
-                "type_element": element.type_element,
-                "parametres": {
-                    "hauteur_poteau": element.hauteur_poteau,
-                    "charge_calculee": element.charge_calculee,
-                    "portee": element.portee,
-                    "charge_lineaire": element.charge_lineaire,
-                    "taux_travail_sol": element.taux_travail_sol,
-                },
-                "resultats": element.resultat_calcul or {},
-            }
-            res = expliquer_resultat_element(elem_payload)
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint="/api/assistant/expliquer-element/",
-                source=res.get("source", "MOCK"),
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
-            return Response(res, status=status.HTTP_200_OK)
-        except LLMServiceError as exc:
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint="/api/assistant/expliquer-element/",
-                source="FALLBACK_LOCAL",
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
-            return Response(
-                {"detail": str(exc), "code": exc.code},
-                status=exc.status_code,
-            )
-        except Exception as exc:
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint="/api/assistant/expliquer-element/",
-                source="FALLBACK_LOCAL",
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Cet élément n'a aucun calcul disponible à expliquer."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        payload = {
+            "repere": element.identifiant,
+            "type_element": element.type_element,
+            "parametres": {
+                "hauteur_poteau": element.hauteur_poteau,
+                "charge_calculee": element.charge_calculee,
+                "portee": element.portee,
+                "charge_lineaire": element.charge_lineaire,
+                "taux_travail_sol": element.taux_travail_sol,
+            },
+            "resultats": element.resultat_calcul or {},
+        }
+        return self._executer(request, lambda: expliquer_resultat_element(payload))
 
 
-class AssistantSuggererPosteView(APIView):
-    throttle_classes = [ScopedRateThrottle]
+class AssistantSuggererPosteView(_AssistantBase):
     throttle_scope = "assistant_suggerer_poste"
-
-    def get_permissions(self):
-        if os.getenv("DEMO_MODE", "False").lower() == "true":
-            return [AllowAny()]
-        return [IsAuthenticated()]
+    endpoint = "/api/assistant/suggerer-poste/"
 
     def post(self, request):
-        description = request.data.get("description", "").strip()
+        description = (request.data.get("description") or "").strip()
         if not description:
-            return Response(
-                {"detail": "La description du poste est requise."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "La description du poste est requise."},
+                            status=status.HTTP_400_BAD_REQUEST)
         if len(description) > 500:
-            return Response(
-                {"detail": "La description ne doit pas dépasser 500 caractères."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        t0 = time.time()
-        try:
-            res = suggerer_poste_complementaire(description)
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint="/api/assistant/suggerer-poste/",
-                source=res.get("source", "MOCK"),
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
-            return Response(res, status=status.HTTP_200_OK)
-        except LLMServiceError as exc:
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint="/api/assistant/suggerer-poste/",
-                source="FALLBACK_LOCAL",
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
-            return Response(
-                {"detail": str(exc), "code": exc.code},
-                status=exc.status_code,
-            )
-        except ValueError as exc:
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint="/api/assistant/suggerer-poste/",
-                source="FALLBACK_LOCAL",
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as exc:
-            logger.exception("Erreur inattendue dans AssistantSuggererPosteView")
-            duree_ms = int((time.time() - t0) * 1000)
-            enregistrer_appel_ia(
-                endpoint="/api/assistant/suggerer-poste/",
-                source="FALLBACK_LOCAL",
-                utilisateur=request.user,
-                duree_ms=duree_ms,
-            )
-            return Response(
-                {"detail": "Erreur interne du service d'assistance IA."},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-class AdminUserManagementViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
-    serializer_class = ProfilSerializer
-
-    def get_queryset(self):
-        user = self.request.user
-        try:
-            user_profil = user.profil
-            # L'admin ne voit et ne gère que les utilisateurs de son propre cabinet/entreprise
-            return User.objects.filter(profil__entreprise=user_profil.entreprise)
-        except Profil.DoesNotExist:
-            return User.objects.none()
-
-    @action(detail=False, methods=['post'])
-    def inviter(self, request):
-        """Endpoint réservé à l'admin pour inviter un utilisateur dans le cabinet"""
-        try:
-            admin_profil = request.user.profil
-            if admin_profil.role != Profil.Role.ADMIN:
-                return Response(
-                    {"detail": "Action réservée aux administrateurs du cabinet."},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        except Profil.DoesNotExist:
-            return Response(status=status.HTTP_403_FORBIDDEN, data={"detail": "Profil introuvable."})
-
-        serializer = AdminInviteUserSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-
-        # Création de l'utilisateur (inactif par défaut en attendant l'activation)
-        new_user = User.objects.create_user(
-            username=data['username'],
-            email=data['email'],
-            first_name=data.get('first_name', ''),
-            last_name=data.get('last_name', ''),
-            is_active=False
-        )
-        new_user.set_unusable_password()
-        new_user.save()
-
-        # Rattachement au même cabinet et attribution du rôle
-        Profil.objects.create(
-            user=new_user,
-            entreprise=admin_profil.entreprise,
-            role=data['role']
-        )
-
-        return Response(
-            {"detail": "Invitation envoyée avec succès. Compte créé en attente d'activation."},
-            status=status.HTTP_201_CREATED
-        )
-
-    @action(detail=True, methods=['post'])
-    def desactiver(self, request, pk=None):
-        """Endpoint pour désactiver un compte du cabinet"""
-        target_user = self.get_object()
-        
-        if target_user == request.user:
-            return Response(
-                {"detail": "Vous ne pouvez pas désactiver votre propre compte."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        target_user.is_active = False
-        target_user.save()
-
-        return Response({"detail": f"Le compte de {target_user.username} a été désactivé."})
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def demande_reinitialisation_mdp(request):
-    """Génère un lien/token sécurisé de réinitialisation basé sur l'email"""
-    email = request.data.get('email')
-    try:
-        user = User.objects.get(email=email)
-        token = default_token_generator.make_token(user)
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
-        
-        reset_url = f"http://localhost:5173/reset-password/{uid}/{token}"
-        
-        return Response({
-            "detail": "Instructions envoyées.",
-            "reset_url": reset_url
-        }, status=status.HTTP_200_OK)
-        
-    except User.DoesNotExist:
-        return Response({
-            "detail": "Instructions de réinitialisation envoyées si le compte existe.",
-            "reset_url": ""
-        }, status=status.HTTP_200_OK)
-
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def confirmer_reinitialisation_mdp(request):
-    """Valide le token et applique le nouveau mot de passe"""
-    uid = request.data.get('uid')
-    token = request.data.get('token')
-    nouveau_mdp = request.data.get('nouveau_mdp')
-
-    if not all([uid, token, nouveau_mdp]):
-        return Response({"detail": "Paramètres manquants."}, status=status.HTTP_400_BAD_REQUEST)
-
-    try:
-        user_id = force_str(urlsafe_base64_decode(uid))
-        user = User.objects.get(pk=user_id)
-    except (TypeError, ValueError, OverflowError, User.DoesNotExist):
-        user = None
-
-    if user is not None and default_token_generator.check_token(user, token):
-        user.set_password(nouveau_mdp)
-        user.save()
-        return Response({"detail": "Mot de passe réinitialisé avec succès."}, status=status.HTTP_200_OK)
-    else:
-        return Response({"detail": "Le lien est invalide ou a expiré."}, status=status.HTTP_400_BAD_REQUEST)
-
-@api_view(['GET', 'PUT'])
-@permission_classes([IsAuthenticated])
-def gerer_profil_utilisateur(request):
-    """Permet de consulter ou mettre à jour son propre profil"""
-    user = request.user
-    if request.method == 'GET':
-        serializer = ProfilSerializer(user.profil)
-        return Response(serializer.data)
-    
-    elif request.method == 'PUT':
-        serializer = ProfilSerializer(user.profil, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def changer_mot_de_passe(request):
-    """Permet à un utilisateur connecté de modifier son mot de passe"""
-    user = request.user
-    ancien_mdp = request.data.get('ancien_mdp')
-    nouveau_mdp = request.data.get('nouveau_mdp')
-
-    if not all([ancien_mdp, nouveau_mdp]):
-        return Response({"detail": "Veuillez fournir l'ancien et le nouveau mot de passe."}, status=status.HTTP_400_BAD_REQUEST)
-
-    if not user.check_password(ancien_mdp):
-        return Response({"detail": "L'ancien mot de passe est incorrect."}, status=status.HTTP_400_BAD_REQUEST)
-
-    user.set_password(nouveau_mdp)
-    user.save()
-    return Response({"detail": "Mot de passe modifié avec succès."}, status=status.HTTP_200_OK)
+            return Response({"detail": "La description ne doit pas dépasser 500 caractères."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return self._executer(request, lambda: suggerer_poste_complementaire(description))

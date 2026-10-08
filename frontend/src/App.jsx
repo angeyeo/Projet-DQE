@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import LandingPage from './components/LandingPage';
 import LoginPage from './components/LoginPage';
 import RegisterPage from './components/RegisterPage';
@@ -7,7 +7,6 @@ import ActivateAccountPage from './components/ActivateAccountPage';
 import ResetPasswordConfirmPage from './components/ResetPasswordConfirmPage';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
-import DashboardView from './components/DashboardView';
 import Step1_Parametres from './components/Step1_Parametres';
 import StepDalles from './components/StepDalles';
 import Step2_Calculs from './components/Step2_Calculs';
@@ -16,384 +15,257 @@ import StepPlanFondation from './components/StepPlanFondation';
 import Step4_DQEExport from './components/Step4_DQEExport';
 import SettingsEntreprise from './components/settingsentreprise';
 import TeamManagementView from './components/TeamManagementView';
-import { dqeService } from './api/dqeService';
+import MesProjetsView from './components/MesProjetsView';
+import CabinetDashboard from './components/dashboards/CabinetDashboard';
+import ProjetDashboard from './components/dashboards/ProjetDashboard';
+import StaffDashboard from './components/dashboards/StaffDashboard';
+import Alerte from './components/ui/Alerte';
+import AucunProjet from './components/ui/AucunProjet';
+import { dqeService, projetVersFormulaire } from './api/dqeService';
+import useProjetCourant from './hooks/useProjetCourant';
 
-// Liens à usage unique envoyés par le backend (voir auth_views.py) :
-// /activer-compte?uid=...&token=... et
-// /reinitialiser-mot-de-passe?uid=...&token=... -- pas de routeur dans
-// cette app, donc on les détecte une fois au chargement.
+// Liens à usage unique envoyés par le backend (activation, réinitialisation).
 const DEEP_LINK_PATHS = {
   '/activer-compte': 'activer-compte',
   '/reinitialiser-mot-de-passe': 'reinitialiser-mot-de-passe',
 };
+const VUES_PUBLIQUES = ['landing', 'login', 'register', 'forgot-password', 'activer-compte', 'reinitialiser-mot-de-passe'];
+// Vues qui n'ont de sens qu'avec un projet ouvert.
+const VUES_PROJET = ['step2', 'stepDalles', 'step3', 'step3bis', 'step4', 'analyse'];
+
+const FORMULAIRE_VIDE = {
+  id: null,
+  nomProjet: '',
+  numeroDevis: '',
+  typeUsage: '',
+  nombreNiveaux: '',
+  nbTraveesX: '',
+  nbTraveesY: '',
+  porteeX: '',
+  porteeY: '',
+  hauteurEtage: '',
+  chargeExploitation: '',
+  contrainteSol: '',
+  chargePermanente: '',
+  couchesPermanentes: [],
+  methodeSemelles: 'ELU',
+  // Défaut validé par le technicien BTP : le forfait G ne couvre pas poutres et poteaux.
+  inclurePoidsPropre: true,
+  ifcImporte: false,
+};
+
+const lireVue = () => {
+  try { return localStorage.getItem('dqe_active_view'); } catch { return null; }
+};
+
+const estMobile = () => typeof window !== 'undefined' && window.innerWidth <= 768;
 
 export default function App() {
-  // Persistence de la vue active au rafraîchissement (F5). Une vraie
-  // authentification existe maintenant (JWT) : un visiteur non connecté
-  // ne doit jamais retomber directement sur le tableau de bord, même si
-  // c'était la dernière vue enregistrée avant expiration de sa session.
   const [activeView, setActiveView] = useState(() => {
     const vueLien = DEEP_LINK_PATHS[window.location.pathname];
     if (vueLien) return vueLien;
     if (!dqeService.isAuthenticated()) return 'landing';
-    return localStorage.getItem('dqe_active_view') || 'dashboard';
+    return lireVue() || 'dashboard';
   });
-
-  // uid/token du lien d'activation ou de réinitialisation, lus une seule
-  // fois (ces vues sont éphémères, jamais rechargées depuis le stockage).
   const [deepLinkParams] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     return { uid: params.get('uid'), token: params.get('token') };
   });
+  const [isCollapsed, setIsCollapsed] = useState(estMobile);
+
+  const authentifie = !VUES_PUBLIQUES.includes(activeView);
+  const courant = useProjetCourant(authentifie);
 
   useEffect(() => {
-    // Ne pas persister les vues éphémères liées à un lien à usage unique :
-    // recharger la page plus tard ne doit pas y retomber.
     if (activeView === 'activer-compte' || activeView === 'reinitialiser-mot-de-passe') return;
-    localStorage.setItem('dqe_active_view', activeView);
+    try { localStorage.setItem('dqe_active_view', activeView); } catch { /* non persisté */ }
   }, [activeView]);
 
-  // Session expirée / refresh token révoqué (déclenché par dqeService's
-  // apiFetch) -- renvoie proprement à la landing plutôt que de laisser
-  // l'utilisateur face à des appels API qui échouent en boucle.
   useEffect(() => {
-    const onAuthExpired = () => setActiveView('landing');
+    const onAuthExpired = () => setActiveView('login');
     window.addEventListener('dqe:auth-expired', onAuthExpired);
     return () => window.removeEventListener('dqe:auth-expired', onAuthExpired);
   }, []);
 
+  // Navigation : sur mobile, la sidebar se replie après un choix.
+  const naviguer = useCallback((vue) => {
+    setActiveView(vue);
+    if (estMobile()) setIsCollapsed(true);
+  }, []);
+
+  // --- Compte connecté ----------------------------------------------------
+  const [moi, setMoi] = useState(null);
+  const [entreprise, setEntreprise] = useState(null);
+  const [entrepriseLoading, setEntrepriseLoading] = useState(true);
+  const [erreurCompte, setErreurCompte] = useState(null);
+
+  useEffect(() => {
+    if (!authentifie) return undefined;
+    let annule = false;
+    setEntrepriseLoading(true);
+    Promise.allSettled([dqeService.getMe(), dqeService.getEntreprise()]).then(([me, ent]) => {
+      if (annule) return;
+      setMoi(me.status === 'fulfilled' ? me.value : null);
+      setEntreprise(ent.status === 'fulfilled' ? ent.value : null);
+      setErreurCompte(
+        ent.status === 'rejected' && ent.reason?.status === 403
+          ? "Votre compte n'est rattaché à aucun cabinet : les projets ne sont pas accessibles. Contactez l'administrateur de votre cabinet."
+          : null,
+      );
+      setEntrepriseLoading(false);
+    });
+    return () => { annule = true; };
+  }, [authentifie]);
+
   const handleLogout = async () => {
     await dqeService.logout();
+    courant.fermer();
+    setMoi(null);
     setActiveView('landing');
   };
 
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
-  // État du Projet BTP
-  const [projectData, setProjectData] = useState({
-    nomProjet: '',
-    numeroDevis: '',
-    planFileName: '',
-    planFileSize: '',
-    typeUsage: 'habitation',
-    nombreNiveaux: '',
-    nbTraveesX: '',
-    nbTraveesY: '',
-    porteeX: '',
-    porteeY: '',
-    hauteurEtage: '',
-    chargeExploitation: '',
-    norme: 'BAEL91',
-  });
-
-  // Charges permanentes composées
-  const [couchesG, setCouchesG] = useState([]);
-
-  // Sections calculées
-  const [sections, setSections] = useState({
-    poteaux: [],
-    poutres: [],
-    semelles: [],
-  });
-
-  // Données du Devis DQE
-  const [dqeData, setDqeData] = useState(null);
-
-  // Verrouillage et validation
-  const [validationError, setValidationError] = useState(null);
-  const [validatingId, setValidatingId] = useState(null);
-
-  // Entreprise réelle (dqeService.getEntreprise) -- affichée dans la Sidebar
-  // à la place d'un nom de personne codé en dur. Pas de donnée inventée :
-  // si l'entreprise n'est pas encore configurée, entreprise reste null et
-  // la Sidebar l'indique honnêtement.
-  const [entreprise, setEntreprise] = useState(null);
-  const [entrepriseLoading, setEntrepriseLoading] = useState(true);
-
+  // --- Formulaire du projet (miroir éditable des données serveur) ----------
+  const [formulaire, setFormulaire] = useState(FORMULAIRE_VIDE);
   useEffect(() => {
-    let annule = false;
-    dqeService.getEntreprise()
-      .then((data) => { if (!annule) setEntreprise(data || null); })
-      .catch(() => { if (!annule) setEntreprise(null); })
-      .finally(() => { if (!annule) setEntrepriseLoading(false); });
-    return () => { annule = true; };
-  }, []);
+    if (courant.projet) setFormulaire(projetVersFormulaire(courant.projet));
+  }, [courant.projet]);
+  const updateProjectData = (champs) => setFormulaire((prev) => ({ ...prev, ...champs }));
 
-  // Profil de l'utilisateur connecté (rôle, entreprise) -- nécessaire pour
-  // savoir s'il faut afficher "Équipe" dans la Sidebar (réservé Admin).
-  // Pas de donnée inventée : reste null tant que l'appel n'a pas répondu
-  // ou si l'utilisateur n'est pas authentifié.
-  const [moiProfil, setMoiProfil] = useState(null);
-
-  useEffect(() => {
-    let annule = false;
-    if (!dqeService.isAuthenticated()) return undefined;
-    dqeService.getMoi()
-      .then((data) => { if (!annule) setMoiProfil(data || null); })
-      .catch(() => { if (!annule) setMoiProfil(null); });
-    return () => { annule = true; };
-  }, [activeView === 'landing' || activeView === 'login']);
-
-
-  // Postes de main d'œuvre saisis manuellement
-  const [postesMainDoeuvre, setPostesMainDoeuvre] = useState([]);
-  const [mainDoeuvreError, setMainDoeuvreError] = useState(null);
-
-  const ajouterPosteMainDoeuvre = async (poste) => {
-    setMainDoeuvreError(null);
-    try {
-      const created = await dqeService.ajouterPosteMainDoeuvre(sections.projetId, poste);
-      setPostesMainDoeuvre((prev) => [...prev, created]);
-    } catch (err) {
-      setMainDoeuvreError(`Impossible d'ajouter le poste : ${err.message}`);
-    }
+  const ouvrirProjet = (id, vue = 'step3') => {
+    courant.ouvrir(id);
+    naviguer(vue);
   };
 
-  const supprimerPosteMainDoeuvre = async (posteId) => {
-    setMainDoeuvreError(null);
-    try {
-      await dqeService.supprimerPosteMainDoeuvre(posteId);
-      setPostesMainDoeuvre((prev) => prev.filter((p) => p.id !== posteId));
-    } catch (err) {
-      setMainDoeuvreError(`Impossible de supprimer le poste : ${err.message}`);
-    }
+  const nouveauProjet = () => {
+    courant.fermer();
+    setFormulaire(FORMULAIRE_VIDE);
+    setCalcul({ erreur: null, champs: [], hypotheses: [], avertissements: [] });
+    naviguer('step1');
   };
 
-  const updateProjectData = (newFields) => {
-    setProjectData((prev) => ({ ...prev, ...newFields }));
-  };
+  // --- Étape 1 -> 2 : enregistrement + génération des éléments -------------
+  const [calcul, setCalcul] = useState({ enCours: false, erreur: null, champs: [], hypotheses: [], avertissements: [] });
 
   const handleCalculate = async () => {
+    setCalcul({ enCours: true, erreur: null, champs: [], hypotheses: [], avertissements: [] });
     try {
-      const totalG = couchesG.reduce((sum, c) => sum + (parseFloat(c.chargeG) || 0), 0);
-      const updatedData = { ...projectData, chargePermanenteG: totalG > 0 ? totalG : 5.0 };
-      const results = await dqeService.calculateSections(updatedData);
-      setSections(results);
-      setPostesMainDoeuvre([]);
-      setMainDoeuvreError(null);
-      setActiveView('step2');
+      const res = await dqeService.enregistrerEtGenerer(formulaire);
+      await courant.ouvrir(res.projetId);
+      setCalcul({ enCours: false, erreur: null, champs: [], hypotheses: res.hypotheses, avertissements: res.avertissements });
+      naviguer('step2');
     } catch (err) {
-      console.error("Erreur lors du calcul :", err);
-      // Ancien comportement : on avançait quand même vers step2 malgré l'échec.
-      // Problème : sections.projetId n'est alors jamais renseigné (sections
-      // garde sa valeur initiale {poteaux:[], poutres:[], semelles:[]}), ce qui
-      // fait échouer silencieusement StepPlanFondation plus loin dans le
-      // parcours (chargerPlanFondation() ne se déclenche jamais sans projetId,
-      // et le téléchargement DXF échoue aussi) -- sans qu'aucun message n'aide
-      // à comprendre pourquoi. On informe maintenant l'utilisateur et on reste
-      // sur l'étape courante plutôt que d'avancer vers un état cassé.
-      alert(
-        "Impossible de lancer le calcul : " + (err.message || "erreur inconnue") +
-        "\n\nVous êtes maintenu sur cette étape -- corrigez le problème (ou réessayez) avant de continuer."
-      );
+      if (err.projetId && err.projetId !== courant.projetId) await courant.ouvrir(err.projetId);
+      setCalcul({
+        enCours: false,
+        erreur: err.message,
+        champs: err.data?.champs_manquants || [],
+        hypotheses: [],
+        avertissements: [],
+      });
     }
   };
 
-  const handleGoToValidation = () => {
-    setActiveView('step3');
+  // Crée le projet côté serveur si besoin (import IFC / Vision avant calcul).
+  const assurerProjet = async () => {
+    if (formulaire.id) return formulaire.id;
+    // Le serveur exige un nom : on le demande avant de créer le projet
+    // (jamais de nom inventé à la place de l'utilisateur).
+    if (!formulaire.nomProjet?.trim()) {
+      document.getElementById('champ-s1-1')?.focus();
+      throw new Error('saisissez d’abord le nom du projet (champ « Nom du projet » plus bas), puis déposez à nouveau le fichier.');
+    }
+    const projet = await dqeService.createProjet(formulaire);
+    await courant.ouvrir(projet.id);
+    return projet.id;
   };
 
-  const handleGenerateDQE = async () => {
-    setValidationError(null);
+  // --- Verrouillage (toujours côté serveur, puis relecture du projet) ------
+  const [validation, setValidation] = useState({ erreur: null, enCoursId: null });
+
+  const basculerVerrou = async (item, resultatManuel) => {
+    setValidation({ erreur: null, enCoursId: item.elementId });
     try {
-      const dqeResults = await dqeService.calculateDQE(sections.projetId, sections);
-      setDqeData(dqeResults);
-      setActiveView('step4');
-    } catch (err) {
-      setValidationError(`Impossible de générer le DQE : ${err.message}`);
-    }
-  };
-
-  const buildResultatManuel = (item, category) => {
-    if (category === 'Poteau') {
-      const cote = parseFloat(item.manualCoteCm);
-      if (!cote || cote <= 0) {
-        return { error: 'Renseignez un côté de poteau (cm) valide avant de verrouiller.' };
-      }
-      return { value: { cote_cm: cote, manuel: true } };
-    }
-    if (category === 'Poutre') {
-      const largeur = parseFloat(item.manualLargeurCm);
-      const hauteur = parseFloat(item.manualHauteurCm);
-      if (!largeur || largeur <= 0 || !hauteur || hauteur <= 0) {
-        return { error: 'Renseignez une largeur ET une hauteur (cm) valides avant de verrouiller.' };
-      }
-      return { value: { largeur_cm: largeur, hauteur_cm: hauteur, manuel: true } };
-    }
-    if (category === 'Semelle') {
-      const cote = parseFloat(item.manualCoteCm);
-      const hauteur = parseFloat(item.manualHauteurCm);
-      if (!cote || cote <= 0 || !hauteur || hauteur <= 0) {
-        return { error: 'Renseignez un côté ET une hauteur (cm) valides avant de verrouiller.' };
-      }
-      return { value: { cote_cm: cote, hauteur_cm: hauteur, manuel: true } };
-    }
-    return { error: `Saisie manuelle non prise en charge pour le type "${category}".` };
-  };
-
-  const formatSectionManuelle = (item, category) => {
-    if (category === 'Poteau') return `${item.manualCoteCm} x ${item.manualCoteCm} cm`;
-    if (category === 'Poutre') return `${item.manualLargeurCm} x ${item.manualHauteurCm} cm`;
-    if (category === 'Semelle') return `${item.manualCoteCm} x ${item.manualCoteCm} x ${item.manualHauteurCm} cm`;
-    return item.section;
-  };
-
-  const categoryToKey = (category) => {
-    if (category === 'Poteau') return 'poteaux';
-    return category.toLowerCase() + 's';
-  };
-
-  const toggleLock = async (id, category) => {
-    const key = categoryToKey(category);
-    const item = (sections[key] || []).find((el) => el.id === id);
-    if (!item) return false;
-
-    setValidationError(null);
-    let resultatManuel = null;
-
-    if (!item.locked) {
-      if (item.calculIndisponible) {
-        const manuel = buildResultatManuel(item, category);
-        if (manuel.error) {
-          setValidationError(`${item.name} : ${manuel.error}`);
-          return false;
-        }
-        resultatManuel = manuel.value;
-      }
-
-      setValidatingId(id);
-      try {
-        await dqeService.validerElementDRF(item.elementId, resultatManuel || undefined);
-      } catch (err) {
-        setValidationError(`Impossible de valider ${item.name} : ${err.message}`);
-        setValidatingId(null);
-        return false;
-      }
-      setValidatingId(null);
-    }
-
-    setSections((prev) => ({
-      ...prev,
-      [key]: prev[key].map((el) => {
-        if (el.id !== id) return el;
-        const updated = { ...el, locked: !el.locked };
-        if (resultatManuel) {
-          updated.calculIndisponible = false;
-          updated.erreurCalcul = null;
-          updated.resultat = resultatManuel;
-          updated.section = formatSectionManuelle(el, category);
-        }
-        return updated;
-      }),
-    }));
-    return true;
-  };
-
-  const toggleLockAll = async (lockState) => {
-    setValidationError(null);
-
-    const parLot = [
-      ...sections.poteaux.map((el) => ({ el, category: 'Poteau' })),
-      ...sections.poutres.map((el) => ({ el, category: 'Poutre' })),
-      ...sections.semelles.map((el) => ({ el, category: 'Semelle' })),
-    ];
-
-    if (lockState) {
-      const nonValides = parLot.filter(({ el }) => !el.locked);
-
-      const manuels = new Map();
-      for (const { el, category } of nonValides) {
-        if (el.calculIndisponible) {
-          const manuel = buildResultatManuel(el, category);
-          if (manuel.error) {
-            setValidationError(`${el.name} : ${manuel.error}`);
-            return false;
-          }
-          manuels.set(el.elementId, manuel.value);
-        }
-      }
-
-      try {
-        await Promise.all(
-          nonValides.map(({ el }) =>
-            dqeService.validerElementDRF(el.elementId, manuels.get(el.elementId))
-          )
-        );
-      } catch (err) {
-        setValidationError(`Erreur lors de la validation groupée : ${err.message}`);
-        return false;
-      }
-
-      setSections((prev) => ({
-        ...prev,
-        poteaux: prev.poteaux.map((el) =>
-          manuels.has(el.elementId)
-            ? { ...el, locked: true, calculIndisponible: false, erreurCalcul: null, resultat: manuels.get(el.elementId), section: formatSectionManuelle(el, 'Poteau') }
-            : { ...el, locked: true }
-        ),
-        poutres: prev.poutres.map((el) =>
-          manuels.has(el.elementId)
-            ? { ...el, locked: true, calculIndisponible: false, erreurCalcul: null, resultat: manuels.get(el.elementId), section: formatSectionManuelle(el, 'Poutre') }
-            : { ...el, locked: true }
-        ),
-        semelles: prev.semelles.map((el) =>
-          manuels.has(el.elementId)
-            ? { ...el, locked: true, calculIndisponible: false, erreurCalcul: null, resultat: manuels.get(el.elementId), section: formatSectionManuelle(el, 'Semelle') }
-            : { ...el, locked: true }
-        ),
-      }));
+      if (item.locked) await dqeService.deverrouillerElement(item.elementId);
+      else await dqeService.validerElement(item.elementId, resultatManuel);
+      await courant.recharger();
+      setValidation({ erreur: null, enCoursId: null });
       return true;
+    } catch (err) {
+      setValidation({ erreur: `${item.name} : ${err.message}`, enCoursId: null });
+      return false;
     }
-
-    setSections((prev) => ({
-      ...prev,
-      poteaux: prev.poteaux.map((item) => ({ ...item, locked: lockState })),
-      poutres: prev.poutres.map((item) => ({ ...item, locked: lockState })),
-      semelles: prev.semelles.map((item) => ({ ...item, locked: lockState })),
-    }));
-    return true;
   };
 
-  const updateSection = (id, category, field, value) => {
-    const key = categoryToKey(category);
-    setSections((prev) => ({
-      ...prev,
-      [key]: prev[key].map((item) =>
-        item.id === id ? { ...item, [field]: value } : item
-      ),
-    }));
+  const basculerTout = async (verrouiller, manuels) => {
+    const tous = Object.values(courant.sections).flat();
+    const cibles = tous.filter((el) => el.locked !== verrouiller);
+    setValidation({ erreur: null, enCoursId: 'tous' });
+    const echecs = [];
+    for (const el of cibles) {
+      try {
+        if (verrouiller) {
+          if (el.calculIndisponible && !manuels[el.elementId]) {
+            echecs.push(`${el.name} : saisie manuelle requise (aucun résultat de calcul).`);
+            continue;
+          }
+          await dqeService.validerElement(el.elementId, manuels[el.elementId]);
+        } else {
+          await dqeService.deverrouillerElement(el.elementId);
+        }
+      } catch (err) {
+        echecs.push(`${el.name} : ${err.message}`);
+      }
+    }
+    await courant.recharger();
+    setValidation({ erreur: echecs.length ? echecs.join(' · ') : null, enCoursId: null });
+    return echecs.length === 0;
   };
 
-  const allElements = [
-    ...(sections.poteaux || []),
-    ...(sections.poutres || []),
-    ...(sections.semelles || []),
-  ];
-  const lockedCount = allElements.filter((e) => e.locked).length;
+  // --- Postes complémentaires ----------------------------------------------
+  const [erreurPoste, setErreurPoste] = useState(null);
+  const ajouterPoste = async (poste) => {
+    setErreurPoste(null);
+    try {
+      await dqeService.ajouterPosteComplementaire(courant.projetId, poste);
+      await courant.recharger();
+      return true;
+    } catch (err) {
+      setErreurPoste(`Impossible d'ajouter le poste : ${err.message}`);
+      return false;
+    }
+  };
+  const supprimerPoste = async (posteId) => {
+    setErreurPoste(null);
+    try {
+      await dqeService.supprimerPosteComplementaire(posteId);
+      await courant.recharger();
+    } catch (err) {
+      setErreurPoste(`Impossible de supprimer le poste : ${err.message}`);
+    }
+  };
 
+  const tousElements = Object.values(courant.sections).flat();
+  const lockedCount = tousElements.filter((e) => e.locked).length;
+
+  // --- Vues publiques -------------------------------------------------------
   if (activeView === 'landing') {
     return (
       <LandingPage
-        // "Commencer un projet" suppose désormais un vrai compte (les
-        // projets sont rattachés à une entreprise) -- vers l'inscription
-        // si non connecté, direct au tableau de bord sinon.
         onGetStarted={() => setActiveView(dqeService.isAuthenticated() ? 'dashboard' : 'register')}
         onLogin={() => setActiveView('login')}
       />
     );
   }
-
   if (activeView === 'login') {
     return (
       <LoginPage
-        onEnterApp={() => setActiveView('dashboard')}
+        onEnterApp={() => setActiveView(lireVue() && !VUES_PUBLIQUES.includes(lireVue()) ? lireVue() : 'dashboard')}
         onBackToLanding={() => setActiveView('landing')}
         onGoToRegister={() => setActiveView('register')}
         onGoToForgotPassword={() => setActiveView('forgot-password')}
       />
     );
   }
-
   if (activeView === 'register') {
     return (
       <RegisterPage
@@ -403,144 +275,152 @@ export default function App() {
       />
     );
   }
-
   if (activeView === 'forgot-password') {
-    return (
-      <ForgotPasswordPage
-        onBackToLanding={() => setActiveView('landing')}
-        onGoToLogin={() => setActiveView('login')}
-      />
-    );
+    return <ForgotPasswordPage onBackToLanding={() => setActiveView('landing')} onGoToLogin={() => setActiveView('login')} />;
   }
-
   if (activeView === 'activer-compte') {
-    return (
-      <ActivateAccountPage
-        uid={deepLinkParams.uid}
-        token={deepLinkParams.token}
-        onGoToLogin={() => setActiveView('login')}
-      />
-    );
+    return <ActivateAccountPage uid={deepLinkParams.uid} token={deepLinkParams.token} onGoToLogin={() => setActiveView('login')} />;
+  }
+  if (activeView === 'reinitialiser-mot-de-passe') {
+    return <ResetPasswordConfirmPage uid={deepLinkParams.uid} token={deepLinkParams.token} onGoToLogin={() => setActiveView('login')} />;
   }
 
-  if (activeView === 'reinitialiser-mot-de-passe') {
-    return (
-      <ResetPasswordConfirmPage
-        uid={deepLinkParams.uid}
-        token={deepLinkParams.token}
-        onGoToLogin={() => setActiveView('login')}
-      />
-    );
-  }
+  // --- Application ----------------------------------------------------------
+  const vueProjetSansProjet = VUES_PROJET.includes(activeView) && !courant.projetId;
+
+  const contenu = () => {
+    if (vueProjetSansProjet) {
+      return <AucunProjet onOuvrir={() => naviguer('projets')} onNouveau={nouveauProjet} />;
+    }
+    if (VUES_PROJET.includes(activeView) && courant.chargement && !courant.projet) {
+      return <div className="glass-panel etat-chargement" role="status">Chargement du projet…</div>;
+    }
+    switch (activeView) {
+      case 'dashboard':
+        return <CabinetDashboard onOuvrirProjet={ouvrirProjet} onNouveau={nouveauProjet} onNaviguer={naviguer} />;
+      case 'projets':
+        return (
+          <MesProjetsView
+            projetCourantId={courant.projetId}
+            onOuvrir={ouvrirProjet}
+            onNouveau={nouveauProjet}
+            onProjetSupprime={(id) => { if (id === courant.projetId) courant.fermer(); }}
+          />
+        );
+      case 'analyse':
+        return <ProjetDashboard projetId={courant.projetId} onNaviguer={naviguer} />;
+      case 'staff':
+        return moi?.is_staff ? <StaffDashboard /> : <Alerte type="erreur">Accès réservé à l'équipe interne.</Alerte>;
+      case 'step1':
+        return (
+          <Step1_Parametres
+            projectData={formulaire}
+            updateProjectData={updateProjectData}
+            assurerProjet={assurerProjet}
+            onNext={handleCalculate}
+            calcul={calcul}
+            alertes={(courant.projet?.alertes_plausibilite || []).filter((a) => !a.element)}
+          />
+        );
+      case 'step2':
+        return (
+          <Step2_Calculs
+            sections={courant.sections}
+            projet={courant.projet}
+            hypotheses={calcul.hypotheses.length ? calcul.hypotheses : courant.projet?.hypotheses_calcul?.hypotheses || []}
+            alertes={courant.projet?.alertes_plausibilite || []}
+            avertissements={calcul.avertissements}
+            onBack={() => naviguer('step1')}
+            onNext={() => naviguer('stepDalles')}
+          />
+        );
+      case 'stepDalles':
+        return (
+          <StepDalles
+            projetId={courant.projetId}
+            dalles={courant.sections.dalles}
+            onChange={courant.recharger}
+            onBack={() => naviguer('step2')}
+            onNext={() => naviguer('step3')}
+          />
+        );
+      case 'step3':
+        return (
+          <Step3_ValidationLock
+            sections={courant.sections}
+            projetId={courant.projetId}
+            postes={courant.postes}
+            onBasculerVerrou={basculerVerrou}
+            onBasculerTout={basculerTout}
+            validation={validation}
+            onAjouterPoste={ajouterPoste}
+            onSupprimerPoste={supprimerPoste}
+            erreurPoste={erreurPoste}
+            onBack={() => naviguer('stepDalles')}
+            onNext={() => naviguer('step3bis')}
+          />
+        );
+      case 'step3bis':
+        return (
+          <StepPlanFondation
+            projetId={courant.projetId}
+            peutValider={moi?.role === 'admin' || moi?.role === 'ingenieur'}
+            onBack={() => naviguer('step3')}
+            onNext={() => naviguer('step4')}
+          />
+        );
+      case 'step4':
+        return (
+          <Step4_DQEExport
+            projetId={courant.projetId}
+            nomProjet={courant.projet?.nom}
+            onBack={() => naviguer('step3bis')}
+            onCorriger={() => naviguer('step3')}
+            onAnalyse={() => naviguer('analyse')}
+          />
+        );
+      case 'settingsEntreprise':
+        return <SettingsEntreprise estAdmin={moi?.role === 'admin'} />;
+      case 'equipe':
+        return <TeamManagementView moiProfil={moi ? { role: moi.role } : null} />;
+      default:
+        return <CabinetDashboard onOuvrirProjet={ouvrirProjet} onNouveau={nouveauProjet} onNaviguer={naviguer} />;
+    }
+  };
 
   return (
     <div className="app-layout">
       <Sidebar
         activeView={activeView}
-        setActiveView={setActiveView}
+        setActiveView={naviguer}
         isCollapsed={isCollapsed}
         setIsCollapsed={setIsCollapsed}
         lockedCount={lockedCount}
-        totalCount={allElements.length}
+        totalCount={tousElements.length}
         entreprise={entreprise}
         entrepriseLoading={entrepriseLoading}
         onLogout={handleLogout}
-        moiProfil={moiProfil}
+        moi={moi}
+        projetOuvert={!!courant.projetId}
       />
 
       <div className="main-wrapper">
         <TopBar
-          projectName={projectData.nomProjet || 'Nouveau Projet BTP'}
-          onNewCalculation={() => setActiveView('step1')}
+          projectName={courant.projet?.nom || (courant.projetId ? 'Chargement…' : 'Aucun projet ouvert')}
+          onNewCalculation={nouveauProjet}
+          onMesProjets={() => naviguer('projets')}
           lockedCount={lockedCount}
-          totalCount={allElements.length}
+          totalCount={tousElements.length}
         />
 
-        <main className="content-body">
-          {activeView === 'dashboard' && (
-            <DashboardView
-              projectData={projectData}
-              sections={sections}
-              lockedCount={lockedCount}
-              totalCount={allElements.length}
-              onNavigate={setActiveView}
-            />
+        <main className="content-body" id="contenu-principal">
+          {erreurCompte && <Alerte type="erreur">{erreurCompte}</Alerte>}
+          {courant.erreur && (
+            <Alerte type="erreur" action={{ libelle: 'Mes projets', onClick: () => naviguer('projets') }}>
+              {courant.erreur}
+            </Alerte>
           )}
-
-          {activeView === 'step1' && (
-            <Step1_Parametres
-              projectData={projectData}
-              updateProjectData={updateProjectData}
-              couchesG={couchesG}
-              setCouchesG={setCouchesG}
-              onNext={() => setActiveView('stepDalles')}
-            />
-          )}
-
-          {activeView === 'stepDalles' && (
-            <StepDalles
-              projectData={projectData}
-              onNext={handleCalculate}
-            />
-          )}
-
-          {activeView === 'step2' && (
-            <Step2_Calculs
-              sections={sections}
-              projectData={projectData}
-              onBack={() => setActiveView('stepDalles')}
-              onNext={handleGoToValidation}
-            />
-          )}
-
-          {activeView === 'step3' && (
-            <Step3_ValidationLock
-              sections={sections}
-              projetId={sections?.projetId || projectData?.id}
-              toggleLock={toggleLock}
-              toggleLockAll={toggleLockAll}
-              updateSection={updateSection}
-              validationError={validationError}
-              validatingId={validatingId}
-              postesMainDoeuvre={postesMainDoeuvre}
-              onAddPosteMainDoeuvre={ajouterPosteMainDoeuvre}
-              onRemovePosteMainDoeuvre={supprimerPosteMainDoeuvre}
-              mainDoeuvreError={mainDoeuvreError}
-              onBack={() => setActiveView('step2')}
-              onNext={() => setActiveView('step3bis')}
-            />
-          )}
-
-          {activeView === 'step3bis' && (
-            <StepPlanFondation
-              projetId={sections.projetId}
-              sections={sections}
-              onBack={() => setActiveView('step3')}
-              onNext={handleGenerateDQE}
-            />
-          )}
-
-          {activeView === 'step4' && (
-            <Step4_DQEExport
-              dqeData={dqeData || {}}
-              projectData={projectData}
-              projetId={sections.projetId}
-              onBack={() => setActiveView('step3bis')}
-              onReset={() => {
-                setPostesMainDoeuvre([]);
-                setMainDoeuvreError(null);
-                setActiveView('step1');
-              }}
-            />
-          )}
-
-          {activeView === 'settingsEntreprise' && (
-            <SettingsEntreprise />
-          )}
-
-          {activeView === 'equipe' && (
-            <TeamManagementView moiProfil={moiProfil} />
-          )}
+          {contenu()}
         </main>
       </div>
     </div>

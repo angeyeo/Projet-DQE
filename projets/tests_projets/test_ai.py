@@ -1,4 +1,5 @@
 import os
+from projets.tests_projets.utils import creer_cabinet, creer_membre
 import json
 from unittest import mock
 import urllib.error
@@ -179,14 +180,15 @@ class AssistantIAUnitTestCase(TestCase):
 class AssistantIAAPITestCase(APITestCase):
     def setUp(self):
         os.environ["LLM_PROVIDER"] = "mock"
-        os.environ["DEMO_MODE"] = "False"
-        self.user = User.objects.create_user(username="testuser", password="password123")
+        self.cabinet = creer_cabinet("Cabinet IA")
+        self.user = creer_membre(self.cabinet, username="testuser")
         self.client.force_authenticate(user=self.user)
 
         self.projet = Projet.objects.create(
             nom="Projet IA Test",
             usage_batiment="habitation",
-            nb_niveaux=2
+            nb_niveaux=2,
+            entreprise=self.cabinet,
         )
         self.poteau = ElementStructurel.objects.create(
             projet=self.projet,
@@ -619,9 +621,9 @@ class SuggestionPosteAPITestCase(APITestCase):
     """Tests d'API REST exhaustifs pour l'endpoint de suggestion de poste."""
 
     def setUp(self):
-        os.environ["DEMO_MODE"] = "True"
         os.environ["LLM_PROVIDER"] = "mock"
-        self.user = User.objects.create_user(username="testuser_ia", password="password123")
+        self.user = creer_membre(creer_cabinet("Cabinet IA"), username="testuser_ia")
+        self.client.force_authenticate(user=self.user)
 
     def test_api_suggerer_poste_success(self):
         url = "/api/assistant/suggerer-poste/"
@@ -643,16 +645,14 @@ class SuggestionPosteAPITestCase(APITestCase):
         response = self.client.post(url, payload, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_api_suggerer_poste_demo_mode_false_sans_auth_refuse(self):
-        os.environ["DEMO_MODE"] = "False"
+    def test_api_suggerer_poste_sans_auth_refuse(self):
+        self.client.force_authenticate(user=None)
         url = "/api/assistant/suggerer-poste/"
         payload = {"description": "Fouilles"}
         response = self.client.post(url, payload, format="json")
         self.assertIn(response.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
 
-    def test_api_suggerer_poste_demo_mode_false_avec_auth_autorise(self):
-        os.environ["DEMO_MODE"] = "False"
-        self.client.force_authenticate(user=self.user)
+    def test_api_suggerer_poste_avec_auth_autorise(self):
         url = "/api/assistant/suggerer-poste/"
         payload = {"description": "Fouilles"}
         response = self.client.post(url, payload, format="json")

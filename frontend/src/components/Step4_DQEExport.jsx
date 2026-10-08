@@ -1,167 +1,206 @@
 import React, { useState } from 'react';
-import { Download, FileSpreadsheet, ArrowLeft, RefreshCw, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
-import { dqeService } from '../api/dqeService';
+import { ArrowLeft, BarChart3, Download, FileSpreadsheet, Loader2, RefreshCw } from 'lucide-react';
+import { dqeService, formatFCFA } from '../api/dqeService';
+import useRessource from '../hooks/useRessource';
+import Alerte from './ui/Alerte';
+import { nf } from './charts/palette';
 
-export default function Step4_DQEExport({ dqeData, projectData, projetId, onBack, onReset }) {
-  const { quantites = [], montantTotalFCFA = '0 FCFA', syntheseCalcul = '' } = dqeData || {};
+// Conseil d'action par code de problème renvoyé par le moteur DQE.
+const CONSEILS = {
+  PRIX_MANQUANT: 'Renseignez ce prix dans Paramètres cabinet › Barème.',
+  PRIX_INVALIDE: 'Corrigez ce prix dans Paramètres cabinet › Barème.',
+  PRIX_UNITE_A_CONFIRMER: 'Saisissez le prix au m² dans Paramètres cabinet › Barème (l’ancien prix au m³ n’est pas converti).',
+  RESULTAT_VALIDE_ABSENT: "Revalidez l'élément à l'étape Validation.",
+  DIMENSION_MANQUANTE: "Recalculez l'élément ou saisissez ses dimensions à l'étape Validation.",
+  POSTE_RATIO_INCOMPLET: 'Complétez la géométrie du poste (étape Validation › Postes complémentaires).',
+  GEOMETRIE_INCOMPLETE: 'Complétez la géométrie du poste.',
+  GEOMETRIE_INVALIDE: 'Corrigez la géométrie du poste.',
+  POSTE_RATIO_VIDE: 'La géométrie ne produit aucune quantité : vérifiez-la.',
+  POSTE_INCOMPLET: 'Complétez le poste (quantité, prix, unité).',
+  CABINET_ABSENT: 'Le projet doit être rattaché à un cabinet (administrateur).',
+};
 
-  const [exportEnCours, setExportEnCours] = useState(null); // 'pdf' | 'excel' | null
-  const [exportErreur, setExportErreur] = useState(null);
+const SOURCES = {
+  calcul_moteur: { libelle: 'calculé', classe: 'calculé', titre: 'Quantité issue du résultat validé du moteur' },
+  ratio_reference: { libelle: 'estimé', classe: 'estimé', titre: 'Quantité estimée par un ratio de référence (voir hypothèse)' },
+  saisie: { libelle: 'saisi', classe: 'saisi', titre: "Quantité saisie par l'utilisateur" },
+};
 
-  const telecharger = async (format) => {
-    if (!projetId) {
-      setExportErreur("Identifiant de projet manquant. Impossible de générer l'export.");
-      return;
-    }
-    setExportErreur(null);
-    setExportEnCours(format);
+function RecapFinances({ f }) {
+  const lignes = [];
+  if (f.nature_prix === 'debourse_sec') {
+    lignes.push(['Déboursé sec', f.debourse_sec]);
+    lignes.push([`Marge${f.taux_marge_pct != null ? ` (${f.taux_marge_pct} %)` : ''}`, f.montant_marge]);
+  }
+  lignes.push(['Total HT', f.total_ht]);
+  lignes.push([`TVA${f.taux_tva_pct != null ? ` (${f.taux_tva_pct} %)` : ''}`, f.montant_tva]);
+  lignes.push(['Total TTC', f.total_ttc]);
+  return (
+    <section className="recap-finances" aria-label="Récapitulatif financier">
+      <dl>
+        {lignes.map(([l, v]) => (
+          <React.Fragment key={l}>
+            <dt>{l}</dt>
+            <dd className="tabular">{v != null ? formatFCFA(v) : <span className="texte-discret">non calculé</span>}</dd>
+          </React.Fragment>
+        ))}
+      </dl>
+      {f.messages?.length > 0 && <ul className="notes">{f.messages.map((m) => <li key={m}>{m}</li>)}</ul>}
+    </section>
+  );
+}
+
+export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorriger, onAnalyse }) {
+  const { data: dqe, erreur, detail, chargement, recharger } = useRessource(() => dqeService.genererDQE(projetId), [projetId]);
+  const [exportEtat, setExportEtat] = useState({ enCours: null, erreur: null });
+
+  const exporter = async (format) => {
+    setExportEtat({ enCours: format, erreur: null });
     try {
       await dqeService.telechargerDQEFichier(projetId, format);
+      setExportEtat({ enCours: null, erreur: null });
     } catch (err) {
-      setExportErreur(`Échec de l'export ${format === 'pdf' ? 'PDF' : 'Excel'} : ${err.message || "Erreur serveur"}`);
-    } finally {
-      setExportEnCours(null);
+      setExportEtat({ enCours: null, erreur: `Export ${format === 'pdf' ? 'PDF' : 'Excel'} impossible : ${err.message}` });
     }
   };
 
-  const handleExportPDF = () => telecharger('pdf');
-  const handleExportExcel = () => telecharger('excel');
-
   return (
-    <div className="glass-panel">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+    <div className="glass-panel etape">
+      <header className="etape-entete">
         <div>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.5rem' }}>
-            Étape 4 : Devis Quantitatif Estimatif (DQE / DEK) & Couche IA
-          </h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-            Devis généré automatiquement à partir des sections verrouillées de l'ouvrage <strong>{projectData.nomProjet || 'Nouveau Projet'}</strong>.
-          </p>
+          <p className="surtitre">Étape 4</p>
+          <h2>Devis quantitatif estimatif</h2>
+          <p className="texte-discret">{nomProjet} — généré à partir des seuls éléments validés et du barème du cabinet.</p>
         </div>
-
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button className="btn btn-secondary" onClick={handleExportExcel} disabled={exportEnCours !== null}>
-            {exportEnCours === 'excel' ? <Loader2 size={18} className="spin" /> : <FileSpreadsheet size={18} color="var(--status-ok)" />}
-            <span>{exportEnCours === 'excel' ? 'Génération...' : 'Exporter Excel (.xlsx)'}</span>
+        <div className="actions-ligne">
+          <button type="button" className="btn btn-secondary" onClick={recharger} disabled={chargement}>
+            <RefreshCw size={16} className={chargement ? 'spin' : ''} aria-hidden="true" /> <span>Régénérer</span>
           </button>
-          <button className="btn btn-primary" onClick={handleExportPDF} disabled={exportEnCours !== null}>
-            {exportEnCours === 'pdf' ? <Loader2 size={18} className="spin" /> : <Download size={18} />}
-            <span>{exportEnCours === 'pdf' ? 'Génération...' : 'Télécharger PDF'}</span>
+          <button type="button" className="btn btn-secondary" disabled={!dqe || !!exportEtat.enCours} onClick={() => exporter('excel')}>
+            {exportEtat.enCours === 'excel' ? <Loader2 size={16} className="spin" /> : <FileSpreadsheet size={16} />} <span>Excel</span>
+          </button>
+          <button type="button" className="btn btn-primary" disabled={!dqe || !!exportEtat.enCours} onClick={() => exporter('pdf')}>
+            {exportEtat.enCours === 'pdf' ? <Loader2 size={16} className="spin" /> : <Download size={16} />} <span>PDF</span>
           </button>
         </div>
-      </div>
+      </header>
 
-      {exportErreur && (
-        <div style={{ padding: '1rem 1.25rem', borderRadius: '12px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginBottom: '2rem', display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-          <AlertCircle size={20} color="var(--status-critical)" style={{ flexShrink: 0, marginTop: '0.1rem' }} />
-          <span style={{ fontSize: '0.88rem', color: 'var(--status-critical)' }}>{exportErreur}</span>
+      {exportEtat.erreur && <Alerte type="erreur">{exportEtat.erreur}</Alerte>}
+      {chargement && !dqe && <div className="etat-chargement" role="status">Calcul du DQE…</div>}
+
+      {erreur && (
+        <div className="pile-alertes">
+          <Alerte type="erreur" titre="Le DQE ne peut pas être généré" action={{ libelle: 'Corriger', onClick: onCorriger }}>
+            {erreur}
+          </Alerte>
+          {detail?.elements_en_attente?.length > 0 && (
+            <Alerte type="attention" titre={`${detail.elements_en_attente.length} élément(s) en attente de validation`}>
+              {detail.elements_en_attente.join(', ')}
+            </Alerte>
+          )}
+          {detail?.problemes?.length > 0 && (
+            <ul className="liste-problemes">
+              {detail.problemes.map((p, i) => (
+                <li key={`${p.code}-${p.cle_prix || p.element_id || p.poste_id || i}`}>
+                  <code>{p.code}</code>
+                  <span>{p.message}</span>
+                  {CONSEILS[p.code] && <span className="texte-discret">{CONSEILS[p.code]}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
-      {/* Carte Montant Total */}
-      <div
-        style={{
-          background: 'linear-gradient(135deg, var(--accent-soft), var(--status-ok-soft))',
-          border: '1px solid var(--accent-soft-border)',
-          borderRadius: '16px',
-          padding: '1.75rem 2rem',
-          marginBottom: '2rem',
-          display: 'flex',
-          justify: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <div>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Montant Estimatif Total du Gros Œuvre
-          </div>
-          <div style={{ fontSize: '2.4rem', fontWeight: 800, color: 'white', marginTop: '0.25rem' }}>
-            {montantTotalFCFA}
-          </div>
-        </div>
+      {dqe && (
+        <>
+          <section className="total-dqe" aria-label="Montant total">
+            <div>
+              <p className="surtitre">Total des ouvrages</p>
+              <p className="total-dqe-montant tabular">{formatFCFA(dqe.total_general)}</p>
+              <p className="texte-discret">{dqe.montant_lettres}</p>
+            </div>
+            <dl className="grille-donnees">
+              <dt>Béton structurel</dt><dd className="tabular">{nf(dqe.synthese.beton_m3, 3)} m³</dd>
+              <dt>Acier</dt><dd className="tabular">{nf(dqe.synthese.acier_kg, 1)} kg</dd>
+              <dt>Ratio acier/béton</dt><dd className="tabular">{dqe.synthese.ratio_acier_kg_m3 != null ? `${nf(dqe.synthese.ratio_acier_kg_m3, 1)} kg/m³` : '—'}</dd>
+              {dqe.synthese.acier_estime_par_ratio_kg > 0 && (
+                <><dt>dont acier estimé</dt><dd className="tabular">{nf(dqe.synthese.acier_estime_par_ratio_kg, 1)} kg</dd></>
+              )}
+            </dl>
+            <button type="button" className="btn btn-secondary" onClick={onAnalyse}><BarChart3 size={16} /> <span>Analyse</span></button>
+          </section>
 
-        <div style={{ textAlign: 'right' }}>
-          <div className="badge badge-locked" style={{ marginBottom: '0.5rem', padding: '0.4rem 0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-            <CheckCircle2 size={14} />
-            <span>Basé sur Données Verrouillées</span>
-          </div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Calculé avec prix unitaires locaux BTP
-          </div>
-        </div>
-      </div>
+          {dqe.finances && <RecapFinances f={dqe.finances} />}
 
-      {/* Synthèse du moteur de calcul -- NB : ce bloc affichait auparavant un
-          badge "Sparkles / Explication par IA (DKE IA)" alors que le texte
-          est une phrase fixe du moteur de calcul, jamais générée par l'IA.
-          Aucun appel à /assistant/expliquer-element/ n'était fait ici.
-          L'explication réelle par IA est désormais disponible élément par
-          élément à l'Étape 2 (bouton "Expliquer (IA)"). */}
-      <div
-        style={{
-          background: 'var(--status-ok-soft)',
-          border: '1px solid var(--status-ok-soft)',
-          borderRadius: '16px',
-          padding: '1.5rem',
-          marginBottom: '2rem',
-        }}
-      >
-        <h4 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--status-ok)', marginBottom: '0.75rem' }}>
-          Synthèse du Moteur de Calcul
-        </h4>
-        <p style={{ fontSize: '0.9rem', color: 'var(--ink-900)', lineHeight: 1.6 }}>
-          {syntheseCalcul || "Aucune analyse complémentaire requise. Les calculs respectent les ratios BAEL91 d'armatures et de béton."}
-        </p>
-      </div>
+          {dqe.hypotheses_projet?.length > 0 && (
+            <Alerte type="info" titre="Hypothèses de calcul du projet" liste={dqe.hypotheses_projet} />
+          )}
 
-      {/* Tableau détaillé du DQE */}
-      <div style={{ marginBottom: '2.5rem' }}>
-        <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem' }}>
-          Bordereau Quantitatif Estimatif des Matériaux
-        </h3>
+          {dqe.hypotheses.length > 0 && (
+            <section className="hypotheses-dqe">
+              <h3>Hypothèses de métré</h3>
+              <ol>{dqe.hypotheses.map((h) => <li key={h}>{h}</li>)}</ol>
+            </section>
+          )}
 
-        <table className="custom-table">
-          <thead>
-            <tr>
-              <th>Désignation du Matériau / Prestation</th>
-              <th>Unité</th>
-              <th>Quantité Estimée</th>
-              <th>Prix Unitaire (FCFA)</th>
-              <th>Montant Total (FCFA)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {quantites.length > 0 ? (
-              quantites.map((row, idx) => (
-                <tr key={idx}>
-                  <td style={{ fontWeight: 600 }}>{row.materiau || row.designation}</td>
-                  <td><span className="badge badge-info">{row.unite || 'U'}</span></td>
-                  <td style={{ fontWeight: 700 }}>{row.quantite}</td>
-                  <td>{row.prixUnitaire || row.prix_unitaire || '—'}</td>
-                  <td style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>{row.total || row.montant}</td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan="5" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
-                  Aucun poste quantitatif généré.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+          {dqe.lots.map((lot) => (
+            <section key={lot.lot} className="lot-dqe">
+              <div className="lot-dqe-entete">
+                <h3>{lot.libelle}</h3>
+                <span className="tabular">{formatFCFA(lot.sous_total)}</span>
+              </div>
+              {(lot.sous_lots || [{ libelle: null, lignes: lot.lignes }]).map((sl) => (
+                <div key={sl.libelle || 'tout'} className="sous-lot-dqe">
+                  {sl.libelle && (
+                    <div className="sous-lot-entete"><h4>{sl.libelle}</h4><span className="tabular">{formatFCFA(sl.sous_total)}</span></div>
+                  )}
+                  <div className="table-scroll">
+                    <table className="custom-table table-dqe">
+                      <thead>
+                        <tr><th>Repère</th><th>Désignation</th><th>U</th><th>Quantité</th><th>PU</th><th>Montant</th></tr>
+                      </thead>
+                      <tbody>
+                        {sl.lignes.map((l, i) => {
+                          const src = SOURCES[l.source_quantite] || { libelle: l.type_donnee || l.source_quantite, classe: 'saisi' };
+                          const nHyp = l.hypothese ? dqe.hypotheses.indexOf(l.hypothese) + 1 : 0;
+                          return (
+                            <tr key={`${l.repere}-${l.designation}-${i}`}>
+                              <td>{l.repere || '—'}</td>
+                              <td>
+                                {l.designation}
+                                {l.formule_quantite && <div className="formule-ligne"><code>{l.formule_quantite}</code></div>}
+                              </td>
+                              <td>{l.unite}</td>
+                              <td className="tabular">
+                                {nf(l.quantite, 3)}{' '}
+                                <span className={`type-donnee type-${src.classe}`} title={src.titre}>{src.libelle}</span>
+                                {nHyp > 0 && <sup className="renvoi-hyp" title={l.hypothese}>H{nHyp}</sup>}
+                              </td>
+                              <td className="tabular" title={l.prix_source ? `${l.prix_source}${l.prix_date ? ` — ${l.prix_date}` : ''}` : undefined}>
+                                {nf(l.prix_unitaire, 2)}
+                                {l.prix_source && <div className="texte-discret prix-source">{l.prix_date || 'date non tracée'}</div>}
+                              </td>
+                              <td className="tabular"><strong>{nf(l.montant)}</strong></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+            </section>
+          ))}
+          <p className="texte-discret">
+            Montant de ligne = quantité (arrondie au millième) × prix unitaire du barème, arrondi au FCFA.
+            Les prix du barème sont « fourni-posé » : matériaux, main-d'œuvre et matériel n'y sont pas séparables.
+          </p>
+        </>
+      )}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <button className="btn btn-secondary" onClick={onBack}>
-          <ArrowLeft size={18} />
-          <span>Ajuster la Validation</span>
-        </button>
-
-        <button className="btn btn-secondary" onClick={onReset}>
-          <RefreshCw size={18} />
-          <span>Nouveau Projet</span>
-        </button>
+      <div className="navigation-etapes">
+        <button type="button" className="btn btn-secondary" onClick={onBack}><ArrowLeft size={18} /> <span>Plan de fondation</span></button>
       </div>
     </div>
   );

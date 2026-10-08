@@ -35,11 +35,8 @@ class TestVisionAPI(APITestCase):
         cache.clear()
 
         # Création de l'entreprise et de l'utilisateur pour le multi-tenant
-        from projets.models import Entreprise, Profil
-        self.entreprise, _ = Entreprise.objects.get_or_create(
-            code_cabinet="CAB-VISION-TEST",
-            defaults={"nom": "Cabinet Vision Test"}
-        )
+        from projets.tests_projets.utils import creer_cabinet
+        self.entreprise = creer_cabinet("Cabinet Vision Test")
         self.user = User.objects.create_user(username="testuser", password="password123")
         Profil.objects.get_or_create(
             utilisateur=self.user,
@@ -54,10 +51,6 @@ class TestVisionAPI(APITestCase):
             cree_par=self.user
         )
 
-        # Reste du code existant...
-        self.original_demo_mode = os.getenv("DEMO_MODE")
-        os.environ["DEMO_MODE"] = "True"
-
         self.original_llm_provider = os.getenv("LLM_PROVIDER")
         os.environ["LLM_PROVIDER"] = "mock"
 
@@ -65,12 +58,6 @@ class TestVisionAPI(APITestCase):
         self.png_bytes = generer_image_png_valide()
 
     def tearDown(self):
-        # Restauration des variables d'environnement d'origine
-        if self.original_demo_mode is not None:
-            os.environ["DEMO_MODE"] = self.original_demo_mode
-        else:
-            os.environ.pop("DEMO_MODE", None)
-
         if self.original_llm_provider is not None:
             os.environ["LLM_PROVIDER"] = self.original_llm_provider
         else:
@@ -183,34 +170,32 @@ class TestVisionAPI(APITestCase):
         self.assertIn("L'analyse automatique du plan n'est pas disponible", data["message"])
 
     # --- F. Sécurité ---
-    def test_securite_demo_mode_false_anonyme_rejete(self):
-        os.environ["DEMO_MODE"] = "False"
+    def test_securite_anonyme_rejete(self):
         self.client.logout()
         
         fichier = SimpleUploadedFile("plan.png", self.png_bytes, content_type="image/png")
         response = self.client.post(self._url(), {"fichier": fichier}, format="multipart")
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED) # <--- Ici
 
-    def test_securite_demo_mode_false_authentifie_accepte(self):
-        os.environ["DEMO_MODE"] = "False"
+    def test_securite_authentifie_accepte(self):
         # Connexion de l'utilisateur de test
         self.client.force_authenticate(user=self.user)
         fichier = SimpleUploadedFile("plan.png", self.png_bytes, content_type="image/png")
         response = self.client.post(self._url(), {"fichier": fichier}, format="multipart")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    def test_securite_demo_mode_true_anonyme_accepte(self):
-        os.environ["DEMO_MODE"] = "True"
-        # Client non authentifié (anonyme)
+    def test_securite_projet_autre_cabinet_introuvable(self):
+        """Le DEMO_MODE (anonyme accepté) a été supprimé ; un membre d'un
+        autre cabinet ne peut pas analyser une image sur ce projet."""
+        from projets.tests_projets.utils import creer_cabinet, creer_membre
+        intrus = creer_membre(creer_cabinet("Autre"), username="intrus")
+        self.client.force_authenticate(user=intrus)
         fichier = SimpleUploadedFile("plan.png", self.png_bytes, content_type="image/png")
         response = self.client.post(self._url(), {"fichier": fichier}, format="multipart")
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     # --- G. Throttling ---
     def test_throttling_limite_de_5_appels_par_minute(self):
-        # En mode démonstration pour simplifier les requêtes
-        os.environ["DEMO_MODE"] = "True"
-
         # 5 appels autorisés
         for _ in range(5):
             fichier = SimpleUploadedFile("plan.png", self.png_bytes, content_type="image/png")

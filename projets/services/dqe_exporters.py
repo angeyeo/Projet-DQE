@@ -22,22 +22,14 @@ permettant de personnaliser l'en-tête avec le logo et les coordonnées de
 l'utilisateur. Absent ou vide, l'en-tête société est simplement omis.
 """
 
+import logging
 from io import BytesIO
 from decimal import Decimal
 from datetime import datetime
 
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image,
-    PageBreak, KeepTogether,
-)
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
 from openpyxl.drawing.image import Image as XLImage
 
 
@@ -56,10 +48,41 @@ LOT_NOMS = {
     "08": "COUVERTURE",
 }
 
-COULEUR_ENTETE = colors.HexColor("#2C3E50")
-COULEUR_TOTAL = colors.HexColor("#ECF0F1")
-COULEUR_TOTAL_GENERAL = colors.HexColor("#FFF200")
 
+
+from .dqe_calculator import montant_en_toutes_lettres  # noqa: E402
+
+
+def lignes_recap_finances(dqe_data):
+    """Lignes de récapitulatif (libellé, montant ou texte) issues de
+    dqe_data["finances"] -- aucun taux supposé : un montant non calculable
+    est écrit en clair comme tel."""
+    f = dqe_data.get("finances") or {}
+    total = dqe_data["total_general"]
+    if not f:
+        return [("TOTAL HT", total)]
+    rows = []
+    if f.get("nature_prix") == "debourse_sec":
+        rows.append(("DÉBOURSÉ SEC", f["debourse_sec"]))
+        if f.get("montant_marge") is not None:
+            rows.append((f"MARGE ({f['taux_marge_pct']:g} %)", f["montant_marge"]))
+    rows.append(("TOTAL HT", f["total_ht"] if f.get("total_ht") is not None else "non calculé (marge non renseignée)"))
+    if f.get("total_ttc") is not None:
+        rows.append((f"TVA ({f['taux_tva_pct']:g} %)", f["montant_tva"]))
+        rows.append(("TOTAL TTC", f["total_ttc"]))
+    elif f.get("total_ht") is not None:
+        rows.append(("TOTAL TTC", "non calculé (TVA non renseignée)"))
+    return rows
+
+
+def montant_arrete(dqe_data):
+    """(montant, qualificatif) pour la phrase « Arrêté le présent devis »."""
+    f = dqe_data.get("finances") or {}
+    if f.get("total_ttc") is not None:
+        return f["total_ttc"], "TTC"
+    if f.get("total_ht") is not None:
+        return f["total_ht"], "HT"
+    return dqe_data["total_general"], "déboursé sec"
 
 def formater_nombre(valeur) -> str:
     """Formate un nombre avec un espace comme séparateur des milliers."""
@@ -70,7 +93,8 @@ def formater_nombre(valeur) -> str:
             valeur = float(valeur)
         else:
             return f"{int(valeur):,}".replace(",", " ")
-    return f"{valeur:,.4f}".replace(",", " ").rstrip("0").rstrip(".")
+    texte = f"{valeur:,.3f}".rstrip("0").rstrip(".")
+    return texte.replace(",", " ").replace(".", ",")
 
 
 def formater_date(date_iso: str) -> str:
@@ -101,9 +125,13 @@ def regrouper_par_lot(dqe_data: dict) -> list:
     groupes = {}
     for lot_entry in dqe_data.get("lots", []):
         numero = _numero_lot(lot_entry["lot"])
-        groupe = groupes.setdefault(numero, {"lignes": [], "sous_total": 0})
+        groupe = groupes.setdefault(numero, {"lignes": [], "sous_total": 0, "sous_lots": [], "parties": []})
         groupe["lignes"].extend(lot_entry["lignes"])
         groupe["sous_total"] += lot_entry["sous_total"]
+        groupe["parties"].append(lot_entry.get("libelle") or lot_entry["lot"])
+        for sl in lot_entry.get("sous_lots") or [{"libelle": lot_entry.get("libelle"), "lignes": lot_entry["lignes"],
+                                                 "sous_total": lot_entry["sous_total"]}]:
+            groupe["sous_lots"].append(dict(sl, partie=lot_entry.get("libelle") or lot_entry["lot"]))
 
     resultat = []
     for numero in sorted(groupes.keys()):
@@ -113,6 +141,8 @@ def regrouper_par_lot(dqe_data: dict) -> list:
             "nom": nom,
             "label": f"LOT {numero} — {nom}",
             "lignes": groupes[numero]["lignes"],
+            "sous_lots": groupes[numero]["sous_lots"],
+            "plusieurs_parties": len(groupes[numero]["parties"]) > 1,
             "sous_total": groupes[numero]["sous_total"],
         })
     return resultat
@@ -129,222 +159,11 @@ def _entreprise_champ(entreprise: dict, cle: str) -> str:
 # ---------------------------------------------------------------------------
 
 def exporter_dqe_pdf(dqe_data: dict, entreprise: dict = None) -> BytesIO:
-    """
-    Génère le document PDF du DQE : en-tête société (logo + coordonnées,
-    si fournis), récapitulatif général par lot, puis détail par lot.
-    """
-    lots = regrouper_par_lot(dqe_data)
-    projet = dqe_data.get("projet", {})
+    """PDF du DQE -- rendu délégué à pdf_dqe (présentation uniquement :
+    aucune valeur n'est recalculée)."""
+    from .pdf_dqe import generer_pdf
 
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=40,
-        leftMargin=40,
-        topMargin=40,
-        bottomMargin=40,
-    )
-    story = []
-    styles = getSampleStyleSheet()
-
-    title_style = ParagraphStyle(
-        'DQETitle', parent=styles['Heading1'], fontName='Helvetica-Bold',
-        fontSize=16, spaceAfter=4, alignment=1,
-    )
-    subtitle_style = ParagraphStyle(
-        'DQESubtitle', parent=styles['Normal'], fontName='Helvetica',
-        fontSize=10, alignment=1, textColor=COULEUR_ENTETE,
-    )
-    lots_line_style = ParagraphStyle(
-        'DQELotsLine', parent=styles['Normal'], fontName='Helvetica-Oblique',
-        fontSize=8, alignment=1, textColor=colors.HexColor("#555555"),
-    )
-    normal_style = ParagraphStyle(
-        'DQENormal', parent=styles['Normal'], fontName='Helvetica', fontSize=10, leading=14,
-    )
-    small_style = ParagraphStyle(
-        'DQESmall', parent=styles['Normal'], fontName='Helvetica', fontSize=8, leading=11,
-    )
-    bold_style = ParagraphStyle(
-        'DQEBold', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10, leading=14,
-    )
-    header_style = ParagraphStyle(
-        'DQEHeader', parent=styles['Normal'], fontName='Helvetica-Bold',
-        fontSize=9, textColor=colors.whitesmoke,
-    )
-    section_style = ParagraphStyle(
-        'DQESection', parent=styles['Normal'], fontName='Helvetica-Bold',
-        fontSize=12, textColor=colors.white, backColor=COULEUR_ENTETE,
-        leftIndent=6, spaceBefore=0, spaceAfter=0, leading=20,
-    )
-
-    # -- En-tête entreprise (logo + coordonnées), si renseignée --------
-    logo_path = _entreprise_champ(entreprise, "logo_path")
-    nom_societe = _entreprise_champ(entreprise, "nom")
-    if logo_path or nom_societe:
-        lignes_societe = []
-        if nom_societe:
-            lignes_societe.append(Paragraph(f"<b>{nom_societe}</b>", small_style))
-        siege = _entreprise_champ(entreprise, "siege_social")
-        if siege:
-            lignes_societe.append(Paragraph(f"Siège social : {siege}", small_style))
-        contact_bits = [
-            b for b in [
-                _entreprise_champ(entreprise, "telephone"),
-                _entreprise_champ(entreprise, "email"),
-            ] if b
-        ]
-        if contact_bits:
-            lignes_societe.append(Paragraph(" - ".join(contact_bits), small_style))
-        rccm = _entreprise_champ(entreprise, "rccm")
-        cc = _entreprise_champ(entreprise, "cc")
-        cb = _entreprise_champ(entreprise, "cb")
-        legal_bits = [
-            b for b in [
-                f"RCCM {rccm}" if rccm else "",
-                f"CC N° {cc}" if cc else "",
-                f"CB N° {cb}" if cb else "",
-            ] if b
-        ]
-        if legal_bits:
-            lignes_societe.append(Paragraph(" - ".join(legal_bits), small_style))
-
-        logo_cell = ""
-        if logo_path:
-            try:
-                logo_cell = Image(logo_path, width=45 * mm, height=25 * mm, kind="proportional")
-            except Exception:
-                logo_cell = ""
-
-        header_table = Table(
-            [[logo_cell, lignes_societe]],
-            colWidths=[100, 415],
-        )
-        header_table.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
-            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
-        ]))
-        story.append(header_table)
-        story.append(Spacer(1, 10))
-
-    # -- Titre / devis / projet -----------------------------------------
-    story.append(Paragraph("DEVIS QUANTITATIF ET ESTIMATIF (DQE)", title_style))
-    entete_bits = [f"Devis N° {projet.get('numero_devis', '')}"]
-    if projet.get("date_edition"):
-        entete_bits.append(f"Édition du {formater_date(projet['date_edition'])}")
-    story.append(Paragraph(" — ".join(entete_bits), subtitle_style))
-    titre_projet = projet.get("nom", "")
-    if projet.get("description"):
-        titre_projet += f" — {projet['description']}"
-    story.append(Paragraph(f"<b>{titre_projet}</b>", subtitle_style))
-    if lots:
-        story.append(Paragraph(" · ".join(l["label"] for l in lots), lots_line_style))
-    story.append(Spacer(1, 14))
-
-    # -- Récapitulatif général -------------------------------------------
-    story.append(Paragraph("RÉCAPITULATIF GÉNÉRAL", section_style))
-    story.append(Spacer(1, 6))
-
-    recap_data = [[
-        Paragraph("N°", header_style),
-        Paragraph("DÉSIGNATION", header_style),
-        Paragraph(f"MONTANT ({dqe_data.get('devise', 'FCFA')})", header_style),
-    ]]
-    for lot in lots:
-        recap_data.append([
-            Paragraph(lot["numero"], normal_style),
-            Paragraph(f"TOTAL {lot['label']} (HT)", normal_style),
-            Paragraph(formater_nombre(lot["sous_total"]), normal_style),
-        ])
-    recap_data.append([
-        "", Paragraph("<b>TOTAL HT</b>", bold_style),
-        Paragraph(f"<b>{formater_nombre(dqe_data['total_general'])}</b>", bold_style),
-    ])
-    recap_data.append([
-        "", Paragraph("<b>TOTAL GÉNÉRAL HT</b>", bold_style),
-        Paragraph(f"<b>{formater_nombre(dqe_data['total_general'])}</b>", bold_style),
-    ])
-
-    recap_table = Table(recap_data, colWidths=[35, 355, 125])
-    recap_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), COULEUR_ENTETE),
-        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
-        ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-        ('GRID', (0, 0), (-1, -3), 0.5, colors.lightgrey),
-        ('LINEABOVE', (0, -2), (-1, -2), 1, COULEUR_ENTETE),
-        ('BACKGROUND', (0, -2), (-1, -2), COULEUR_TOTAL),
-        ('BACKGROUND', (0, -1), (-1, -1), COULEUR_TOTAL_GENERAL),
-    ]))
-    story.append(recap_table)
-
-    montant_lettres = dqe_data.get("montant_lettres")
-    if montant_lettres:
-        story.append(Spacer(1, 10))
-        story.append(Paragraph(
-            f"Arrêté le présent devis à la somme de ({dqe_data.get('devise', 'FCFA')}) : "
-            f"<i>{montant_lettres}</i>",
-            small_style,
-        ))
-
-    # -- Détail par lot ----------------------------------------------------
-    story.append(PageBreak())
-    detail_headers = ["Désignation", "Unité", "Quantité", "P.U. (FCFA)", "Montant (FCFA)"]
-    col_widths_detail = [225, 45, 65, 90, 90]
-
-    for lot in lots:
-        if not lot["lignes"]:
-            continue
-
-        data = [[Paragraph(h, header_style) for h in detail_headers]]
-        for ligne in lot["lignes"]:
-            data.append([
-                Paragraph(ligne["designation"], normal_style),
-                Paragraph(ligne["unite"], normal_style),
-                Paragraph(formater_nombre(ligne["quantite"]), normal_style),
-                Paragraph(formater_nombre(ligne["prix_unitaire"]), normal_style),
-                Paragraph(formater_nombre(ligne["montant"]), normal_style),
-            ])
-        data.append([
-            Paragraph(f"<b>TOTAL {lot['label']} (HT)</b>", bold_style), "", "", "",
-            Paragraph(f"<b>{formater_nombre(lot['sous_total'])}</b>", bold_style),
-        ])
-
-        t = Table(data, colWidths=col_widths_detail)
-        n_rows = len(data)
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), COULEUR_ENTETE),
-            ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('GRID', (0, 0), (-1, n_rows - 2), 0.5, colors.lightgrey),
-            ('SPAN', (0, n_rows - 1), (3, n_rows - 1)),
-            ('LINEABOVE', (0, n_rows - 1), (-1, n_rows - 1), 1, COULEUR_ENTETE),
-            ('BACKGROUND', (0, n_rows - 1), (-1, n_rows - 1), COULEUR_TOTAL),
-        ]))
-
-        # Le titre du lot reste collé à son tableau (pas de titre orphelin
-        # en bas de page) ; le tableau lui-même peut se scinder normalement
-        # sur plusieurs pages s'il est long.
-        story.append(KeepTogether([Paragraph(lot["label"], section_style), Spacer(1, 6), t]))
-        story.append(Spacer(1, 14))
-
-    # -- Signature ----------------------------------------------------------
-    story.append(Spacer(1, 30))
-    story.append(Paragraph("<b>Pour l'ingénieur structure responsable :</b>", normal_style))
-    story.append(Spacer(1, 10))
-    story.append(Paragraph("Date de validation : ________________________", normal_style))
-    story.append(Spacer(1, 10))
-    story.append(Paragraph("Signature & Cachet :", normal_style))
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
+    return generer_pdf(dqe_data, entreprise=entreprise, lots=regrouper_par_lot(dqe_data))
 
 
 # ---------------------------------------------------------------------------
@@ -402,8 +221,8 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
             img.width = 120
             ws.add_image(img, "A1")
             row = 6
-        except Exception:
-            pass
+        except Exception:  # logo illisible : export sans logo, mais tracé
+            logging.getLogger(__name__).warning("Logo du cabinet illisible pour l'export Excel : %s", logo_path)
 
     nom_societe = _entreprise_champ(entreprise, "nom")
     if nom_societe:
@@ -420,6 +239,9 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
     row += 1
     ws.cell(row=row, column=1, value=f"Devis N° {projet.get('numero_devis', '')} — Édition du {formater_date(projet.get('date_edition', ''))}").font = font_normal
     row += 1
+    if projet.get("auteur"):
+        ws.cell(row=row, column=1, value=f"Établi par {projet['auteur']}").font = font_small
+        row += 1
     titre_projet = projet.get("nom", "")
     if projet.get("description"):
         titre_projet += f" — {projet['description']}"
@@ -446,35 +268,38 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
         m_cell.border = thin_border
         row += 1
 
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
-    tot_ht_lbl = ws.cell(row=row, column=1, value="TOTAL HT")
-    tot_ht_lbl.font = font_bold
-    tot_ht_lbl.alignment = Alignment(horizontal="right")
-    tot_ht_lbl.fill = fill_total
-    tot_ht_val = ws.cell(row=row, column=3, value=dqe_data["total_general"])
-    tot_ht_val.font = font_bold
-    tot_ht_val.number_format = "#,##0"
-    tot_ht_val.alignment = Alignment(horizontal="right")
-    tot_ht_val.fill = fill_total
+    recap_finances = lignes_recap_finances(dqe_data)
+    for k, (libelle, valeur) in enumerate(recap_finances):
+        dernier = k == len(recap_finances) - 1
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        lbl = ws.cell(row=row, column=1, value=libelle)
+        lbl.font = font_bold
+        lbl.alignment = Alignment(horizontal="right")
+        lbl.fill = fill_total_general if dernier else fill_total
+        val = ws.cell(row=row, column=3, value=valeur)
+        val.font = font_bold
+        if isinstance(valeur, int):
+            val.number_format = "#,##0"
+        val.alignment = Alignment(horizontal="right")
+        val.fill = fill_total_general if dernier else fill_total
+        row += 1
     row += 1
 
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
-    tot_lbl = ws.cell(row=row, column=1, value="TOTAL GÉNÉRAL HT")
-    tot_lbl.font = font_bold
-    tot_lbl.alignment = Alignment(horizontal="right")
-    tot_lbl.fill = fill_total_general
-    tot_val = ws.cell(row=row, column=3, value=dqe_data["total_general"])
-    tot_val.font = font_bold
-    tot_val.number_format = "#,##0"
-    tot_val.alignment = Alignment(horizontal="right")
-    tot_val.fill = fill_total_general
+    montant, qualif = montant_arrete(dqe_data)
+    ws.cell(
+        row=row, column=1,
+        value=f"Arrêté le présent devis à la somme de ({qualif}) : {montant_en_toutes_lettres(montant)}",
+    ).font = font_small
     row += 2
 
-    if dqe_data.get("montant_lettres"):
-        ws.cell(
-            row=row, column=1,
-            value=f"Arrêté le présent devis à la somme de : {dqe_data['montant_lettres']}",
-        ).font = font_small
+    for titre, cle in (("HYPOTHÈSES DE CALCUL", "hypotheses_projet"), ("HYPOTHÈSES DE MÉTRÉ", "hypotheses")):
+        if dqe_data.get(cle):
+            ws.cell(row=row, column=1, value=titre).font = font_bold
+            row += 1
+            for h in dqe_data[cle]:
+                ws.cell(row=row, column=1, value=f"• {h}").font = font_small
+                row += 1
+            row += 1
 
     ws.column_dimensions["A"].width = 8
     ws.column_dimensions["B"].width = 45
@@ -490,43 +315,54 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
         ws_lot.cell(row=1, column=1, value=lot["label"]).font = font_title
         ws_lot.row_dimensions[1].height = 22
 
-        headers = ["Désignation", "Unité", "Quantité", "Prix Unitaire (FCFA)", "Montant (FCFA)"]
+        headers = ["Désignation", "Unité", "Quantité", "Prix Unitaire (FCFA)", "Montant (FCFA)",
+                   "Formule de métré", "Nature quantité", "Source du prix", "Date du prix"]
         start_row = 3
         for col_idx, header in enumerate(headers, 1):
             cell = ws_lot.cell(row=start_row, column=col_idx, value=header)
             cell.font = font_header
             cell.fill = fill_header
-            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             cell.border = thin_border
-        ws_lot.row_dimensions[start_row].height = 24
+        ws_lot.row_dimensions[start_row].height = 30
 
         current_row = start_row + 1
-        for ligne in lot["lignes"]:
-            ws_lot.cell(row=current_row, column=1, value=ligne["designation"]).font = font_normal
-            ws_lot.cell(row=current_row, column=1).border = thin_border
-
-            ws_lot.cell(row=current_row, column=2, value=ligne["unite"]).font = font_normal
-            ws_lot.cell(row=current_row, column=2).alignment = Alignment(horizontal="center")
-            ws_lot.cell(row=current_row, column=2).border = thin_border
-
-            q_cell = ws_lot.cell(row=current_row, column=3, value=float(ligne["quantite"]))
-            q_cell.font = font_normal
-            q_cell.number_format = "0.####"
-            q_cell.alignment = Alignment(horizontal="right")
-            q_cell.border = thin_border
-
-            pu_cell = ws_lot.cell(row=current_row, column=4, value=int(ligne["prix_unitaire"]))
-            pu_cell.font = font_normal
-            pu_cell.number_format = "#,##0"
-            pu_cell.alignment = Alignment(horizontal="right")
-            pu_cell.border = thin_border
-
-            m_cell = ws_lot.cell(row=current_row, column=5, value=int(ligne["montant"]))
-            m_cell.font = font_normal
-            m_cell.number_format = "#,##0"
-            m_cell.alignment = Alignment(horizontal="right")
-            m_cell.border = thin_border
-
+        for sl in lot["sous_lots"]:
+            titre = sl["libelle"] or ""
+            if lot["plusieurs_parties"]:
+                titre = f"{sl['partie']} — {titre}"
+            ws_lot.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=9)
+            c = ws_lot.cell(row=current_row, column=1, value=titre)
+            c.font = font_bold
+            c.fill = fill_total
+            current_row += 1
+            for ligne in sl["lignes"]:
+                valeurs = [
+                    (ligne["designation"], None, "left"),
+                    (ligne["unite"], None, "center"),
+                    (float(ligne["quantite"]), "#,##0.000", "right"),
+                    (ligne["prix_unitaire"], "#,##0", "right"),
+                    (int(ligne["montant"]), "#,##0", "right"),
+                    (ligne.get("formule_quantite") or "", None, "left"),
+                    (ligne.get("type_donnee") or "", None, "center"),
+                    (ligne.get("prix_source") or "", None, "left"),
+                    (ligne.get("prix_date") or "", None, "center"),
+                ]
+                for col, (v, fmt, align) in enumerate(valeurs, 1):
+                    cell = ws_lot.cell(row=current_row, column=col, value=v)
+                    cell.font = font_normal
+                    cell.border = thin_border
+                    cell.alignment = Alignment(horizontal=align)
+                    if fmt:
+                        cell.number_format = fmt
+                current_row += 1
+            ws_lot.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=4)
+            lbl = ws_lot.cell(row=current_row, column=1, value=f"Sous-total {sl['libelle'] or ''}")
+            lbl.font = font_small
+            lbl.alignment = Alignment(horizontal="right")
+            st = ws_lot.cell(row=current_row, column=5, value=sl["sous_total"])
+            st.font = font_bold
+            st.number_format = "#,##0"
             current_row += 1
 
         ws_lot.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=4)
@@ -546,6 +382,10 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
         ws_lot.column_dimensions["C"].width = 15
         ws_lot.column_dimensions["D"].width = 20
         ws_lot.column_dimensions["E"].width = 20
+        ws_lot.column_dimensions["F"].width = 38
+        ws_lot.column_dimensions["G"].width = 14
+        ws_lot.column_dimensions["H"].width = 30
+        ws_lot.column_dimensions["I"].width = 13
 
     buffer = BytesIO()
     wb.save(buffer)

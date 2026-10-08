@@ -30,36 +30,115 @@ from ..constantes import (
     LARGEUR_MAX_SEMELLE_FILANTE_CM,
     HAUTEUR_MIN_SEMELLE_CM,
     ENROBAGE_SEMELLE_CM,
+    ESPACEMENT_MAX_BARRES_SEMELLE_CM,
+    DIAMETRES_BARRES_SEMELLE_MM,
 )
-from ..validators import EntreeInvalide
-from ..tables_acier import proposer_barres
+from ..unites import arrondi_superieur, cm_vers_m, kn_vers_mn, m2_vers_cm2, m_vers_cm
+from ..validators import EntreeInvalide, valider_contrainte_sol_kn_m2
+from ..tables_acier import poids_barres, proposer_barres
 
 
-def dimensionner_semelle(charge_poteau, taux_travail_sol=None, cote_poteau_cm=None):
+METHODES_SEMELLES = ("ELU", "ELS")
+COEF_POIDS_PROPRE = {"ELU": 1.35, "ELS": 1.0}  # G pondéré comme la combinaison retenue
+COTE_POTEAU_HYPOTHESE_CM = 25.0
+PAS_CONSTRUCTIF_CM = 5
+
+
+def dimensionner_semelle(
+    charge_poteau,
+    taux_travail_sol=None,
+    cote_poteau_cm=None,
+    charge_service=None,
+    methode="ELU",
+    inclure_poids_propre=False,
+):
     """
-    Version simple (charge ELU déjà cumulée) -- voir dimensionner_semelle_affinee()
-    pour une méthode plus précise si G et Q sont disponibles séparément.
+    Semelle isolée carrée sous poteau carré -- méthode des bielles (BAEL 91,
+    pré-dimensionnement).
+
+    Variables / unités :
+        charge_poteau   Nu, effort normal ELU en pied de poteau (kN)
+        charge_service  Ns, effort normal ELS = G + Q (kN) -- requis si methode="ELS"
+        taux_travail_sol  σ_sol, contrainte admissible (kN/m²)
+        cote_poteau_cm  b, côté du poteau (cm)
+        methode         "ELU" : A² ≥ Nu / σ_sol (plus défavorable que l'usage courant)
+                        "ELS" : A² ≥ Ns / σ_sol (usage courant DTU 13.12 / BAEL)
+                        -> CHOIX MÉTIER explicite, renvoyé dans le résultat.
+
+    Étapes :
+        1. A_th = √(N / σ_sol)                       [√(kN / (kN/m²)) = m]
+        2. A = arrondi supérieur à 5 cm (constructif)
+        3. d ≥ (A − b) / 4  (bielles) ; h = arrondi5(d + enrobage), h ≥ 20 cm
+        4. si inclure_poids_propre : P = A²·h·25 kN/m³ (×1,35 en ELU) et
+           on élargit A par pas de 5 cm tant que (N + P) / A² > σ_sol
+        5. Acier par direction (ELU, bielles) : As = Nu (A − b) / (8 d fsu)
+           [MN·m / (m·MPa) = m²] ; poids = 2 directions × n barres × (A − 2c) × masse linéique
     """
     if charge_poteau is None or charge_poteau <= 0:
         raise EntreeInvalide("La charge du poteau doit être positive.")
+    valider_contrainte_sol_kn_m2(taux_travail_sol)
+    if methode not in METHODES_SEMELLES:
+        raise EntreeInvalide(f"Méthode de dimensionnement des semelles inconnue : {methode!r}.")
+    if methode == "ELS" and (charge_service is None or charge_service <= 0):
+        raise EntreeInvalide("Méthode ELS : l'effort normal de service Ns (G + Q) est requis.")
+    if cote_poteau_cm is not None and cote_poteau_cm <= 0:
+        raise EntreeInvalide("Le côté du poteau doit être positif.")
 
     hypothese_sol = taux_travail_sol is None
-    contrainte_sol = taux_travail_sol or CONTRAINTE_SOL_DEFAUT
-
-    surface_m2 = charge_poteau / contrainte_sol
-    cote_m = surface_m2 ** 0.5
-
+    sigma = taux_travail_sol or CONTRAINTE_SOL_DEFAUT
     hypothese_cote_poteau = cote_poteau_cm is None
-    cote_poteau_m = (cote_poteau_cm / 100) if cote_poteau_cm else 0.25
+    b_cm = cote_poteau_cm or COTE_POTEAU_HYPOTHESE_CM
 
-    hauteur_m = max((cote_m - cote_poteau_m) / 4, 0.20)
+    n_dim = charge_poteau if methode == "ELU" else charge_service
+    cote_theorique_cm = m_vers_cm((n_dim / sigma) ** 0.5)
+    cote_cm = max(arrondi_superieur(cote_theorique_cm, PAS_CONSTRUCTIF_CM), arrondi_superieur(b_cm, PAS_CONSTRUCTIF_CM))
+
+    def geometrie(a_cm):
+        d_cm = max((a_cm - b_cm) / 4, HAUTEUR_MIN_SEMELLE_CM - ENROBAGE_SEMELLE_CM)
+        h_cm = max(HAUTEUR_MIN_SEMELLE_CM, arrondi_superieur(d_cm + ENROBAGE_SEMELLE_CM, PAS_CONSTRUCTIF_CM))
+        a_m, h_m = cm_vers_m(a_cm), cm_vers_m(h_cm)
+        pp = a_m * a_m * h_m * POIDS_VOLUMIQUE_BETON * COEF_POIDS_PROPRE[methode] if inclure_poids_propre else 0.0
+        return h_cm, h_cm - ENROBAGE_SEMELLE_CM, pp, (n_dim + pp) / (a_m * a_m)
+
+    h_cm, d_cm, pp, pression = geometrie(cote_cm)
+    iterations = 0
+    while pression > sigma + 1e-9:
+        cote_cm += PAS_CONSTRUCTIF_CM
+        iterations += 1
+        if iterations > 200:
+            raise NotImplementedError("Semelle isolée non convergente : étude de fondation spécifique requise.")
+        h_cm, d_cm, pp, pression = geometrie(cote_cm)
+
+    # Acier (toujours à l'ELU, méthode des bielles), identique dans les deux directions.
+    a_m, b_m, d_m = cm_vers_m(cote_cm), cm_vers_m(b_cm), cm_vers_m(d_cm)
+    fsu = LIMITE_ELASTIQUE_ACIER / GAMMA_ACIER
+    as_cm2 = m2_vers_cm2(kn_vers_mn(charge_poteau) * (a_m - b_m) / (8 * d_m * fsu)) if a_m > b_m else 0.0
+    longueur_barre_m = a_m - 2 * cm_vers_m(ENROBAGE_SEMELLE_CM)
+    # Nombre minimal de barres imposé par l'espacement maximal (20 cm) et
+    # diamètre minimal HA12 -- règles validées par le technicien BTP.
+    nb_min = max(4, math.ceil(round(longueur_barre_m / cm_vers_m(ESPACEMENT_MAX_BARRES_SEMELLE_CM), 9)) + 1)
+    barres = proposer_barres(max(as_cm2, 0.01), diametres_autorises=list(DIAMETRES_BARRES_SEMELLE_MM),
+                             nb_barres_min=nb_min, nb_barres_max=max(nb_min, 40))
+    poids_acier = 2 * poids_barres(barres["diametre_mm"], barres["nombre_barres"], longueur_barre_m) if barres else None
 
     return {
-        "cote_cm": round(cote_m * 100, 1),
-        "surface_m2": round(surface_m2, 2),
-        "hauteur_cm": round(hauteur_m * 100, 1),
+        "cote_cm": cote_cm,
+        "cote_theorique_cm": round(cote_theorique_cm, 1),
+        "surface_m2": round(a_m * a_m, 4),
+        "hauteur_cm": h_cm,
+        "hauteur_utile_cm": d_cm,
+        "methode": methode,
+        "charge_dimensionnement_kn": round(n_dim, 2),
+        "poids_propre_semelle_kn": round(pp, 2),
+        "pression_sol_kn_m2": round(pression, 1),
+        "contrainte_sol_kn_m2": sigma,
+        "section_acier_par_direction_cm2": round(as_cm2, 2),
+        "barres_proposees": barres,
+        "espacement_barres_cm": round(m_vers_cm(longueur_barre_m) / (barres["nombre_barres"] - 1), 1) if barres else None,
+        "poids_acier_total_kg": round(poids_acier, 2) if poids_acier is not None else None,
         "hypothese_sol": hypothese_sol,
         "hypothese_cote_poteau": hypothese_cote_poteau,
+        "poids_propre_inclus": bool(inclure_poids_propre),
     }
 
 
@@ -224,8 +303,7 @@ def dimensionner_semelle_filante(
     """
     if charge_lineaire_kn_m is None or charge_lineaire_kn_m <= 0:
         raise EntreeInvalide("La charge linéaire du mur doit être positive.")
-    if taux_travail_sol is not None and taux_travail_sol <= 0:
-        raise EntreeInvalide("Le taux de travail du sol doit être positif.")
+    valider_contrainte_sol_kn_m2(taux_travail_sol)
     if epaisseur_mur_cm is not None and epaisseur_mur_cm <= 0:
         raise EntreeInvalide("L'épaisseur du mur doit être positive.")
     if charge_lineaire_service_kn_m is not None and charge_lineaire_service_kn_m <= 0:
@@ -246,7 +324,7 @@ def dimensionner_semelle_filante(
         hauteur_utile_m = max((largeur_m - epaisseur_mur_m) / 4, 0.10)
         hauteur_cm = max(
             HAUTEUR_MIN_SEMELLE_CM,
-            math.ceil((hauteur_utile_m * 100 + ENROBAGE_SEMELLE_CM) / 5) * 5,
+            arrondi_superieur(m_vers_cm(hauteur_utile_m) + ENROBAGE_SEMELLE_CM, 5),
         )
         poids_propre = largeur_m * (hauteur_cm / 100) * POIDS_VOLUMIQUE_BETON
         return hauteur_cm, poids_propre, (charge_sol + poids_propre) / largeur_m
@@ -254,7 +332,7 @@ def dimensionner_semelle_filante(
     largeur_theorique_m = charge_sol / contrainte_sol
     largeur_cm = max(
         LARGEUR_MIN_SEMELLE_FILANTE_CM,
-        math.ceil(largeur_theorique_m * 100 / 5) * 5,
+        arrondi_superieur(m_vers_cm(largeur_theorique_m), 5),
     )
 
     # Le poids propre de la semelle s'ajoute à la charge du mur : la
@@ -284,11 +362,11 @@ def dimensionner_semelle_filante(
     fe = limite_elastique_acier or LIMITE_ELASTIQUE_ACIER
     fsu = fe / GAMMA_ACIER  # MPa
 
-    nu_mn_ml = charge_lineaire_kn_m / 1000  # kN/ml -> MN/ml
+    nu_mn_ml = kn_vers_mn(charge_lineaire_kn_m)  # kN/ml -> MN/ml
     acier_transversal_m2 = (nu_mn_ml * (largeur_m - epaisseur_mur_m)) / (
         8 * hauteur_utile_m * fsu
     )
-    acier_transversal_cm2 = acier_transversal_m2 * 10_000
+    acier_transversal_cm2 = m2_vers_cm2(acier_transversal_m2)
     acier_repartition_cm2 = acier_transversal_cm2 / 4
 
     # Répartition sur 1 ml : 3 à 8 barres, soit un espacement de 33 à

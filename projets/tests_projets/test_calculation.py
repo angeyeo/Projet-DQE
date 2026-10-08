@@ -19,7 +19,8 @@ class TestLienSemellePoteau(APITestCase):
 
     def setUp(self):
         self.projet = Projet.objects.create(
-            nom="Immeuble test", usage_batiment="habitation", nb_niveaux=2
+            nom="Immeuble test", usage_batiment="habitation", nb_niveaux=2,
+            inclure_poids_propre_ossature=False,  # on isole l'effet du côté du poteau
         )
         self.poteau = ElementStructurel.objects.create(
             projet=self.projet,
@@ -37,7 +38,7 @@ class TestLienSemellePoteau(APITestCase):
             type_element=ElementStructurel.TypeElement.SEMELLE,
             identifiant="S1",
             charge_calculee=500,
-            taux_travail_sol=1.5,
+            taux_travail_sol=150,  # kN/m² (1,5 bar) -- avant : 1.5, unité erronée
             poteau_associe=self.poteau,
         )
         semelle_sans_lien = ElementStructurel.objects.create(
@@ -45,7 +46,7 @@ class TestLienSemellePoteau(APITestCase):
             type_element=ElementStructurel.TypeElement.SEMELLE,
             identifiant="S2",
             charge_calculee=500,
-            taux_travail_sol=1.5,
+            taux_travail_sol=150,  # kN/m² (1,5 bar) -- avant : 1.5, unité erronée
             poteau_associe=None,
         )
 
@@ -56,9 +57,71 @@ class TestLienSemellePoteau(APITestCase):
         self.assertFalse(resultat_lie["hypothese_cote_poteau"])
         # Sans lien : l'hypothèse par défaut reste utilisée.
         self.assertTrue(resultat_sans_lien["hypothese_cote_poteau"])
-        # La hauteur de semelle doit refléter le vrai côté du poteau (35 cm),
-        # donc différer du résultat obtenu avec l'hypothèse par défaut (25 cm).
-        self.assertNotEqual(resultat_lie["hauteur_cm"], resultat_sans_lien["hauteur_cm"])
+        # Le vrai côté du poteau (35 cm) entre dans l'acier des bielles
+        # As = Nu (A − b) / (8 d fsu) : le résultat diffère de l'hypothèse 25 cm.
+        # (La hauteur, arrondie à 5 cm, peut coïncider : 45 cm dans les deux cas.)
+        self.assertLess(resultat_lie["section_acier_par_direction_cm2"],
+                        resultat_sans_lien["section_acier_par_direction_cm2"])
+
+
+class TestUniteContrainteSol(APITestCase):
+    """La contrainte du sol est attendue en kN/m². Une valeur en MPa (0.2)
+    donnait une semelle 1000 fois trop grande en surface : elle est
+    désormais refusée avec un message qui explique l'unité."""
+
+    def test_valeur_en_mpa_refusee(self):
+        from moteur_calcul.validators import EntreeInvalide
+
+        projet = Projet.objects.create(nom="Sol", usage_batiment="habitation", nb_niveaux=1)
+        semelle = ElementStructurel.objects.create(
+            projet=projet, type_element=ElementStructurel.TypeElement.SEMELLE,
+            identifiant="S1", charge_calculee=500, taux_travail_sol=0.2,
+        )
+        with self.assertRaisesMessage(EntreeInvalide, "kN/m²"):
+            calculer_element(semelle)
+
+    def test_valeur_de_reference(self):
+        """500 kN sur 200 kN/m² -> 2,5 m² -> côté théorique = sqrt(2,5) = 158,1 cm,
+        retenu 160 cm (arrondi constructif à 5 cm) -> 2,56 m²."""
+        projet = Projet.objects.create(nom="Sol", usage_batiment="habitation", nb_niveaux=1,
+                                       inclure_poids_propre_ossature=False)  # formule seule
+        semelle = ElementStructurel.objects.create(
+            projet=projet, type_element=ElementStructurel.TypeElement.SEMELLE,
+            identifiant="S1", charge_calculee=500, taux_travail_sol=200,
+        )
+        resultat = calculer_element(semelle)
+        self.assertAlmostEqual(resultat["cote_theorique_cm"], 158.1)
+        self.assertEqual(resultat["cote_cm"], 160)
+        self.assertAlmostEqual(resultat["surface_m2"], 2.56)
+        self.assertFalse(resultat["hypothese_sol"])
+
+
+class TestPoutreChargeLineaire(APITestCase):
+    """Une poutre est dimensionnée avec SA charge linéaire (kN/m), jamais
+    avec la somme des couches de plancher (kN/m², dimension différente)."""
+
+    def test_couches_non_utilisees_comme_charge_lineaire(self):
+        from projets.models import CoucheCharge
+
+        projet = Projet.objects.create(nom="Poutre", usage_batiment="habitation", nb_niveaux=1)
+        poutre = ElementStructurel.objects.create(
+            projet=projet, type_element=ElementStructurel.TypeElement.POUTRE,
+            identifiant="PX1", portee=5.0, charge_lineaire=30.0,
+        )
+        reference = calculer_element(poutre)
+        CoucheCharge.objects.create(element=poutre, designation="Chape", epaisseur_cm=5, poids_volumique_kn_m3=20)
+        self.assertEqual(calculer_element(poutre), reference)
+
+    def test_charge_lineaire_absente_erreur_explicite(self):
+        from moteur_calcul.validators import EntreeInvalide
+
+        projet = Projet.objects.create(nom="Poutre", usage_batiment="habitation", nb_niveaux=1)
+        poutre = ElementStructurel.objects.create(
+            projet=projet, type_element=ElementStructurel.TypeElement.POUTRE,
+            identifiant="PX1", portee=5.0,
+        )
+        with self.assertRaisesMessage(EntreeInvalide, "charge linéaire"):
+            calculer_element(poutre)
 
 
 class TestDegressionChargesPoteau(APITestCase):

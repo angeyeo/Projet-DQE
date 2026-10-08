@@ -1,46 +1,29 @@
-from django.contrib import admin
 from django.conf import settings
 from django.conf.urls.static import static
-from django.urls import path, include
+from django.contrib import admin
+from django.urls import include, path
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
     TokenVerifyView,
 )
-from projets.views import (
-    AssistantStructurerView, 
-    AssistantExpliquerView, 
-    MeView,
-    ProjetViewSet
-)
-from projets.auth_views import InscriptionEntrepriseView, LogoutView
 
+from projets.views import MeView
+
+# Toutes les routes métier sont sous /api/ (api/urls.py). Les anciens
+# alias à la racine (/auth/..., /assistant/...) ajoutés "pour stopper les
+# 404 des tests" ont été retirés : ils doublaient la surface d'API, et
+# /assistant/vision pointait vers une action de détail sans identifiant
+# de projet (toujours en erreur).
 urlpatterns = [
     path("admin/", admin.site.urls),
-    
-    # Endpoints d'authentification JWT
     path("api/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/token/verify/", TokenVerifyView.as_view(), name="token_verify"),
     path("api/me/", MeView.as_view(), name="user-me"),
-    
-    # Routes d'authentification directes à la racine (pour stopper les 404 des tests)
-    path("auth/register/", InscriptionEntrepriseView.as_view(), name="root-auth-register"),
-    path("auth/login/", TokenObtainPairView.as_view(), name="root-auth-login"),
-    path("auth/logout/", LogoutView.as_view(), name="root-auth-logout"),
-    path("auth/token/", TokenObtainPairView.as_view(), name="root-token"),
-    
-    # Routes principales de l'API (projets, éléments, etc.)
     path("api/", include("api.urls")),
-    
-    # Routes directes pour les tests de l'Assistant IA & Vision
-    path("assistant/structurer/", AssistantStructurerView.as_view(), name="assistant-structurer"),
-    path("assistant/expliquer/", AssistantExpliquerView.as_view(), name="assistant-expliquer"),
-    path("assistant/structurer", AssistantStructurerView.as_view()),
-    path("assistant/expliquer", AssistantExpliquerView.as_view()),
-    path("assistant/vision/", ProjetViewSet.as_view({"post": "analyser_plan_image"}), name="assistant-vision-direct"),
-    path("assistant/vision", ProjetViewSet.as_view({"post": "analyser_plan_image"})),
 ]
 
-# Gestion des fichiers médias en mode développement
-urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+# Fichiers médias servis par Django uniquement en développement.
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

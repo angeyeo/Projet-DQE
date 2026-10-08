@@ -8,19 +8,20 @@ from rest_framework.test import APIClient
 from projets.models import JournalAppelIA, ElementStructurel, Projet
 from projets.services.assistant_ia.journalisation import enregistrer_appel_ia
 from projets.services.assistant_ia.client import LLMServiceError
+from projets.tests_projets.utils import creer_cabinet, creer_membre
 
 User = get_user_model()
 
 
 class AIJournalTestCase(TestCase):
     def setUp(self):
+        from django.core.cache import cache
+        cache.clear()  # throttling par utilisateur : compteurs remis à zéro
         self.client = APIClient()
-        self.user = User.objects.create_user(
-            username="testuser",
-            email="test@example.com",
-            password="password123",
-        )
-        self.projet = Projet.objects.create(nom="Projet Test Journal")
+        self.cabinet = creer_cabinet("Cabinet Journal")
+        self.user = creer_membre(self.cabinet, username="testuser", email="test@example.com")
+        self.client.force_authenticate(user=self.user)
+        self.projet = Projet.objects.create(nom="Projet Test Journal", entreprise=self.cabinet)
         self.poteau = ElementStructurel.objects.create(
             projet=self.projet,
             identifiant="P1",
@@ -30,7 +31,7 @@ class AIJournalTestCase(TestCase):
             statut=ElementStructurel.Statut.VALIDE,
         )
         # S'assurer que le provider d'IA est 'mock' par défaut pendant les tests
-        self.env_patcher = mock.patch.dict(os.environ, {"LLM_PROVIDER": "mock", "DEMO_MODE": "True"})
+        self.env_patcher = mock.patch.dict(os.environ, {"LLM_PROVIDER": "mock"})
         self.env_patcher.start()
 
     def tearDown(self):

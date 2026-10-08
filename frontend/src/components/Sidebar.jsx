@@ -1,6 +1,13 @@
 import React from 'react';
-import { LayoutDashboard, FileUp, Calculator, Lock, FileSpreadsheet, ChevronLeft, ChevronRight, Compass, Settings, Building2, LogOut, Users } from 'lucide-react';
+import {
+  LayoutDashboard, FolderKanban, FileUp, Calculator, Grid3x3, Lock, Layers, FileSpreadsheet,
+  BarChart3, ChevronLeft, ChevronRight, Compass, Settings, Building2, LogOut, Users, Activity,
+} from 'lucide-react';
 
+// Navigation en trois groupes : le CABINET (toujours accessible), le
+// PROJET OUVERT (étapes, grisées tant qu'aucun projet n'est ouvert) et la
+// CONFIGURATION. Chaque entrée est un vrai <button> : navigation clavier
+// (Tab / Entrée / Espace) et focus visible natifs.
 export default function Sidebar({
   activeView,
   setActiveView,
@@ -11,44 +18,72 @@ export default function Sidebar({
   entreprise,
   entrepriseLoading,
   onLogout,
-  moiProfil,
+  moi,
+  projetOuvert,
 }) {
-  const menuItems = [
-    { id: 'dashboard', label: 'Tableau de Bord', icon: LayoutDashboard },
-    { id: 'step1', label: 'Plans & Saisie', icon: FileUp },
-    { id: 'step2', label: 'Calculs Structurels', icon: Calculator },
-    { id: 'step3', label: 'Validation & Verrou', icon: Lock, badge: lockedCount > 0 ? `${lockedCount}/${totalCount}` : null },
-    { id: 'step4', label: 'Devis DQE & IA', icon: FileSpreadsheet },
+  const cabinet = [
+    { id: 'dashboard', label: 'Tableau de bord', icon: LayoutDashboard },
+    { id: 'projets', label: 'Mes projets', icon: FolderKanban },
   ];
 
-  const menuItemsBas = [
-    { id: 'settingsEntreprise', label: 'Paramètres Entreprise', icon: Settings },
-    // Visible uniquement pour un compte Admin -- l'API refuse déjà l'accès
-    // aux autres rôles, mais autant ne pas afficher un lien qui échouera.
-    ...(moiProfil?.role === 'admin' ? [{ id: 'equipe', label: 'Équipe', icon: Users }] : []),
+  const projet = [
+    { id: 'step1', label: 'Paramètres', icon: FileUp, toujours: true },
+    { id: 'step2', label: 'Calculs structurels', icon: Calculator },
+    { id: 'stepDalles', label: 'Dalles', icon: Grid3x3 },
+    { id: 'step3', label: 'Validation', icon: Lock, badge: totalCount > 0 ? `${lockedCount}/${totalCount}` : null },
+    { id: 'step3bis', label: 'Plan de fondation', icon: Layers },
+    { id: 'step4', label: 'DQE & exports', icon: FileSpreadsheet },
+    { id: 'analyse', label: 'Analyse du projet', icon: BarChart3 },
   ];
 
-  // Initiales tirées du vrai nom d'entreprise (dqeService.getEntreprise) --
-  // jamais une donnée inventée. Tant que rien n'est configuré, on l'indique
-  // honnêtement plutôt que d'afficher un faux nom.
+  const configuration = [
+    { id: 'settingsEntreprise', label: 'Paramètres cabinet', icon: Settings },
+    ...(moi?.role === 'admin' ? [{ id: 'equipe', label: 'Équipe', icon: Users }] : []),
+    ...(moi?.is_staff ? [{ id: 'staff', label: 'Pilotage produit', icon: Activity }] : []),
+  ];
+
   const initiales = entreprise?.nom
-    ? entreprise.nom
-        .split(/\s+/)
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((w) => w[0].toUpperCase())
-        .join('')
+    ? entreprise.nom.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('')
     : null;
+
+  const groupe = (titre, items) => (
+    <nav aria-label={titre}>
+      {!isCollapsed && <div className="nav-section-title">{titre}</div>}
+      <ul className="nav-menu">
+        {items.map((item) => {
+          const Icon = item.icon;
+          const actif = activeView === item.id;
+          const desactive = items === projet && !projetOuvert && !item.toujours;
+          return (
+            <li key={item.id}>
+              <button
+                type="button"
+                className={`nav-item ${actif ? 'active' : ''} ${desactive ? 'nav-item-inactif' : ''}`}
+                onClick={() => setActiveView(item.id)}
+                aria-current={actif ? 'page' : undefined}
+                title={desactive ? `${item.label} — ouvrez d'abord un projet` : item.label}
+              >
+                <Icon size={19} style={{ flexShrink: 0 }} aria-hidden="true" />
+                {!isCollapsed && (
+                  <>
+                    <span>{item.label}</span>
+                    {item.badge && <span className="nav-badge">{item.badge}</span>}
+                  </>
+                )}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
 
   return (
     <aside className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
       <div>
-        {/* Brand Header */}
         <div className="sidebar-header">
           <div className="brand-wrapper">
-            <div className="brand-icon-box">
-              <Compass size={22} />
-            </div>
+            <div className="brand-icon-box"><Compass size={22} aria-hidden="true" /></div>
             {!isCollapsed && (
               <div className="brand-text">
                 <h1>BTP Innovation Ivoire</h1>
@@ -56,87 +91,41 @@ export default function Sidebar({
               </div>
             )}
           </div>
-
-          <button className="collapse-btn" onClick={() => setIsCollapsed(!isCollapsed)}>
+          <button
+            type="button"
+            className="collapse-btn"
+            onClick={() => setIsCollapsed(!isCollapsed)}
+            aria-label={isCollapsed ? 'Déplier le menu' : 'Replier le menu'}
+            aria-expanded={!isCollapsed}
+          >
             {isCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
           </button>
         </div>
 
-        {/* Navigation Section */}
-        {!isCollapsed && <div className="nav-section-title">Navigation principale</div>}
-        <ul className="nav-menu">
-          {menuItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeView === item.id;
-            return (
-              <li
-                key={item.id}
-                className={`nav-item ${isActive ? 'active' : ''}`}
-                onClick={() => setActiveView(item.id)}
-              >
-                <Icon size={19} style={{ flexShrink: 0 }} />
-                {!isCollapsed && (
-                  <>
-                    <span>{item.label}</span>
-                    {item.badge && <span className="nav-badge">{item.badge}</span>}
-                  </>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-
-        {!isCollapsed && <div className="nav-section-title">Configuration</div>}
-        <ul className="nav-menu">
-          {menuItemsBas.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeView === item.id;
-            return (
-              <li
-                key={item.id}
-                className={`nav-item ${isActive ? 'active' : ''}`}
-                onClick={() => setActiveView(item.id)}
-              >
-                <Icon size={19} style={{ flexShrink: 0 }} />
-                {!isCollapsed && <span>{item.label}</span>}
-              </li>
-            );
-          })}
-        </ul>
+        {groupe('Cabinet', cabinet)}
+        {groupe(projetOuvert ? 'Projet ouvert' : 'Projet (aucun ouvert)', projet)}
+        {groupe('Configuration', configuration)}
       </div>
 
-      {/* Carte entreprise -- reflète la vraie config (Paramètres Entreprise),
-          jamais un nom de personne. Trois états honnêtes : chargement,
-          entreprise configurée, entreprise non configurée. */}
       <div className="sidebar-footer">
-        <div className="account-card" onClick={() => setActiveView('settingsEntreprise')}>
+        <button type="button" className="account-card" onClick={() => setActiveView('settingsEntreprise')}>
           <div className="account-avatar">
-            {entreprise?.logo ? (
-              <img src={entreprise.logo} alt="" />
-            ) : initiales ? (
-              initiales
-            ) : (
-              <Building2 size={16} />
-            )}
+            {entreprise?.logo ? <img src={entreprise.logo} alt="" /> : initiales || <Building2 size={16} />}
           </div>
           {!isCollapsed && (
             <div className="account-details">
               <div className="name">
-                {entrepriseLoading ? 'Chargement…' : entreprise?.nom || 'Entreprise non configurée'}
+                {entrepriseLoading ? 'Chargement…' : entreprise?.nom || 'Cabinet non configuré'}
               </div>
               <div className="role">
-                {entrepriseLoading ? '' : entreprise?.nom ? 'Compte entreprise' : 'Configurer maintenant'}
+                {entrepriseLoading ? '' : moi?.username ? `${moi.username}${moi.role ? ` · ${moi.role}` : ''}` : ''}
               </div>
             </div>
           )}
-        </div>
+        </button>
 
-        <button
-          className="nav-item"
-          style={{ width: '100%', marginTop: '0.5rem', background: 'transparent', border: 'none', cursor: 'pointer' }}
-          onClick={onLogout}
-        >
-          <LogOut size={19} style={{ flexShrink: 0 }} />
+        <button type="button" className="nav-item nav-item-deconnexion" onClick={onLogout}>
+          <LogOut size={19} style={{ flexShrink: 0 }} aria-hidden="true" />
           {!isCollapsed && <span>Déconnexion</span>}
         </button>
       </div>

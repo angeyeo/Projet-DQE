@@ -8,7 +8,8 @@ from rest_framework.test import APITestCase
 from openpyxl import load_workbook
 
 from projets.models import Projet, ElementStructurel, PosteComplementaire
-from projets.services.dqe_calculator import calculer_element_dqe, calculer_projet_dqe
+from projets.services.dqe_calculator import DQEIncomplet, calculer_element_dqe, calculer_projet_dqe
+from projets.tests_projets.utils import BAREME_TEST, authentifier
 from projets.services.dqe_exporters import exporter_dqe_pdf, exporter_dqe_excel
 
 class DQECalculatorTestCase(TestCase):
@@ -49,7 +50,7 @@ class DQECalculatorTestCase(TestCase):
         )
 
     def test_calculer_element_poteau_ratio(self):
-        lignes = calculer_element_dqe(self.poteau, {})
+        lignes = calculer_element_dqe(self.poteau, BAREME_TEST)
         # Doit générer 3 lignes (Béton, Coffrage, Acier)
         self.assertEqual(len(lignes), 3)
         
@@ -74,12 +75,12 @@ class DQECalculatorTestCase(TestCase):
         }
         self.poteau.save()
 
-        lignes = calculer_element_dqe(self.poteau, {})
+        lignes = calculer_element_dqe(self.poteau, BAREME_TEST)
         acier = next(l for l in lignes if l["categorie"] == "ACIER")
         self.assertEqual(acier["quantite"], 15.5)
 
     def test_calculer_element_poutre(self):
-        lignes = calculer_element_dqe(self.poutre, {})
+        lignes = calculer_element_dqe(self.poutre, BAREME_TEST)
         self.assertEqual(len(lignes), 3)
 
         beton = next(l for l in lignes if l["categorie"] == "BETON")
@@ -92,7 +93,7 @@ class DQECalculatorTestCase(TestCase):
         self.assertEqual(acier["quantite"], 60.0)
 
     def test_calculer_element_semelle(self):
-        lignes = calculer_element_dqe(self.semelle, {})
+        lignes = calculer_element_dqe(self.semelle, BAREME_TEST)
         self.assertEqual(len(lignes), 3)
 
         beton = next(l for l in lignes if l["categorie"] == "BETON")
@@ -111,7 +112,7 @@ class DQECalculatorTestCase(TestCase):
         self.semelle.statut = ElementStructurel.Statut.MODIFIE
         self.semelle.save()
 
-        dqe_data = calculer_projet_dqe(self.projet)
+        dqe_data = calculer_projet_dqe(self.projet, BAREME_TEST)
         
         reperes = [l["repere"] for l in dqe_data["lignes"]]
         self.assertIn("P1", reperes)
@@ -128,7 +129,7 @@ class DQECalculatorTestCase(TestCase):
             prix_unitaire=5000.0
         )
 
-        dqe_data = calculer_projet_dqe(self.projet)
+        dqe_data = calculer_projet_dqe(self.projet, BAREME_TEST)
 
         mo_line = next(l for l in dqe_data["lignes"] if l["type_element"] == "MAIN_DOEUVRE")
         self.assertEqual(mo_line["designation"], "Terrassement fouilles")
@@ -154,7 +155,7 @@ class DQECalculatorTestCase(TestCase):
             resultat_valide={"epaisseur_cm": 15},
             statut=ElementStructurel.Statut.VALIDE
         )
-        lignes = calculer_element_dqe(dalle, {})
+        lignes = calculer_element_dqe(dalle, BAREME_TEST)
         self.assertEqual(len(lignes), 3)
 
         beton = next(l for l in lignes if l["categorie"] == "BETON")
@@ -185,7 +186,7 @@ class DQECalculatorTestCase(TestCase):
             },
             statut=ElementStructurel.Statut.VALIDE
         )
-        lignes = calculer_element_dqe(sf, {})
+        lignes = calculer_element_dqe(sf, BAREME_TEST)
         self.assertEqual(len(lignes), 3)
 
         beton = next(l for l in lignes if l["categorie"] == "BETON")
@@ -212,7 +213,7 @@ class DQECalculatorTestCase(TestCase):
             },
             statut=ElementStructurel.Statut.VALIDE
         )
-        lignes = calculer_element_dqe(sf, {})
+        lignes = calculer_element_dqe(sf, BAREME_TEST)
         self.assertEqual(len(lignes), 3)
 
         beton = next(l for l in lignes if l["categorie"] == "BETON")
@@ -245,7 +246,7 @@ class DQECalculatorTestCase(TestCase):
             statut=ElementStructurel.Statut.VALIDE
         )
 
-        dqe_data = calculer_projet_dqe(self.projet)
+        dqe_data = calculer_projet_dqe(self.projet, BAREME_TEST)
 
         # Vérification des sous-totaux par catégorie
         # Béton : 0.12 (poteau) + 0.40 (poutre) + 0.90 (semelle) + 7.50 (dalle) + 1.50 (semelle filante) = 10.42 m3
@@ -262,6 +263,99 @@ class DQECalculatorTestCase(TestCase):
 
         # Total Général : 1 042 000 + 789 600 + 666 000 = 2 497 600 FCFA
         self.assertEqual(dqe_data["total_general"], 2497600)
+
+    def test_acier_au_ratio_signale_comme_estimation(self):
+        acier = next(l for l in calculer_element_dqe(self.poteau, BAREME_TEST) if l["categorie"] == "ACIER")
+        self.assertEqual(acier["source_quantite"], "ratio_reference")
+        self.assertIn("125", acier["hypothese"])
+
+    def test_prix_manquant_erreur_explicite_sans_valeur_par_defaut(self):
+        bareme = {k: v for k, v in BAREME_TEST.items() if k != "acier_kg"}
+        with self.assertRaises(DQEIncomplet) as ctx:
+            calculer_projet_dqe(self.projet, bareme)
+        codes = {(p["code"], p.get("cle_prix")) for p in ctx.exception.problemes}
+        self.assertIn(("PRIX_MANQUANT", "acier_kg"), codes)
+
+    def test_dimension_manquante_bloque_au_lieu_d_omettre(self):
+        self.poutre.portee = None
+        self.poutre.save()
+        with self.assertRaises(DQEIncomplet) as ctx:
+            calculer_projet_dqe(self.projet, BAREME_TEST)
+        probleme = ctx.exception.problemes[0]
+        self.assertEqual(probleme["code"], "DIMENSION_MANQUANTE")
+        self.assertEqual(probleme["repere"], "PT1")
+
+    def test_poste_simple_quantite_nulle_bloque(self):
+        PosteComplementaire.objects.create(
+            projet=self.projet, lot=PosteComplementaire.Lot.PLOMBERIE,
+            designation="Réseau", unite="ml", quantite=None, prix_unitaire=2000,
+        )
+        with self.assertRaises(DQEIncomplet) as ctx:
+            calculer_projet_dqe(self.projet, BAREME_TEST)
+        self.assertEqual(ctx.exception.problemes[0]["code"], "POSTE_INCOMPLET")
+
+    def test_poste_ratio_maconnerie_inclus_et_classe_en_maconnerie(self):
+        """Périmètre 40 m, soubassement 0,6 m, agglos 15 pleins (unité m², validée) :
+        S = 40 x 0,6 = 24 m² -> 24 x 9 000 = 216 000 FCFA.
+        Élévation : 40 x 3 x 1 niveau x 0,8 (hypothèse signalée) = 96 m²."""
+        PosteComplementaire.objects.create(
+            projet=self.projet, lot=PosteComplementaire.Lot.GROS_OEUVRE_INFRA,
+            mode=PosteComplementaire.Mode.RATIO, type_poste="maconnerie",
+            geometrie={"perimetre_batiment_m": 40, "hauteur_soubassement_m": 0.6,
+                       "hauteur_etage_m": 3, "nb_niveaux": 1},
+        )
+        dqe = calculer_projet_dqe(self.projet, BAREME_TEST)
+        infra = next(l for l in dqe["lignes"] if "pleins" in l["designation"])
+        self.assertEqual(infra["categorie"], "MACONNERIE")
+        self.assertEqual(infra["unite"], "m²")
+        self.assertEqual(infra["quantite"], 24.0)
+        self.assertEqual(infra["montant"], 216000)
+        self.assertEqual(infra["cle_prix"], "agglos_15_pleins_m2")
+        elev = next(l for l in dqe["lignes"] if "creux" in l["designation"])
+        self.assertEqual(elev["quantite"], 96.0)
+        self.assertIn("0.8", elev["hypothese"])
+        # Les agglos ne gonflent pas le volume de BÉTON du projet
+        self.assertEqual(dqe["synthese"]["beton_m3"], 1.42)
+
+    def test_ancien_prix_agglos_au_m3_jamais_converti(self):
+        """Un barème qui n'a que l'ancien prix « au m³ » bloque la ligne avec un
+        message explicite : aucune conversion m³ -> m² implicite."""
+        PosteComplementaire.objects.create(
+            projet=self.projet, lot=PosteComplementaire.Lot.GROS_OEUVRE_INFRA,
+            mode=PosteComplementaire.Mode.RATIO, type_poste="maconnerie",
+            geometrie={"perimetre_batiment_m": 40, "hauteur_soubassement_m": 0.6},
+        )
+        bareme = {k: v for k, v in BAREME_TEST.items() if k != "agglos_15_pleins_m2"} | {"agglos_pleins_m3": 9000}
+        with self.assertRaises(DQEIncomplet) as ctx:
+            calculer_projet_dqe(self.projet, bareme)
+        codes = [p["code"] for p in ctx.exception.problemes]
+        self.assertIn("PRIX_UNITE_A_CONFIRMER", codes)
+        self.assertIn("aucune conversion automatique", str(ctx.exception))
+
+    def test_poste_ratio_geometrie_incomplete_bloque(self):
+        PosteComplementaire.objects.create(
+            projet=self.projet, lot=PosteComplementaire.Lot.GROS_OEUVRE_SUPER,
+            mode=PosteComplementaire.Mode.RATIO, type_poste="chainage",
+            geometrie={"perimetre_batiment_m": 40},
+        )
+        with self.assertRaises(DQEIncomplet) as ctx:
+            calculer_projet_dqe(self.projet, BAREME_TEST)
+        self.assertEqual(ctx.exception.problemes[0]["code"], "GEOMETRIE_INCOMPLETE")
+
+    def test_montant_egal_quantite_affichee_fois_prix(self):
+        self.poutre.portee = 3.3333
+        self.poutre.save()
+        dqe = calculer_projet_dqe(self.projet, BAREME_TEST)
+        for ligne in dqe["lignes"]:
+            attendu = round(ligne["quantite"] * ligne["prix_unitaire"])
+            self.assertEqual(ligne["montant"], attendu, ligne["designation"])
+
+    def test_synthese_ratio_acier_beton(self):
+        dqe = calculer_projet_dqe(self.projet, BAREME_TEST)
+        # béton 0,12 + 0,40 + 0,90 = 1,42 m³ ; acier 15 + 60 + 45 = 120 kg
+        self.assertEqual(dqe["synthese"]["beton_m3"], 1.42)
+        self.assertEqual(dqe["synthese"]["acier_kg"], 120.0)
+        self.assertEqual(dqe["synthese"]["ratio_acier_kg_m3"], 84.5)
 
 
 class DQEExportersTestCase(TestCase):
@@ -319,10 +413,12 @@ class DQEExportersTestCase(TestCase):
 
 class DQEAPITestCase(APITestCase):
     def setUp(self):
+        self.user, self.cabinet = authentifier(self, bareme=BAREME_TEST)
         self.projet = Projet.objects.create(
             nom="Projet API Test",
             usage_batiment="bureau",
-            nb_niveaux=3
+            nb_niveaux=3,
+            entreprise=self.cabinet,
         )
         self.url = reverse("projet-generer-dqe", kwargs={"pk": self.projet.id})
 
@@ -330,7 +426,7 @@ class DQEAPITestCase(APITestCase):
         # Aucun élément dans le projet
         response = self.client.get(f"{self.url}?export=pdf")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["erreur"], "Le projet ne contient aucun élément structurel.")
+        self.assertIn("rien à chiffrer", response.data["erreur"])
 
     def test_generer_dqe_avec_elements_non_valides_echoue(self):
         ElementStructurel.objects.create(
@@ -391,3 +487,37 @@ class DQEAPITestCase(APITestCase):
             response["Content-Type"],
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+    def test_prix_manquant_dans_bareme_renvoie_liste_de_problemes(self):
+        self.cabinet.prix_unitaires = {}
+        self.cabinet.save()
+        ElementStructurel.objects.create(
+            projet=self.projet, type_element=ElementStructurel.TypeElement.POTEAU, identifiant="P1",
+            hauteur_poteau=3.0, resultat_valide={"cote_cm": 20}, statut=ElementStructurel.Statut.VALIDE,
+        )
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        cles = [p.get("cle_prix") for p in response.data["problemes"]]
+        self.assertEqual(sorted(cles), ["acier_kg", "beton_m3", "coffrage_m2"])  # une fois chacun
+        self.assertIn("1 ouvrage(s)", response.data["problemes"][0]["message"])
+
+    def test_bareme_d_un_autre_cabinet_jamais_utilise(self):
+        from projets.tests_projets.utils import creer_cabinet
+        creer_cabinet("Autre", bareme={"beton_m3": 1, "acier_kg": 1, "coffrage_m2": 1})
+        ElementStructurel.objects.create(
+            projet=self.projet, type_element=ElementStructurel.TypeElement.POTEAU, identifiant="P1",
+            hauteur_poteau=3.0, resultat_valide={"cote_cm": 20}, statut=ElementStructurel.Statut.VALIDE,
+        )
+        response = self.client.get(self.url)
+        beton = next(l for l in response.data["lignes"] if l["categorie"] == "BETON")
+        self.assertEqual(beton["prix_unitaire"], 100000)
+
+    def test_generation_enregistre_un_evenement_reel(self):
+        from projets.models import EvenementProduit
+        ElementStructurel.objects.create(
+            projet=self.projet, type_element=ElementStructurel.TypeElement.POTEAU, identifiant="P1",
+            hauteur_poteau=3.0, resultat_valide={"cote_cm": 20}, statut=ElementStructurel.Statut.VALIDE,
+        )
+        response = self.client.get(self.url)
+        ev = EvenementProduit.objects.get(type="dqe_genere")
+        self.assertEqual(ev.donnees["total_general"], response.data["total_general"])
+        self.assertEqual(ev.entreprise_id, self.cabinet.id)

@@ -10,16 +10,28 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 
-# Quick-start development settings - unsuitable for production
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-insecure-key-change-me")
+# DEBUG est piloté UNIQUEMENT par la variable d'environnement (défaut :
+# False). Avant : `DEBUG = True` écrasait la variable, donc la production
+# tournait en mode debug (pages d'erreur détaillées exposées).
+DEBUG = os.getenv("DEBUG", "False").strip().lower() == "true"
 
-# Mode DEBUG forcé à True par défaut en local pour voir les erreurs explicites
-DEBUG = os.getenv("DEBUG", "True").strip().lower() == "true"
-DEBUG = True
+# SECRET_KEY : obligatoire hors DEBUG. La clé de développement n'est
+# acceptée qu'en DEBUG local, jamais en production.
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "dev-only-insecure-key-change-me"
+    else:
+        from django.core.exceptions import ImproperlyConfigured
 
+        raise ImproperlyConfigured(
+            "SECRET_KEY doit être définie dans l'environnement quand DEBUG=False."
+        )
+
+# Plus de joker "*" par défaut : seuls les hôtes explicitement listés.
 ALLOWED_HOSTS = [
     host.strip()
-    for host in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,*").split(",")
+    for host in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
     if host.strip()
 ]
 
@@ -43,15 +55,6 @@ INSTALLED_APPS = [
 ]
 
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
-    ),
-    'DEFAULT_PERMISSION_CLASSES': (
-        # En mode test, on autorise l'accès pour éviter les 401 massifs, 
-        # ou on s'appuie sur les permissions de chaque vue.
-        'rest_framework.permissions.AllowAny',
-    ),
     'DEFAULT_THROTTLE_RATES': {
         'assistant_structurer': '10/min',
         'assistant_expliquer': '20/min',
@@ -59,12 +62,12 @@ REST_FRAMEWORK = {
         'assistant_vision': '5/min',
         'assistant_coherence': '10/min',
     },
-    # Avant ce sprint : aucune permission par défaut (AllowAny implicite de
-    # DRF) -- seules les 6 vues IA vérifiaient IsAuthenticated elles-mêmes.
-    # EstAuthentifieOuDemoMode généralise ce même principe (ouvert en
-    # DEMO_MODE, fermé sinon) à TOUTES les vues plutôt qu'à l'IA seule.
+    # Fermé par défaut : toute vue exige un utilisateur authentifié ET
+    # rattaché à un cabinet. Les vues publiques (inscription, login,
+    # mot de passe oublié) déclarent AllowAny explicitement. Le
+    # DEMO_MODE (accès anonyme à tout) a été supprimé.
     'DEFAULT_PERMISSION_CLASSES': [
-        'projets.permissions.EstAuthentifieOuDemoMode',
+        'projets.permissions.EstMembreEntreprise',
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -72,21 +75,15 @@ REST_FRAMEWORK = {
     ],
 }
 
-from datetime import timedelta  # noqa: E402
-
+# Une seule déclaration (avant : deux blocs, le second -- 8 h -- écrasait
+# silencieusement le premier). Jeton d'accès court + refresh avec
+# rotation : le frontend rafraîchit automatiquement (dqeService.apiFetch).
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,
-}
-
-SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
@@ -237,3 +234,9 @@ SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+# HTTPS strict -- activable par environnement une fois le domaine et le
+# proxy TLS vérifiés (une redirection SSL derrière certains proxys casse
+# les health checks ; HSTS est quasi irréversible côté navigateurs).
+SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "False").strip().lower() == "true"
+SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_HSTS_SECONDS > 0

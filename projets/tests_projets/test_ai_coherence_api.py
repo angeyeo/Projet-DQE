@@ -8,6 +8,7 @@ from rest_framework.test import APITestCase
 
 from projets.models import Projet, ElementStructurel
 from projets.services.assistant_ia.client import MockAIClient
+from projets.tests_projets.utils import creer_cabinet, creer_membre
 
 User = get_user_model()
 
@@ -17,13 +18,13 @@ class TestAICoherenceAPI(APITestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.user = User.objects.create_user(
-            username="testuser_coherence", password="password123"
-        )
+        cls.cabinet = creer_cabinet("Cabinet Cohérence")
+        cls.user = creer_membre(cls.cabinet, username="testuser_coherence")
 
     def setUp(self):
         cache.clear()
-        self.projet = Projet.objects.create(nom="Projet Cohérence API")
+        self.projet = Projet.objects.create(nom="Projet Cohérence API", entreprise=self.cabinet)
+        self.client.force_authenticate(user=self.user)
 
     def _creer_element(self, type_element="semelle_filante", statut="valide", **kwargs):
         return ElementStructurel.objects.create(
@@ -39,7 +40,7 @@ class TestAICoherenceAPI(APITestCase):
         self._creer_element("semelle_filante", resultat_valide={"condition_respectee": False})
         url = f"/api/projets/{self.projet.id}/analyse-coherence/"
 
-        with patch.dict(os.environ, {"DEMO_MODE": "True"}):
+        with patch.dict(os.environ, {}):
             response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -52,7 +53,7 @@ class TestAICoherenceAPI(APITestCase):
     def test_02_get_projet_inexistant_404(self):
         url = "/api/projets/99999/analyse-coherence/"
 
-        with patch.dict(os.environ, {"DEMO_MODE": "True"}):
+        with patch.dict(os.environ, {}):
             response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -65,7 +66,7 @@ class TestAICoherenceAPI(APITestCase):
         self._creer_element("dalle", identifiant="D1", resultat_valide={"longueur_m": 4.0})
 
         url = f"/api/projets/{self.projet.id}/analyse-coherence/"
-        with patch.dict(os.environ, {"DEMO_MODE": "True"}):
+        with patch.dict(os.environ, {}):
             response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -82,7 +83,7 @@ class TestAICoherenceAPI(APITestCase):
         url = f"/api/projets/{self.projet.id}/analyse-coherence/"
 
         with patch("projets.services.assistant_ia.coherence_explanations.get_ai_client") as mock_get_client:
-            with patch.dict(os.environ, {"DEMO_MODE": "True"}):
+            with patch.dict(os.environ, {}):
                 response = self.client.get(url)
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -94,7 +95,7 @@ class TestAICoherenceAPI(APITestCase):
         url = f"/api/projets/{self.projet.id}/analyse-coherence/"
 
         elements_avant = list(ElementStructurel.objects.values())
-        with patch.dict(os.environ, {"DEMO_MODE": "True"}):
+        with patch.dict(os.environ, {}):
             response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -106,7 +107,7 @@ class TestAICoherenceAPI(APITestCase):
         el = self._creer_element("semelle_filante", resultat_valide={"condition_respectee": False})
         url = f"/api/elements/{el.id}/expliquer-coherence/"
 
-        with patch.dict(os.environ, {"DEMO_MODE": "True", "LLM_PROVIDER": "mock"}):
+        with patch.dict(os.environ, {"LLM_PROVIDER": "mock"}):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -119,7 +120,7 @@ class TestAICoherenceAPI(APITestCase):
         el = self._creer_element("semelle_filante", resultat_valide={"condition_respectee": False})
         url = f"/api/elements/{el.id}/expliquer-coherence/"
 
-        with patch.dict(os.environ, {"DEMO_MODE": "True", "LLM_PROVIDER": "mock"}):
+        with patch.dict(os.environ, {"LLM_PROVIDER": "mock"}):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -134,7 +135,7 @@ class TestAICoherenceAPI(APITestCase):
         mock_failing.appeler_llm.side_effect = RuntimeError("Crash service LLM")
 
         with patch("projets.services.assistant_ia.coherence_explanations.get_ai_client", return_value=mock_failing):
-            with patch.dict(os.environ, {"DEMO_MODE": "True"}):
+            with patch.dict(os.environ, {}):
                 response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -149,7 +150,7 @@ class TestAICoherenceAPI(APITestCase):
         url = f"/api/elements/{el.id}/expliquer-coherence/"
 
         with patch("projets.services.assistant_ia.coherence_explanations.get_ai_client") as mock_get_client:
-            with patch.dict(os.environ, {"DEMO_MODE": "True"}):
+            with patch.dict(os.environ, {}):
                 response = self.client.post(url)
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -169,7 +170,7 @@ class TestAICoherenceAPI(APITestCase):
         url = f"/api/elements/{el.id}/expliquer-coherence/"
 
         with patch("projets.services.assistant_ia.coherence_explanations.get_ai_client") as mock_get_client:
-            with patch.dict(os.environ, {"DEMO_MODE": "True"}):
+            with patch.dict(os.environ, {}):
                 response = self.client.post(url)
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -183,7 +184,7 @@ class TestAICoherenceAPI(APITestCase):
         url = f"/api/elements/{el.id}/expliquer-coherence/"
 
         with patch("projets.services.assistant_ia.coherence_explanations.get_ai_client") as mock_get_client:
-            with patch.dict(os.environ, {"DEMO_MODE": "True"}):
+            with patch.dict(os.environ, {}):
                 response = self.client.post(url)
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -191,35 +192,27 @@ class TestAICoherenceAPI(APITestCase):
             self.assertEqual(response.data["source_explication"], "LOCAL")
             mock_get_client.assert_not_called()
 
-    # 12. Sécurité DEMO_MODE=True → anonyme autorisé
-    def test_12_securite_demo_mode_true_anonyme_autorise(self):
+    # 12. Anonyme rejeté (le DEMO_MODE, qui l'autorisait, a été supprimé)
+    def test_12_securite_anonyme_rejete(self):
         el = self._creer_element("semelle_filante", resultat_valide={"condition_respectee": False})
-        url = f"/api/elements/{el.id}/expliquer-coherence/"
-
-        with patch.dict(os.environ, {"DEMO_MODE": "True", "LLM_PROVIDER": "mock"}):
-            response = self.client.post(url)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-    # 13. DEMO_MODE=False → anonyme rejeté
-    def test_13_securite_demo_mode_false_anonyme_rejete(self):
-        el = self._creer_element("semelle_filante", resultat_valide={"condition_respectee": False})
-        url = f"/api/elements/{el.id}/expliquer-coherence/"
-
-        with patch.dict(os.environ, {"DEMO_MODE": "False"}):
-            response = self.client.post(url)
-
+        self.client.force_authenticate(user=None)
+        response = self.client.post(f"/api/elements/{el.id}/expliquer-coherence/")
         self.assertIn(response.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
 
-    # 14. Utilisateur authentifié → accès autorisé (DEMO_MODE=False)
-    def test_14_securite_demo_mode_false_authentifie_accepte(self):
+    # 13. Membre d'un autre cabinet → 404 (pas d'accès à l'élément)
+    def test_13_securite_autre_cabinet_404(self):
         el = self._creer_element("semelle_filante", resultat_valide={"condition_respectee": False})
-        url = f"/api/elements/{el.id}/expliquer-coherence/"
-        self.client.force_authenticate(user=self.user)
+        intrus = creer_membre(creer_cabinet("Autre cabinet"), username="intrus")
+        self.client.force_authenticate(user=intrus)
+        with patch.dict(os.environ, {"LLM_PROVIDER": "mock"}):
+            response = self.client.post(f"/api/elements/{el.id}/expliquer-coherence/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
-        with patch.dict(os.environ, {"DEMO_MODE": "False", "LLM_PROVIDER": "mock"}):
-            response = self.client.post(url)
-
+    # 14. Membre du cabinet → accès autorisé
+    def test_14_securite_membre_accepte(self):
+        el = self._creer_element("semelle_filante", resultat_valide={"condition_respectee": False})
+        with patch.dict(os.environ, {"LLM_PROVIDER": "mock"}):
+            response = self.client.post(f"/api/elements/{el.id}/expliquer-coherence/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     # 15. Throttling endpoint explication → 429 après dépassement (10/min par défaut)
@@ -227,7 +220,7 @@ class TestAICoherenceAPI(APITestCase):
         el = self._creer_element("semelle_filante", resultat_valide={"condition_respectee": False})
         url = f"/api/elements/{el.id}/expliquer-coherence/"
 
-        with patch.dict(os.environ, {"DEMO_MODE": "True", "LLM_PROVIDER": "mock"}):
+        with patch.dict(os.environ, {"LLM_PROVIDER": "mock"}):
             # 10 requêtes autorisées
             for i in range(10):
                 r = self.client.post(url)
@@ -243,7 +236,7 @@ class TestAICoherenceAPI(APITestCase):
         url = f"/api/elements/{el.id}/expliquer-coherence/"
 
         elements_avant = list(ElementStructurel.objects.values())
-        with patch.dict(os.environ, {"DEMO_MODE": "True", "LLM_PROVIDER": "mock"}):
+        with patch.dict(os.environ, {"LLM_PROVIDER": "mock"}):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)

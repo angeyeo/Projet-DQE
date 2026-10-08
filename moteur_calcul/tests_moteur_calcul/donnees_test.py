@@ -59,10 +59,19 @@ CAS_DIMENSIONNEMENT_SEMELLE_1 = {
         "charge_poteau": 250,
         "taux_travail_sol": 180,
     },
+    # Calcul manuel (méthode des bielles, sans poids propre, côté poteau
+    # supposé 25 cm) :
+    #   A_th = √(250 / 180) = 1,1785 m -> A = 120 cm (arrondi constructif 5 cm)
+    #   d ≥ (120 − 25) / 4 = 23,75 cm ; h = arrondi5(23,75 + 5) = 30 cm
+    #   As = 0,250 × (1,20 − 0,25) / (8 × 0,25 × 434,78) = 2,73 cm² / direction
+    # (Avant : h = 23,2 cm = d sans enrobage, et A non arrondi : corrigé.)
     "resultat_attendu": {
-        "cote_cm": 117.9,
-        "surface_m2": 1.39,
-        "hauteur_cm": 23.2,
+        "cote_cm": 120,
+        "cote_theorique_cm": 117.9,
+        "surface_m2": 1.44,
+        "hauteur_cm": 30,
+        "hauteur_utile_cm": 25,
+        "section_acier_par_direction_cm2": 2.73,
     },
 }
 

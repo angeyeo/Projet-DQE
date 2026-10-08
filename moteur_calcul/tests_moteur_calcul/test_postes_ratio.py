@@ -24,8 +24,10 @@ class TestCalculerPosteRatio(SimpleTestCase):
         self.assertIn("Agglos 15 pleins (infrastructure)", designations)
         self.assertIn("Agglos 15 creux (élévation)", designations)
         infra = next(l for l in lignes if "infrastructure" in l["designation"])
-        # 50 * 0.6 * 0.15 = 4.5 m³
-        self.assertAlmostEqual(infra["quantite"], 4.5)
+        # Unité validée par le technicien BTP : m² de mur -> 50 × 0,6 = 30 m²
+        self.assertEqual(infra["unite"], "m²")
+        self.assertAlmostEqual(infra["quantite"], 30.0)
+        self.assertEqual(infra["formule"], "périmètre × hauteur de soubassement = 50 × 0,6")
 
     def test_chainage_bas_et_haut(self):
         lignes = calculer_poste_ratio("chainage", {"longueur_chainage_m": 32.0})

@@ -1,12 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle, Sparkles, Check } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
-
-const CHARGE_EXPLOITATION_PAR_USAGE = {
-  habitation: 1.5,
-  bureau: 2.5,
-  commercial: 4.0,
-};
+import useReferentiel from '../hooks/useReferentiel';
+import Alerte from './ui/Alerte';
+import HypothesesCharges from './parametres/HypothesesCharges';
 
 const TYPE_LABELS = {
   semelle: 'Semelles',
@@ -18,24 +15,9 @@ const TYPE_LABELS = {
   chainage: 'Chaînages',
 };
 
-const LIMITES = {
-  nombreNiveaux: { min: 1, max: 20 },
-  nbTraveesX: { min: 1, max: 10 },
-  nbTraveesY: { min: 1, max: 10 },
-  porteeX: { min: 1.5, max: 15 },
-  porteeY: { min: 1.5, max: 15 },
-  chargeExploitation: { min: 0.5, max: 20 },
-  hauteurEtage: { min: 2.4, max: 4.5 },
-};
-
-const clamp = (value, { min, max }) => {
-  if (value === '' || value === null || value === undefined) return value;
-  const n = parseFloat(value);
-  if (Number.isNaN(n)) return value;
-  return Math.min(max, Math.max(min, n));
-};
-
-export default function Step1_Parametres({ projectData, updateProjectData, onNext }) {
+export default function Step1_Parametres({ projectData, updateProjectData, assurerProjet, onNext, calcul, alertes = [] }) {
+  const { data: referentiel, erreur: erreurReferentiel } = useReferentiel();
+  const [visionResult, setVisionResult] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
@@ -51,14 +33,6 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
 
   // État d'affichage réduit/déplié des textes non classés Vision
   const [showAllTextesNonClasses, setShowAllTextesNonClasses] = useState(false);
-
-  useEffect(() => {
-    if (!projectData.chargeExploitation && projectData.typeUsage) {
-      const defaut = CHARGE_EXPLOITATION_PAR_USAGE[projectData.typeUsage];
-      if (defaut) updateProjectData({ chargeExploitation: defaut });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const handleFileUpload = async (e) => {
     const files = e.target.files || e.dataTransfer.files;
@@ -89,12 +63,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       setAnalyzing(true);
       setAnalysisError(null);
       try {
-        let projetId = projectData.id;
-        if (!projetId) {
-          const projet = await dqeService.createProjet(projectData);
-          projetId = projet.id;
-          updateProjectData({ id: projetId });
-        }
+        const projetId = await assurerProjet();
 
         const params = await dqeService.importerPlanIFC(projetId, file);
         updateProjectData({
@@ -128,15 +97,10 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
       setAnalyzing(true);
       setAnalysisError(null);
       try {
-        let projetId = projectData.id;
-        if (!projetId) {
-          const projet = await dqeService.createProjet(projectData);
-          projetId = projet.id;
-          updateProjectData({ id: projetId });
-        }
+        const projetId = await assurerProjet();
 
         const result = await dqeService.analyserPlanImage(projetId, file);
-        updateProjectData({ visionResult: result });
+        setVisionResult(result);
         setAnalysisSuccess(true);
       } catch (err) {
         setAnalysisError(`Erreur d'analyse IA : ${err.message || "Impossible d'extraire le plan"}`);
@@ -174,85 +138,36 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
     }
   };
 
-  const hasApplicableNlpData = (donnees) => {
-    if (!donnees) return false;
-
-    if (donnees.nombre_niveaux !== null && donnees.nombre_niveaux !== undefined && donnees.nombre_niveaux !== '') {
-      const val = parseInt(donnees.nombre_niveaux, 10);
-      if (!isNaN(val) && val >= LIMITES.nombreNiveaux.min && val <= LIMITES.nombreNiveaux.max) {
-        return true;
-      }
+  // Champs exploitables : les valeurs ont déjà été validées par le serveur
+  // (bornes physiques) ; ici on ne fait que recopier ce qui est présent.
+  const champsNlp = (d) => {
+    if (!d) return {};
+    const u = {};
+    if (d.nombre_niveaux != null && d.nombre_niveaux !== '') u.nombreNiveaux = String(d.nombre_niveaux);
+    if (d.usage_batiment) u.typeUsage = d.usage_batiment;
+    if (d.portee_m != null && d.portee_m !== '') {
+      u.porteeX = String(d.portee_m);
+      if (!projectData.porteeY) u.porteeY = String(d.portee_m);
     }
-
-    if (donnees.usage && String(donnees.usage).trim() !== '') {
-      return true;
-    }
-
-    if (donnees.portee_m !== null && donnees.portee_m !== undefined && donnees.portee_m !== '') {
-      const portee = parseFloat(donnees.portee_m);
-      if (!isNaN(portee) && portee >= LIMITES.porteeX.min && portee <= LIMITES.porteeX.max) {
-        return true;
-      }
-    }
-
-    if (donnees.hauteur_niveau_m !== null && donnees.hauteur_niveau_m !== undefined && donnees.hauteur_niveau_m !== '') {
-      const h = parseFloat(donnees.hauteur_niveau_m);
-      if (!isNaN(h) && h >= LIMITES.hauteurEtage.min && h <= LIMITES.hauteurEtage.max) {
-        return true;
-      }
-    }
-
-    return false;
+    if (d.hauteur_niveau_m != null && d.hauteur_niveau_m !== '') u.hauteurEtage = String(d.hauteur_niveau_m);
+    if (d.contrainte_sol_kn_m2 != null && d.contrainte_sol_kn_m2 !== '') u.contrainteSol = String(d.contrainte_sol_kn_m2);
+    return u;
   };
+  const hasApplicableNlpData = (d) => Object.keys(champsNlp(d)).length > 0;
 
   const handleApplyNlpParameters = () => {
-    if (!nlpResult || !nlpResult.donnees) return;
-    const d = nlpResult.donnees;
-    const updates = {};
-
-    if (d.nombre_niveaux !== null && d.nombre_niveaux !== undefined && d.nombre_niveaux !== '') {
-      const val = parseInt(d.nombre_niveaux, 10);
-      if (!isNaN(val) && val >= LIMITES.nombreNiveaux.min && val <= LIMITES.nombreNiveaux.max) {
-        updates.nombreNiveaux = val;
-      }
-    }
-
-    if (d.usage) {
-      const uLower = String(d.usage).toLowerCase();
-      if (uLower === 'habitation') {
-        updates.typeUsage = 'habitation';
-        updates.chargeExploitation = CHARGE_EXPLOITATION_PAR_USAGE.habitation;
-      } else if (uLower === 'bureau') {
-        updates.typeUsage = 'bureau';
-        updates.chargeExploitation = CHARGE_EXPLOITATION_PAR_USAGE.bureau;
-      } else if (uLower === 'commerce' || uLower === 'commercial') {
-        updates.typeUsage = 'commercial';
-        updates.chargeExploitation = CHARGE_EXPLOITATION_PAR_USAGE.commercial;
-      }
-    }
-
-    if (d.portee_m !== null && d.portee_m !== undefined && d.portee_m !== '') {
-      const portee = parseFloat(d.portee_m);
-      if (!isNaN(portee) && portee >= LIMITES.porteeX.min && portee <= LIMITES.porteeX.max) {
-        updates.porteeX = portee;
-        if (!projectData.porteeY) {
-          updates.porteeY = portee;
-        }
-      }
-    }
-
-    if (d.hauteur_niveau_m !== null && d.hauteur_niveau_m !== undefined && d.hauteur_niveau_m !== '') {
-      const h = parseFloat(d.hauteur_niveau_m);
-      if (!isNaN(h) && h >= LIMITES.hauteurEtage.min && h <= LIMITES.hauteurEtage.max) {
-        updates.hauteurEtage = h;
-      }
-    }
-
-    updateProjectData(updates);
+    if (!nlpResult?.donnees) return;
+    updateProjectData(champsNlp(nlpResult.donnees));
     setNlpApplied(true);
   };
 
-  const vision = projectData.visionResult;
+  const usages = referentiel?.usages || [];
+  const usageCourant = usages.find((u) => u.cle === projectData.typeUsage);
+  const gx = parseInt(projectData.nbTraveesX, 10);
+  const gy = parseInt(projectData.nbTraveesY, 10);
+  const grille = gx > 0 && gy > 0 ? { x: gx, y: gy } : null;
+
+  const vision = visionResult;
   const visionAnnotations = (vision && Array.isArray(vision.annotations_lues)) ? vision.annotations_lues : [];
   const visionTotalElements = visionAnnotations.length;
 
@@ -526,7 +441,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
               </h4>
               {nlpResult.source && (
                 <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: nlpResult.source === 'GEMINI' ? 'var(--accent-soft-border)' : nlpResult.source === 'MOCK' ? 'var(--status-warn-soft)' : 'var(--status-neutral-soft)', color: nlpResult.source === 'GEMINI' ? 'var(--accent)' : nlpResult.source === 'MOCK' ? 'var(--status-warn)' : 'var(--core-border)', border: '1px solid var(--core-border)' }}>
-                  Source : {nlpResult.source === 'GEMINI' ? 'Gemini' : nlpResult.source === 'MOCK' ? 'Simulation locale' : 'Analyse automatique indisponible / partielle'}
+                  Source : {nlpResult.source === 'GEMINI' ? 'Gemini' : nlpResult.source === 'MOCK' ? 'SIMULATION (non IA)' : 'Analyse automatique indisponible / partielle'}
                 </span>
               )}
             </div>
@@ -627,192 +542,125 @@ export default function Step1_Parametres({ projectData, updateProjectData, onNex
         )}
       </div>
 
-      {/* Form Fields */}
-      <div className="grid-2" style={{ marginBottom: '2rem' }}>
+      {/* Paramètres du projet -- aucune valeur pré-remplie inventée : un
+          champ vide est signalé par le serveur, qui renvoie la liste
+          exhaustive de ce qui manque. */}
+      {erreurReferentiel && <Alerte type="erreur">Référentiel technique indisponible : {erreurReferentiel}</Alerte>}
+
+      <div className="grid-2 formulaire-parametres">
         <div className="form-group">
-          <label className="form-label">Nom du Projet BTP</label>
-          <input
-            type="text"
-            className="form-control"
-            value={projectData.nomProjet || ''}
-            onChange={(e) => updateProjectData({ nomProjet: e.target.value })}
-            placeholder="ex: Immeuble R+3 Résidence des Palmes"
-          />
+          <label className="form-label" htmlFor="champ-s1-1">Nom du projet *</label>
+          <input id="champ-s1-1" type="text" className="form-control" value={projectData.nomProjet || ''}
+            onChange={(e) => updateProjectData({ nomProjet: e.target.value })} />
+        </div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="champ-s1-2">N° de devis (facultatif)</label>
+          <input id="champ-s1-2" type="text" className="form-control" value={projectData.numeroDevis || ''}
+            onChange={(e) => updateProjectData({ numeroDevis: e.target.value })} />
         </div>
 
         <div className="form-group">
-          <label className="form-label">N° de Devis (optionnel)</label>
-          <input
-            type="text"
-            className="form-control"
-            value={projectData.numeroDevis || ''}
-            onChange={(e) => updateProjectData({ numeroDevis: e.target.value })}
-            placeholder="ex: 0017-2026"
-          />
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">Usage principal du Bâtiment</label>
-          <select
-            className="form-select"
-            value={projectData.typeUsage || 'habitation'}
-            onChange={(e) => {
-              const usage = e.target.value;
-              updateProjectData({
-                typeUsage: usage,
-                chargeExploitation: CHARGE_EXPLOITATION_PAR_USAGE[usage],
-              });
-            }}
-          >
-            <option value="habitation">Bâtiment d'Habitation (Q = 1.5 kN/m²)</option>
-            <option value="bureau">Bureaux / Tertiaire (Q = 2.5 kN/m²)</option>
-            <option value="commercial">Local Commercial / Stockage (Q = 4.0 kN/m²)</option>
+          <label className="form-label" htmlFor="champ-s1-3">Usage principal du bâtiment *</label>
+          <select id="champ-s1-3" className="form-select" value={projectData.typeUsage || ''}
+            onChange={(e) => updateProjectData({ typeUsage: e.target.value })}>
+            <option value="">— Choisissez l'usage —</option>
+            {usages.map((u) => (
+              <option key={u.cle} value={u.cle}>{u.libelle} (Q normative {u.charge_exploitation_kn_m2} kN/m²)</option>
+            ))}
+            {projectData.typeUsage && !usages.some((u) => u.cle === projectData.typeUsage) && (
+              <option value={projectData.typeUsage}>{projectData.typeUsage} (hors référentiel)</option>
+            )}
           </select>
+          <small className="aide-champ">Choisissez l'usage : il détermine la charge d'exploitation normative.</small>
+        </div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="champ-s1-4">Charge d'exploitation Q (kN/m²)</label>
+          <input id="champ-s1-4" type="number" min="0" step="0.1" className="form-control"
+            placeholder={usageCourant ? `vide = ${usageCourant.charge_exploitation_kn_m2} (normative)` : ''}
+            value={projectData.chargeExploitation ?? ''} onChange={(e) => updateProjectData({ chargeExploitation: e.target.value })} />
+          <small className="aide-champ">
+            {projectData.chargeExploitation !== ''
+              ? 'Valeur SAISIE : elle remplace la valeur normative de l\'usage.'
+              : usageCourant
+                ? `Laissée vide, le moteur retient ${usageCourant.charge_exploitation_kn_m2} kN/m² (valeur normative de l'usage), tracée comme hypothèse.`
+                : 'Choisissez d\'abord un usage, ou saisissez la valeur.'}
+          </small>
         </div>
 
         <div className="form-group">
-          <label className="form-label">Nombre de Niveaux (Étages)</label>
-          <input
-            type="number"
-            min={LIMITES.nombreNiveaux.min}
-            max={LIMITES.nombreNiveaux.max}
-            className="form-control"
-            value={projectData.nombreNiveaux || ''}
-            onChange={(e) => updateProjectData({ nombreNiveaux: e.target.value })}
-            onBlur={(e) => updateProjectData({ nombreNiveaux: clamp(e.target.value, LIMITES.nombreNiveaux) })}
-          />
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-            Plage acceptée : {LIMITES.nombreNiveaux.min} à {LIMITES.nombreNiveaux.max} niveaux
-          </p>
+          <label className="form-label" htmlFor="champ-s1-5">Nombre de niveaux *</label>
+          <input id="champ-s1-5" type="number" min="1" step="1" className="form-control" value={projectData.nombreNiveaux ?? ''}
+            onChange={(e) => updateProjectData({ nombreNiveaux: e.target.value })} />
+        </div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="champ-s1-6">Hauteur d'étage (m) *</label>
+          <input id="champ-s1-6" type="number" min="0" step="0.01" className="form-control" value={projectData.hauteurEtage ?? ''}
+            onChange={(e) => updateProjectData({ hauteurEtage: e.target.value })} />
         </div>
 
         <div className="form-group">
-          <label className="form-label">Nombre de travées — Direction X</label>
-          <input
-            type="number"
-            min={LIMITES.nbTraveesX.min}
-            max={LIMITES.nbTraveesX.max}
-            className="form-control"
-            value={projectData.nbTraveesX || ''}
-            onChange={(e) => updateProjectData({ nbTraveesX: e.target.value })}
-            onBlur={(e) => updateProjectData({ nbTraveesX: clamp(e.target.value, LIMITES.nbTraveesX) })}
-            placeholder="ex: 2"
-          />
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-            Plage acceptée : {LIMITES.nbTraveesX.min} à {LIMITES.nbTraveesX.max} travées
-          </p>
+          <label className="form-label" htmlFor="champ-s1-7">Travées en X {projectData.ifcImporte ? '' : '*'}</label>
+          <input id="champ-s1-7" type="number" min="1" step="1" className="form-control" value={projectData.nbTraveesX ?? ''}
+            onChange={(e) => updateProjectData({ nbTraveesX: e.target.value })} />
+        </div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="champ-s1-8">Portée en X (m) {projectData.ifcImporte ? '' : '*'}</label>
+          <input id="champ-s1-8" type="number" min="0" step="0.01" className="form-control" value={projectData.porteeX ?? ''}
+            onChange={(e) => updateProjectData({ porteeX: e.target.value })} />
+        </div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="champ-s1-9">Travées en Y {projectData.ifcImporte ? '' : '*'}</label>
+          <input id="champ-s1-9" type="number" min="1" step="1" className="form-control" value={projectData.nbTraveesY ?? ''}
+            onChange={(e) => updateProjectData({ nbTraveesY: e.target.value })} />
+        </div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="champ-s1-10">Portée en Y (m) {projectData.ifcImporte ? '' : '*'}</label>
+          <input id="champ-s1-10" type="number" min="0" step="0.01" className="form-control" value={projectData.porteeY ?? ''}
+            onChange={(e) => updateProjectData({ porteeY: e.target.value })} />
         </div>
 
         <div className="form-group">
-          <label className="form-label">Portée en X (m)</label>
-          <input
-            type="number"
-            step="0.1"
-            min={LIMITES.porteeX.min}
-            max={LIMITES.porteeX.max}
-            className="form-control"
-            value={projectData.porteeX || ''}
-            onChange={(e) => updateProjectData({ porteeX: e.target.value })}
-            onBlur={(e) => updateProjectData({ porteeX: clamp(e.target.value, LIMITES.porteeX) })}
-            placeholder="ex: 5.0"
-          />
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-            Plage acceptée : {LIMITES.porteeX.min} à {LIMITES.porteeX.max} m
-          </p>
+          <label className="form-label" htmlFor="champ-s1-11">Contrainte admissible du sol (kN/m²)</label>
+          <input id="champ-s1-11" type="number" min="25" max="2000" step="1" className="form-control"
+            placeholder={referentiel ? `vide = ${referentiel.contrainte_sol_defaut_kn_m2} (hypothèse)` : ''}
+            value={projectData.contrainteSol ?? ''} onChange={(e) => updateProjectData({ contrainteSol: e.target.value })} />
+          <small className="aide-champ">
+            Issue de l'étude géotechnique (1 bar = 100 kN/m² ; 0,2 MPa = 200 kN/m²). Laissée vide, le moteur retient
+            {referentiel ? ` ${referentiel.contrainte_sol_defaut_kn_m2} kN/m²` : ' sa valeur par défaut'}, signalée comme hypothèse sur chaque semelle.
+          </small>
         </div>
-
         <div className="form-group">
-          <label className="form-label">Nombre de travées — Direction Y</label>
-          <input
-            type="number"
-            min={LIMITES.nbTraveesY.min}
-            max={LIMITES.nbTraveesY.max}
-            className="form-control"
-            value={projectData.nbTraveesY || ''}
-            onChange={(e) => updateProjectData({ nbTraveesY: e.target.value })}
-            onBlur={(e) => updateProjectData({ nbTraveesY: clamp(e.target.value, LIMITES.nbTraveesY) })}
-            placeholder="ex: 2"
-          />
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-            Plage acceptée : {LIMITES.nbTraveesY.min} à {LIMITES.nbTraveesY.max} travées
-          </p>
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">Portée en Y (m)</label>
-          <input
-            type="number"
-            step="0.1"
-            min={LIMITES.porteeY.min}
-            max={LIMITES.porteeY.max}
-            className="form-control"
-            value={projectData.porteeY || ''}
-            onChange={(e) => updateProjectData({ porteeY: e.target.value })}
-            onBlur={(e) => updateProjectData({ porteeY: clamp(e.target.value, LIMITES.porteeY) })}
-            placeholder="ex: 5.0"
-          />
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-            Plage acceptée : {LIMITES.porteeY.min} à {LIMITES.porteeY.max} m
-          </p>
-        </div>
-
-        <div className="form-group" style={{ gridColumn: 'span 2' }}>
-          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--accent-primary)', background: 'var(--status-neutral-soft)', border: '1px solid var(--accent-soft-border)', padding: '0.5rem 1rem', borderRadius: '8px', display: 'inline-block' }}>
-            Aperçu Trame : Grille de {(parseInt(projectData.nbTraveesX || 0) + 1) * (parseInt(projectData.nbTraveesY || 0) + 1)} poteaux ({projectData.nbTraveesX || 0}x{projectData.nbTraveesY || 0} travées)
-          </p>
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">Hauteur d'Étage (m)</label>
-          <input
-            type="number"
-            step="0.1"
-            min={LIMITES.hauteurEtage.min}
-            max={LIMITES.hauteurEtage.max}
-            className="form-control"
-            value={projectData.hauteurEtage || ''}
-            onChange={(e) => updateProjectData({ hauteurEtage: e.target.value })}
-            onBlur={(e) => updateProjectData({ hauteurEtage: clamp(e.target.value, LIMITES.hauteurEtage) })}
-            placeholder="ex: 3.0"
-          />
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-            Plage acceptée : {LIMITES.hauteurEtage.min} à {LIMITES.hauteurEtage.max} m
-          </p>
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">Charge d'Exploitation (Q en kN/m²)</label>
-          <input
-            type="number"
-            step="0.1"
-            min={LIMITES.chargeExploitation.min}
-            max={LIMITES.chargeExploitation.max}
-            className="form-control"
-            value={projectData.chargeExploitation || ''}
-            onChange={(e) => updateProjectData({ chargeExploitation: e.target.value })}
-            onBlur={(e) => updateProjectData({ chargeExploitation: clamp(e.target.value, LIMITES.chargeExploitation) })}
-          />
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-            Plage acceptée : {LIMITES.chargeExploitation.min} à {LIMITES.chargeExploitation.max} kN/m² · pré-remplie selon l'usage, modifiable
-          </p>
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">Norme de Calcul Structurel</label>
-          <select
-            className="form-select"
-            value={projectData.norme || 'BAEL91'}
-            onChange={(e) => updateProjectData({ norme: e.target.value })}
-          >
-            <option value="BAEL91">BAEL 91 Révisé 99 (Norme Française / CIPEC)</option>
-            <option value="Eurocode2">Eurocode 2 (NF EN 1992-1-1)</option>
-          </select>
+          <span className="form-label" id="champ-s1-12">Norme de calcul</span>
+          <p className="valeur-lecture" aria-labelledby="champ-s1-12">{referentiel?.norme || '—'}</p>
         </div>
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button className="btn btn-primary" onClick={onNext}>
-          <span>Lancer la Descente de Charge & Calculs</span>
+      <HypothesesCharges projectData={projectData} updateProjectData={updateProjectData} referentiel={referentiel} />
+
+      {projectData.id && alertes.length > 0 && (
+        <Alerte type="attention" titre="Valeurs inhabituelles (enregistrées)" liste={alertes.map((a) => a.message)}>
+          Ces valeurs ne sont pas modifiées : vérifiez-les.
+        </Alerte>
+      )}
+
+      {grille && (
+        <p className="texte-discret">Trame saisie : {grille.x} × {grille.y} travées, soit {(grille.x + 1) * (grille.y + 1)} poteaux par niveau.</p>
+      )}
+
+      {calcul?.erreur && (
+        <Alerte
+          type="erreur"
+          titre="Les éléments n'ont pas pu être générés"
+          liste={calcul.champs?.length ? calcul.champs.map((c) => `${c.libelle} (champ « ${c.champ} »)`) : null}
+        >
+          {calcul.champs?.length ? 'Renseignez les champs suivants :' : calcul.erreur}
+        </Alerte>
+      )}
+
+      <div className="navigation-etapes navigation-fin">
+        <button type="button" className="btn btn-primary" onClick={onNext} disabled={calcul?.enCours || !projectData.nomProjet?.trim()}>
+          {calcul?.enCours ? <Loader2 size={18} className="spin" /> : null}
+          <span>{calcul?.enCours ? 'Enregistrement et calcul…' : projectData.id ? 'Enregistrer et recalculer' : 'Enregistrer et calculer'}</span>
           <ArrowRight size={18} />
         </button>
       </div>

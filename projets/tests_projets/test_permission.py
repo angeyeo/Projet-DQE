@@ -96,15 +96,66 @@ class IsolationInterCabinetsTestCase(APITestCase):
         self.assertEqual(projet.entreprise_id, self.ent_a.id)
         self.assertEqual(projet.cree_par_id, self.user_a.id)
 
-    def test_utilisateur_sans_profil_non_filtre_legacy(self):
-        """Comportement legacy volontaire : un utilisateur authentifié sans
-        Profil (compte créé avant ce sprint) n'est pas bloqué -- pas de
-        régression pour les comptes existants tant que l'onboarding n'a
-        pas encore créé leur Profil."""
+    def test_utilisateur_sans_profil_refuse(self):
+        """Un compte sans Profil n'est rattaché à aucun cabinet : il n'a
+        accès à AUCUN projet (avant : accès à tous les projets de tous les
+        cabinets -- fuite inter-cabinets)."""
         user_sans_profil = User.objects.create_user("legacy_user", password="x")
         self.client.force_authenticate(user=user_sans_profil)
         response = self.client.get(f"/api/projets/{self.projet_a.id}/")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        response = self.client.get("/api/projets/")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_technicien_ne_peut_pas_supprimer_un_projet(self):
+        tech = User.objects.create_user("tech_a", password="x")
+        Profil.objects.create(utilisateur=tech, entreprise=self.ent_a, role=Profil.Role.TECHNICIEN)
+        self.client.force_authenticate(user=tech)
+        self.assertEqual(self.client.delete(f"/api/projets/{self.projet_a.id}/").status_code, 403)
+        self.client.force_authenticate(user=self.user_a)  # ingénieur
+        self.assertEqual(self.client.delete(f"/api/projets/{self.projet_a.id}/").status_code, 204)
+
+    def test_anonyme_refuse(self):
+        self.client.force_authenticate(user=None)
+        response = self.client.get("/api/projets/")
+        self.assertIn(response.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_projet_orphelin_invisible(self):
+        """Un projet sans cabinet n'est visible par personne (avant : visible
+        par TOUS les cabinets via entreprise__isnull=True)."""
+        orphelin = Projet.objects.create(nom="Orphelin")
+        self.client.force_authenticate(user=self.user_a)
+        self.assertNotIn("Orphelin", self._noms(self.client.get("/api/projets/").data))
+        self.assertEqual(self.client.get(f"/api/projets/{orphelin.id}/").status_code, 404)
+
+    def test_impossible_de_deplacer_un_projet_vers_un_autre_cabinet(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.patch(
+            f"/api/projets/{self.projet_a.id}/", {"entreprise": self.ent_b.id}, format="json"
+        )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.projet_a.refresh_from_db()
+        self.assertEqual(self.projet_a.entreprise_id, self.ent_a.id)
+
+    def test_elements_autre_cabinet_invisibles(self):
+        el_b = ElementStructurel.objects.create(projet=self.projet_b, identifiant="P1", type_element="poteau")
+        self.client.force_authenticate(user=self.user_a)
+        self.assertEqual(self.client.get(f"/api/elements/{el_b.id}/").status_code, 404)
+        self.assertEqual(self.client.post(f"/api/elements/{el_b.id}/expliquer-coherence/").status_code, 404)
+        # Création d'un élément dans le projet d'un autre cabinet refusée
+        response = self.client.post("/api/elements/", {
+            "projet": self.projet_b.id, "identifiant": "X", "type_element": "poteau",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_postes_filtres_par_projet_et_cabinet(self):
+        from projets.models import PosteComplementaire
+        PosteComplementaire.objects.create(projet=self.projet_b, lot="lot_04_plomberie",
+                                           designation="Poste B", unite="u", quantite=1, prix_unitaire=1)
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.get(f"/api/postes-complementaires/?projet={self.projet_b.id}")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 0)
 
 
 class VerrouIngenieurTestCase(APITestCase):
@@ -287,13 +338,14 @@ class FluxAuthentificationTestCase(APITestCase):
         self.assertEqual(login.status_code, status.HTTP_200_OK)
 
     def test_mot_de_passe_oublie_ne_revele_pas_si_email_inconnu(self):
-        response = self.client.post("/api/auth/forgot-password/", {
+        response = self.client.post("/api/auth/mot-de-passe-oublie/", {
             "email": "personne@nulle-part.ci",
         }, format="json")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
     # Adaptez les clés aux retours réels de votre vue demander_reinitialisation_mdp
         self.assertIn("detail", response.data)
 
+    @override_settings(DEBUG=True)
     def test_mot_de_passe_oublie_puis_reinitialisation(self):
         self.client.post("/api/auth/inscription/", {
             "nom_entreprise": "BATI-TEST SARL",

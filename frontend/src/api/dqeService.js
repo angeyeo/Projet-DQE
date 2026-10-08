@@ -1,57 +1,49 @@
-// Service API Frontend pour le Projet DQE
-// Aligné sur l'API Django REST Framework réelle d'Ange Yeo (voir api/urls.py, projets/models.py)
+// Service API du frontend DQE -- SEULE porte d'accès au backend Django.
 //
-// Endpoints DRF utilisés :
-// - POST /api/projets/
-// - POST /api/elements/
-// - POST /api/elements/{id}/calculer/
-// - POST /api/elements/{id}/valider/
-// - GET|POST /api/projets/{id}/generer_dqe/
-// - GET|POST /api/projets/{id}/plan_fondation/
-// - POST /api/projets/{id}/valider_plan_fondation/
-// - GET|POST|DELETE /api/postes-complementaires/
-// - POST /api/assistant/structurer-projet/
-// - POST /api/assistant/expliquer-element/
-// - POST /api/assistant/suggerer-poste/
-// - POST /api/projets/{id}/analyser_plan_image/ (Vision IA)
-// - GET  /api/projets/{id}/analyse-coherence/ (Contrôle de cohérence)
-// - POST /api/elements/{id}/expliquer-coherence/ (Explication IA d'un signal)
+// Règles :
+// - aucune valeur par défaut inventée : un champ non saisi est envoyé à
+//   null (ou omis) et c'est le backend qui répond avec la liste explicite
+//   de ce qui manque ;
+// - aucun calcul métier ici : les quantités, montants, épaisseurs, charges
+//   viennent des réponses de l'API ;
+// - toute erreur est transformée en Error lisible (champ `message`) avec
+//   les détails structurés du backend dans `err.data` (champs_manquants,
+//   problemes, erreurs par champ...).
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
 
-// --- Authentification JWT (sprint Comptes & Permissions) ---------------
-// Jetons stockés en localStorage : survivent au rechargement de page. Un
-// vrai backend d'auth existe maintenant (voir projets/auth_views.py),
-// donc toutes les routes métier ci-dessous passent par apiFetch, qui
-// attache le token et gère le rafraîchissement silencieux sur 401.
+// --- Authentification JWT ------------------------------------------------
 
 const ACCESS_KEY = 'dqe_access_token';
 const REFRESH_KEY = 'dqe_refresh_token';
 
-function getAccessToken() {
-  return localStorage.getItem(ACCESS_KEY);
-}
+const lireStockage = (cle) => {
+  try { return localStorage.getItem(cle); } catch { return null; }
+};
+const ecrireStockage = (cle, valeur) => {
+  try {
+    if (valeur === null || valeur === undefined) localStorage.removeItem(cle);
+    else localStorage.setItem(cle, valeur);
+  } catch { /* stockage indisponible (navigation privée) : session non persistée */ }
+};
 
-function getRefreshToken() {
-  return localStorage.getItem(REFRESH_KEY);
-}
+function getAccessToken() { return lireStockage(ACCESS_KEY); }
+function getRefreshToken() { return lireStockage(REFRESH_KEY); }
 
 function setTokens({ access, refresh }) {
-  if (access) localStorage.setItem(ACCESS_KEY, access);
-  if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
+  if (access) ecrireStockage(ACCESS_KEY, access);
+  if (refresh) ecrireStockage(REFRESH_KEY, refresh);
 }
 
 function clearTokens() {
-  localStorage.removeItem(ACCESS_KEY);
-  localStorage.removeItem(REFRESH_KEY);
+  ecrireStockage(ACCESS_KEY, null);
+  ecrireStockage(REFRESH_KEY, null);
 }
 
 function isAuthenticated() {
   return !!getAccessToken();
 }
 
-// Rafraîchit le token d'accès via le refresh token. Renvoie le nouveau
-// access token, ou null si le refresh a échoué (token expiré/révoqué).
 async function rafraichirToken() {
   const refresh = getRefreshToken();
   if (!refresh) return null;
@@ -70,51 +62,84 @@ async function rafraichirToken() {
   }
 }
 
-// Fetch "public" -- n'attache jamais de token. Nécessaire pour les
-// routes AllowAny (login, inscription, mot de passe oublié...) : un
-// access token expiré présent en localStorage ferait échouer
-// l'authentification JWT avant même d'atteindre la vue AllowAny.
 async function publicFetch(url, options = {}) {
-  return fetch(url, options);
+  try {
+    return await fetch(url, options);
+  } catch {
+    throw erreurReseau();
+  }
 }
 
-// Fetch authentifié -- attache le token courant, rafraîchit une fois et
-// réessaie sur 401, puis prévient l'app (événement) si la session est
-// définitivement expirée pour qu'elle renvoie l'utilisateur au login.
 async function apiFetch(url, options = {}) {
   const access = getAccessToken();
   const headers = { ...(options.headers || {}) };
-  if (access) headers['Authorization'] = `Bearer ${access}`;
+  if (access) headers.Authorization = `Bearer ${access}`;
 
-  let response = await fetch(url, { ...options, headers });
-
-  if (response.status === 401 && getRefreshToken()) {
-    const nouvelAccess = await rafraichirToken();
-    if (nouvelAccess) {
-      response = await fetch(url, {
-        ...options,
-        headers: { ...(options.headers || {}), Authorization: `Bearer ${nouvelAccess}` },
-      });
+  let response;
+  try {
+    response = await fetch(url, { ...options, headers });
+    if (response.status === 401 && getRefreshToken()) {
+      const nouvelAccess = await rafraichirToken();
+      if (nouvelAccess) {
+        response = await fetch(url, {
+          ...options,
+          headers: { ...(options.headers || {}), Authorization: `Bearer ${nouvelAccess}` },
+        });
+      }
     }
+  } catch {
+    throw erreurReseau();
   }
 
   if (response.status === 401) {
     clearTokens();
     window.dispatchEvent(new CustomEvent('dqe:auth-expired'));
   }
-
   return response;
 }
 
-async function postJSON(url, body) {
-  const response = await apiFetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+// --- Erreurs lisibles ------------------------------------------------------
+
+function erreurReseau() {
+  const err = new Error(
+    "Serveur injoignable : vérifiez votre connexion ou réessayez dans un instant."
+  );
+  err.status = 0;
+  return err;
+}
+
+const MESSAGES_STATUT = {
+  401: 'Votre session a expiré : reconnectez-vous.',
+  403: "Vous n'avez pas les droits nécessaires pour cette action.",
+  404: 'Élément introuvable (supprimé, ou appartenant à un autre cabinet).',
+  409: "Action impossible dans l'état actuel de l'élément.",
+  413: 'Fichier trop volumineux.',
+  429: 'Trop de requêtes : patientez quelques instants avant de réessayer.',
+  502: 'Le service externe (IA) a renvoyé une erreur.',
+  503: 'Service momentanément indisponible sur le serveur.',
+};
+
+// Transforme n'importe quelle réponse d'erreur DRF en phrase lisible.
+export function messageErreur(data, status) {
+  if (data) {
+    if (typeof data === 'string') return data;
+    if (data.erreur) return data.erreur;
+    if (data.detail) return data.detail;
+    if (Array.isArray(data)) return data.join(' ');
+    // Erreurs par champ DRF : {"champ": ["message", ...], ...}
+    const parties = Object.entries(data)
+      .filter(([, v]) => v && (typeof v === 'string' || Array.isArray(v)))
+      .map(([champ, v]) => `${champ === 'non_field_errors' ? '' : `${champ} : `}${[].concat(v).join(' ')}`);
+    if (parties.length) return parties.join(' — ');
+  }
+  return MESSAGES_STATUT[status] || `Erreur inattendue du serveur (code ${status}).`;
+}
+
+async function lireReponse(response) {
+  if (response.status === 204) return null;
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
+    const err = new Error(messageErreur(data, response.status));
     err.status = response.status;
     err.data = data;
     throw err;
@@ -122,450 +147,269 @@ async function postJSON(url, body) {
   return data;
 }
 
-// Variante de postJSON pour les routes AllowAny (mot de passe oublié,
-// réinitialisation, activation) -- utilise publicFetch, jamais apiFetch,
-// pour la même raison que le login (cf. publicFetch ci-dessus).
-async function postJSONPublic(url, body) {
-  const response = await publicFetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
-    err.status = response.status;
-    err.data = data;
-    throw err;
-  }
-  return data;
-}
+const json = (methode, body) => ({
+  method: methode,
+  headers: { 'Content-Type': 'application/json' },
+  body: body !== undefined ? JSON.stringify(body) : undefined,
+});
 
-async function getJSON(url) {
+const getJSON = async (url) => lireReponse(await apiFetch(url));
+const postJSON = async (url, body) => lireReponse(await apiFetch(url, json('POST', body)));
+const patchJSON = async (url, body) => lireReponse(await apiFetch(url, json('PATCH', body)));
+const postJSONPublic = async (url, body) => lireReponse(await publicFetch(url, json('POST', body)));
+
+async function telechargerBlob(url, nomParDefaut) {
   const response = await apiFetch(url);
-  const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
+    const data = await response.json().catch(() => null);
+    const err = new Error(messageErreur(data, response.status));
     err.status = response.status;
     err.data = data;
     throw err;
   }
-  return data;
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const lien = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = lien;
+  a.download = match ? match[1] : nomParDefaut;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(lien);
 }
+
+// --- Conversion formulaire -> API (aucune valeur inventée) ---------------
+
+const nombreOuNull = (v) => {
+  if (v === '' || v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const entierOuNull = (v) => {
+  const n = nombreOuNull(v);
+  return n === null ? null : Math.trunc(n);
+};
+
+// Couche de plancher saisie -> format moteur (catalogue OU valeurs explicites).
+const versCouche = (c) => {
+  const out = { designation: (c.designation || '').trim() || undefined };
+  if (c.type) out.type = c.type;
+  if (c.poidsSurfacique !== '' && c.poidsSurfacique != null) out.poids_surfacique_kn_m2 = nombreOuNull(c.poidsSurfacique);
+  if (c.epaisseur !== '' && c.epaisseur != null) out.epaisseur_m = nombreOuNull(c.epaisseur);
+  if (c.poidsVolumique !== '' && c.poidsVolumique != null) out.poids_volumique_kn_m3 = nombreOuNull(c.poidsVolumique);
+  return out;
+};
+
+export function formulaireVersProjet(f) {
+  return {
+    nom: (f.nomProjet || '').trim(),
+    numero_devis: f.numeroDevis || '',
+    usage_batiment: f.typeUsage || '',
+    nb_niveaux: entierOuNull(f.nombreNiveaux),
+    nb_travees_x: entierOuNull(f.nbTraveesX),
+    nb_travees_y: entierOuNull(f.nbTraveesY),
+    portee_x: nombreOuNull(f.porteeX),
+    portee_y: nombreOuNull(f.porteeY),
+    hauteur_etage: nombreOuNull(f.hauteurEtage),
+    charge_exploitation: nombreOuNull(f.chargeExploitation),
+    contrainte_sol_kn_m2: nombreOuNull(f.contrainteSol),
+    charge_permanente_kn_m2: nombreOuNull(f.chargePermanente),
+    couches_permanentes: (f.couchesPermanentes || []).map(versCouche),
+    methode_semelles: f.methodeSemelles || 'ELU',
+    inclure_poids_propre_ossature: !!f.inclurePoidsPropre,
+  };
+}
+
+const versTexte = (v) => (v === null || v === undefined ? '' : String(v));
+
+export function projetVersFormulaire(p) {
+  return {
+    id: p.id,
+    nomProjet: p.nom || '',
+    numeroDevis: p.numero_devis || '',
+    typeUsage: p.usage_batiment || '',
+    nombreNiveaux: versTexte(p.nb_niveaux),
+    nbTraveesX: versTexte(p.nb_travees_x),
+    nbTraveesY: versTexte(p.nb_travees_y),
+    porteeX: versTexte(p.portee_x),
+    porteeY: versTexte(p.portee_y),
+    hauteurEtage: versTexte(p.hauteur_etage),
+    chargeExploitation: versTexte(p.charge_exploitation),
+    contrainteSol: versTexte(p.contrainte_sol_kn_m2),
+    chargePermanente: versTexte(p.charge_permanente_kn_m2),
+    couchesPermanentes: (p.couches_permanentes || []).map((c) => ({
+      type: c.type || '',
+      designation: c.designation || '',
+      poidsSurfacique: versTexte(c.poids_surfacique_kn_m2),
+      epaisseur: versTexte(c.epaisseur_m),
+      poidsVolumique: versTexte(c.poids_volumique_kn_m3),
+    })),
+    methodeSemelles: p.methode_semelles || 'ELU',
+    inclurePoidsPropre: !!p.inclure_poids_propre_ossature,
+    ifcImporte: !!p.fichier_import_origine,
+  };
+}
+
+// --- API métier ------------------------------------------------------------
 
 export const dqeService = {
-  // Créer un projet -- champs alignés sur projets/models.py::Projet
-  createProjet: async (projectData) => {
-    const payload = {
-      nom: projectData.nomProjet || 'Projet sans nom',
-      usage_batiment: projectData.typeUsage || 'habitation',
-      nb_niveaux: parseInt(projectData.nombreNiveaux || 1, 10),
-      numero_devis: projectData.numeroDevis || '',
-    };
-    return postJSON(`${API_BASE_URL}/projets/`, payload);
-  },
+  // Référentiel technique (usages, charges, lots, types de postes, clés de
+  // prix) -- source unique : le moteur de calcul côté serveur.
+  getReferentiel: async () => getJSON(`${API_BASE_URL}/referentiel/`),
 
-  // Synchronise sur le projet les paramètres de trame éventuellement
-  // corrigés par l'utilisateur après le pré-remplissage (IFC ou saisie
-  // manuelle) -- generer_trame/ et importer_plan (confirmer) lisent ces
-  // champs directement sur le Projet, pas depuis la requête.
-  patchProjet: async (projetId, champs) => {
-    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(champs),
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      const err = new Error((data && (data.detail || JSON.stringify(data))) || `Erreur ${response.status}`);
-      err.status = response.status;
-      err.data = data;
+  // Projets
+  listerProjets: async () => getJSON(`${API_BASE_URL}/projets/`),
+  getProjet: async (projetId) => getJSON(`${API_BASE_URL}/projets/${projetId}/`),
+  createProjet: async (formulaire) =>
+    postJSON(`${API_BASE_URL}/projets/`, formulaireVersProjet(formulaire)),
+  patchProjet: async (projetId, champs) => patchJSON(`${API_BASE_URL}/projets/${projetId}/`, champs),
+  supprimerProjet: async (projetId) =>
+    lireReponse(await apiFetch(`${API_BASE_URL}/projets/${projetId}/`, { method: 'DELETE' })),
+
+  // Enregistre le formulaire (création ou mise à jour) puis génère les
+  // éléments : import IFC confirmé si un plan a été déposé, sinon trame
+  // régulière. Renvoie {projetId, hypotheses, avertissements}.
+  enregistrerEtGenerer: async (formulaire) => {
+    const champs = formulaireVersProjet(formulaire);
+    const projet = formulaire.id
+      ? await patchJSON(`${API_BASE_URL}/projets/${formulaire.id}/`, champs)
+      : await postJSON(`${API_BASE_URL}/projets/`, champs);
+    let resultat;
+    try {
+      resultat = formulaire.ifcImporte
+        ? await postJSON(`${API_BASE_URL}/projets/${projet.id}/importer_plan/`, { confirmer: true })
+        : await postJSON(`${API_BASE_URL}/projets/${projet.id}/generer_trame/`, undefined);
+    } catch (err) {
+      // Le projet EST enregistré même si la génération échoue : l'appelant
+      // doit le rouvrir, sinon un nouvel essai créerait un doublon.
+      err.projetId = projet.id;
       throw err;
     }
-    return data;
+    return {
+      projetId: projet.id,
+      hypotheses: resultat.hypotheses || [],
+      avertissements: resultat.avertissements || [],
+    };
   },
 
-  // Génère la grille complète (poteaux + semelles + poutres) à partir
-  // de projet.nb_travees_x/y, portee_x/y -- chemin "saisie manuelle".
-  genererTrame: async (projetId) => {
-    return postJSON(`${API_BASE_URL}/projets/${projetId}/generer_trame/`, undefined);
-  },
-
-  // Calcule le pré-dimensionnement via le vrai backend DRF : synchronise
-  // d'abord les paramètres de trame sur le projet, puis génère les
-  // VRAIS éléments -- soit à partir des positions réelles de l'IFC
-  // importé (Phase B), soit sur une grille régulière (generer_trame)
-  // pour la saisie manuelle. Remplace l'ancien pipeline à 5 éléments
-  // fictifs qui ignorait complètement nb_travees_x/y et portee_x/y.
-  calculateSections: async (projectData) => {
-    const projetId = projectData.id || (await dqeService.createProjet(projectData)).id;
-
-    await dqeService.patchProjet(projetId, {
-      nb_niveaux: parseInt(projectData.nombreNiveaux || 1, 10),
-      usage_batiment: projectData.typeUsage || 'habitation',
-      numero_devis: projectData.numeroDevis || '',
-      nb_travees_x: parseInt(projectData.nbTraveesX || 1, 10),
-      nb_travees_y: parseInt(projectData.nbTraveesY || 1, 10),
-      portee_x: parseFloat(projectData.porteeX || 4.0),
-      portee_y: parseFloat(projectData.porteeY || 4.0),
-      hauteur_etage: parseFloat(projectData.hauteurEtage || 3.0),
-      charge_exploitation: parseFloat(projectData.chargeExploitation || 2.5),
-    });
-
-    let elements;
-    if (projectData.ifcImporte) {
-      const resultat = await dqeService.confirmerImportPlanIFC(projetId);
-      elements = resultat.elements || [];
-    } else {
-      elements = await dqeService.genererTrame(projetId);
-    }
-
-    return { projetId, ...parseDRFResponse(elements) };
-  },
-
-  // Aperçu Phase A -- envoie un fichier IFC pour détection des paramètres de
-  // trame (nb_travees_x/y, portee_x/y, nb_niveaux, hauteur_etage), sans créer
-  // aucun ElementStructurel. Voir projets/views.py::ProjetViewSet.importer_plan.
   importerPlanIFC: async (projetId, file) => {
-    if (!projetId) {
-      throw new Error("Aucun projet actif -- impossible d'importer un plan IFC sans projetId.");
-    }
     const formData = new FormData();
     formData.append('fichier', file);
-    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, {
+    return lireReponse(await apiFetch(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, {
       method: 'POST',
       body: formData,
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      const err = new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
-      err.status = response.status;
-      err.data = data;
-      throw err;
-    }
-    return data;
+    }));
   },
 
-  // Confirmation Phase B -- relit le fichier IFC déjà déposé et crée les
-  // vrais ElementStructurel à leurs positions réelles.
-  confirmerImportPlanIFC: async (projetId) => {
-    if (!projetId) {
-      throw new Error("Aucun projet actif -- impossible de confirmer un import sans projetId.");
-    }
-    return postJSON(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, { confirmer: true });
-  },
-
-  // Vision IA -- envoie une image de plan (JPG/PNG) à l'endpoint Gemini
-  // Vision pour lecture OCR des annotations (repères + dimensions entre
-  // parenthèses, ex: "S1(170x170x40)"). Ne pré-remplit PAS nb_travees_x/y
-  // (le backend ne renvoie pas ce format pour cet endpoint) -- il renvoie
-  // une liste d'annotations lues à vérifier manuellement par l'ingénieur.
-  // Cette fonction n'existait pas alors qu'elle était déjà appelée par
-  // Step1_Parametres.jsx, ce qui provoquait un crash ("dqeService.analyserPlanImage
-  // is not a function") dès qu'un utilisateur déposait une image de plan.
   analyserPlanImage: async (projetId, file) => {
-    if (!projetId) {
-      throw new Error("Aucun projet actif -- impossible d'analyser une image sans projetId.");
-    }
     const formData = new FormData();
     formData.append('fichier', file);
-    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/analyser_plan_image/`, {
+    return lireReponse(await apiFetch(`${API_BASE_URL}/projets/${projetId}/analyser_plan_image/`, {
       method: 'POST',
       body: formData,
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      const msg = (data && (data.erreur || data.detail)) || (
-        response.status === 413
-          ? "L'image envoyée est trop volumineuse."
-          : response.status === 429
-          ? "Trop de requêtes effectuées. Veuillez patienter avant de réessayer."
-          : response.status === 400
-          ? "Fichier ou format d'image non supporté."
-          : `Erreur ${response.status}`
-      );
-      const err = new Error(msg);
-      err.status = response.status;
-      err.data = data;
-      throw err;
-    }
-    return data;
+    }));
   },
 
-  // Postes complémentaires (Jour 2.1)
-  listerPostesComplementaires: async (projetId) => {
-    if (!projetId) return [];
-    const response = await apiFetch(`${API_BASE_URL}/postes-complementaires/?projet=${projetId}`);
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
-    }
-    return Array.isArray(data) ? data : data.results || [];
-  },
+  // Éléments
+  creerElement: async (champs) => postJSON(`${API_BASE_URL}/elements/`, champs),
+  calculerElement: async (elementId) => postJSON(`${API_BASE_URL}/elements/${elementId}/calculer/`),
+  supprimerElement: async (elementId) =>
+    lireReponse(await apiFetch(`${API_BASE_URL}/elements/${elementId}/`, { method: 'DELETE' })),
+  validerElement: async (elementId, resultatValide) =>
+    postJSON(`${API_BASE_URL}/elements/${elementId}/valider/`,
+      resultatValide ? { resultat_valide: resultatValide } : {}),
+  deverrouillerElement: async (elementId) =>
+    postJSON(`${API_BASE_URL}/elements/${elementId}/deverrouiller/`),
 
+  // Postes complémentaires
+  listerPostesComplementaires: async (projetId) =>
+    getJSON(`${API_BASE_URL}/postes-complementaires/?projet=${projetId}`),
   ajouterPosteComplementaire: async (projetId, poste) => {
-    if (!projetId) {
-      throw new Error("Aucun projet actif -- impossible d'ajouter un poste.");
-    }
-    const payload = {
-      projet: projetId,
-      lot: poste.lot,
-      mode: poste.mode,
-    };
+    const payload = { projet: projetId, lot: poste.lot, mode: poste.mode };
     if (poste.mode === 'simple') {
       payload.designation = poste.designation;
       payload.unite = poste.unite;
-      payload.quantite = parseFloat(poste.quantite);
-      payload.prix_unitaire = parseFloat(poste.prixUnitaire);
+      payload.quantite = nombreOuNull(poste.quantite);
+      payload.prix_unitaire = nombreOuNull(poste.prixUnitaire);
     } else {
       payload.type_poste = poste.typePoste;
       payload.geometrie = poste.geometrie;
     }
     return postJSON(`${API_BASE_URL}/postes-complementaires/`, payload);
   },
+  supprimerPosteComplementaire: async (posteId) =>
+    lireReponse(await apiFetch(`${API_BASE_URL}/postes-complementaires/${posteId}/`, { method: 'DELETE' })),
 
-  supprimerPosteComplementaire: async (posteId) => {
-    const response = await apiFetch(`${API_BASE_URL}/postes-complementaires/${posteId}/`, {
-      method: 'DELETE',
-    });
-    if (!response.ok && response.status !== 204) {
-      const data = await response.json().catch(() => null);
-      throw new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
-    }
-    return true;
-  },
-
-  // Ancien alias main d'œuvre pour compatibilité
-  listerPostesMainDoeuvre: async (projetId) => dqeService.listerPostesComplementaires(projetId),
-  ajouterPosteMainDoeuvre: async (projetId, poste) => dqeService.ajouterPosteComplementaire(projetId, { ...poste, lot: 'lot_00_generalites', mode: 'simple' }),
-  supprimerPosteMainDoeuvre: async (posteId) => dqeService.supprimerPosteComplementaire(posteId),
-
-  // Suggestion de chaînage automatique (Jour 2.2)
-  recupererChainageSuggere: async (projetId) => {
-    if (!projetId) return 0;
-    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/chainage_suggere/`);
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error((data && data.erreur) || `Erreur ${response.status}`);
-    }
-    return data.longueur_m;
-  },
-
-  // Plan de fondation (Jour 3.1)
-  recupererPlanFondation: async (projetId) => {
-    if (!projetId) return null;
-    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/`);
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error((data && data.erreur) || `Erreur ${response.status}`);
-    }
-    return data;
-  },
-
-  // PDF du plan de coffrage : renvoie un Blob (fetch authentifié via apiFetch,
-  // un fetch() brut n'envoie pas le jeton JWT et renvoie 401).
+  // Plan de fondation
+  recupererPlanFondation: async (projetId) => getJSON(`${API_BASE_URL}/projets/${projetId}/plan_fondation/`),
   recupererPlanFondationPDF: async (projetId) => {
-    if (!projetId) {
-      throw new Error("Aucun projet actif -- impossible de récupérer le PDF sans projetId.");
-    }
     const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?export=pdf`);
     if (!response.ok) {
       const data = await response.json().catch(() => null);
-      throw new Error((data && (data.erreur || data.detail)) || `Erreur ${response.status}`);
+      const err = new Error(messageErreur(data, response.status));
+      err.status = response.status;
+      err.data = data;
+      throw err;
     }
     return response.blob();
   },
+  // "export" et non "format" : "format" est réservé par la négociation de
+  // contenu DRF et provoque un 404 avant la vue.
+  telechargerPlanFondationDXF: async (projetId) =>
+    telechargerBlob(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?export=dxf`, `Plan_fondation_${projetId}.dxf`),
+  validerPlanFondation: async (projetId) =>
+    postJSON(`${API_BASE_URL}/projets/${projetId}/valider_plan_fondation/`),
 
-  telechargerPlanFondationDXF: async (projetId) => {
-    if (!projetId) {
-      throw new Error("Aucun projet actif -- impossible de télécharger le plan sans projetId.");
-    }
-    // IMPORTANT : le paramètre s'appelle "export" et non "format" -- "format" est
-    // réservé par la négociation de contenu de DRF et déclenche un Http404 avant
-    // même d'atteindre la vue (voir projets/views.py::plan_fondation). C'était la
-    // cause du bouton de téléchargement DXF qui ne fonctionnait pas.
-    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/plan_fondation/?export=dxf`);
-    if (!response.ok) {
-      const data = await response.json().catch(() => null);
-      throw new Error((data && data.erreur) || `Erreur ${response.status}`);
-    }
-    const blob = await response.blob();
-    const disposition = response.headers.get('Content-Disposition') || '';
-    const match = disposition.match(/filename="?([^"]+)"?/);
-    const filename = match ? match[1] : `Plan_fondation_${projetId}.dxf`;
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
-  },
+  // Variantes recalculées par le moteur (rien n'est enregistré)
+  calculerVariantes: async (projetId, variantes) =>
+    postJSON(`${API_BASE_URL}/projets/${projetId}/variantes/`, { variantes }),
 
-  validerPlanFondation: async (projetId) => {
-    if (!projetId) return true;
-    return postJSON(`${API_BASE_URL}/projets/${projetId}/valider_plan_fondation/`, undefined);
-  },
+  // DQE (données brutes du backend : lots, lignes, synthèse, hypothèses)
+  genererDQE: async (projetId) => postJSON(`${API_BASE_URL}/projets/${projetId}/generer-dqe/`),
+  telechargerDQEFichier: async (projetId, format) =>
+    telechargerBlob(
+      `${API_BASE_URL}/projets/${projetId}/generer-dqe/?export=${format}`,
+      `DQE_projet_${projetId}.${format === 'pdf' ? 'pdf' : 'xlsx'}`,
+    ),
 
-  // Valide/verrouille un élément côté backend
-  validerElementDRF: async (elementId, resultatValide) => {
-    if (!elementId) {
-      throw new Error("elementId manquant -- impossible de valider un élément sans son id numérique réel.");
-    }
-    return postJSON(`${API_BASE_URL}/elements/${elementId}/valider/`, {
-      resultat_valide: resultatValide,
-    });
-  },
+  // Assistant IA
+  structurerProjetIA: async (description) =>
+    postJSON(`${API_BASE_URL}/assistant/structurer-projet/`, { description }),
+  expliquerElementIA: async (elementId) =>
+    postJSON(`${API_BASE_URL}/assistant/expliquer-element/`, { element_id: elementId }),
+  suggererPosteIA: async (description) =>
+    postJSON(`${API_BASE_URL}/assistant/suggerer-poste/`, { description }),
+  analyserCoherenceProjet: async (projetId) => getJSON(`${API_BASE_URL}/projets/${projetId}/analyse-coherence/`),
+  expliquerCoherenceElement: async (elementId) =>
+    postJSON(`${API_BASE_URL}/elements/${elementId}/expliquer-coherence/`),
 
-  // Structuration NLP par Assistant IA
-  structurerProjetIA: async (descriptionText) => {
-    return postJSON(`${API_BASE_URL}/assistant/structurer-projet/`, {
-      description: descriptionText,
-    });
-  },
-
-  // Explication d'un élément par Assistant IA
-  expliquerElementIA: async (elementId) => {
-    return postJSON(`${API_BASE_URL}/assistant/expliquer-element/`, {
-      element_id: elementId,
-    });
-  },
-
-  // Suggestion de poste complémentaire par Assistant IA -- l'ingénieur décrit
-  // le poste en langage naturel, l'IA propose designation/unite/lot/confiance.
-  // Cette fonction n'existait pas du tout : appel jamais câblé côté service.
-  suggererPosteIA: async (descriptionText) => {
-    return postJSON(`${API_BASE_URL}/assistant/suggerer-poste/`, {
-      description: descriptionText,
-    });
-  },
-
-  // Contrôle de cohérence structurelle -- analyse tous les éléments validés
-  // d'un projet et remonte des signaux (CRITIQUE/ATTENTION/INFORMATION/...).
-  // Appelée par Step3_ValidationLock.jsx mais n'existait pas encore ici.
-  analyserCoherenceProjet: async (projetId) => {
-    return getJSON(`${API_BASE_URL}/projets/${projetId}/analyse-coherence/`);
-  },
-
-  // Explication IA d'un signal de cohérence pour un élément donné.
-  // Appelée par Step3_ValidationLock.jsx mais n'existait pas encore ici.
-  expliquerCoherenceElement: async (elementId) => {
-    return postJSON(`${API_BASE_URL}/elements/${elementId}/expliquer-coherence/`);
-  },
-
-  // Paramètres entreprise (logo + coordonnées) utilisés en en-tête des
-  // exports DQE -- voir projets/models.py::EntrepriseParametres.
-  getEntreprise: async () => {
-    const response = await apiFetch(`${API_BASE_URL}/entreprise/`);
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      const err = new Error((data && data.detail) || `Erreur ${response.status}`);
-      err.status = response.status;
-      err.data = data;
-      throw err;
-    }
-    return data;
-  },
-
-  // `champs` : objet simple (nom, siege_social, telephone, email, site_web,
-  // rccm, cc, cb, capital_social) et/ou `logoFile` (objet File, optionnel).
+  // Cabinet
+  getEntreprise: async () => getJSON(`${API_BASE_URL}/entreprise/`),
   updateEntreprise: async (champs, logoFile) => {
     const formData = new FormData();
     Object.entries(champs || {}).forEach(([cle, valeur]) => {
-      // `prix_unitaires` est un objet (JSONField côté backend) : DRF
-      // relit une chaîne JSON même reçue via multipart/form-data, les
-      // autres champs restent de simples chaînes.
-      formData.append(cle, cle === 'prix_unitaires' ? JSON.stringify(valeur || {}) : (valeur ?? ''));
+      formData.append(cle, ['prix_unitaires', 'prix_origines'].includes(cle) ? JSON.stringify(valeur || {}) : (valeur ?? ''));
     });
-    if (logoFile) {
-      formData.append('logo', logoFile);
-    }
-    const response = await apiFetch(`${API_BASE_URL}/entreprise/`, {
-      method: 'PATCH',
-      body: formData,
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      const err = new Error((data && data.detail) || `Erreur ${response.status}`);
-      err.status = response.status;
-      err.data = data;
-      throw err;
-    }
-    return data;
+    if (logoFile) formData.append('logo', logoFile);
+    return lireReponse(await apiFetch(`${API_BASE_URL}/entreprise/`, { method: 'PATCH', body: formData }));
   },
 
-  // Télécharge le DQE binaire (PDF / Excel)
-  telechargerDQEFichier: async (projetId, format) => {
-    if (!projetId) {
-      throw new Error("Aucun projet actif -- impossible de télécharger le DQE sans projetId.");
-    }
-    if (format !== 'pdf' && format !== 'excel') {
-      throw new Error(`Format d'export invalide : "${format}" (attendu : "pdf" ou "excel").`);
-    }
+  // Analytics (lecture seule)
+  analyticsCabinet: async () => getJSON(`${API_BASE_URL}/analytics/cabinet/`),
+  analyticsProjet: async (projetId) => getJSON(`${API_BASE_URL}/analytics/projets/${projetId}/`),
+  analyticsStaff: async () => getJSON(`${API_BASE_URL}/analytics/staff/`),
 
-    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/generer_dqe/?export=${format}`, {
-      method: 'GET',
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => null);
-      const err = new Error((data && data.erreur) || `Erreur ${response.status}`);
-      err.status = response.status;
-      err.data = data;
-      throw err;
-    }
-
-    const blob = await response.blob();
-    const disposition = response.headers.get('Content-Disposition') || '';
-    const match = disposition.match(/filename="?([^"]+)"?/);
-    const filename = match ? match[1] : `DQE_projet_${projetId}.${format === 'pdf' ? 'pdf' : 'xlsx'}`;
-
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
-  },
-
-  calculateDQE: async (projetId, sections) => {
-    if (!projetId) {
-      throw new Error("Aucun projetId actif -- impossible de calculer le DQE sans projet.");
-    }
-    const response = await apiFetch(`${API_BASE_URL}/projets/${projetId}/generer_dqe/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      const err = new Error(data.erreur || `Erreur ${response.status}`);
-      err.data = data;
-      throw err;
-    }
-    return parseDQEResponse(data);
-  },
-
-  // === Authentification & Comptes (sprint Comptes & Permissions) =======
-  // Toutes ces routes existent réellement côté backend (projets/auth_views.py)
-  // -- ce n'était pas le cas quand LoginPage/RegisterPage/ForgotPasswordPage
-  // ont été créées ; elles doivent maintenant appeler ces fonctions au lieu
-  // de leur ancien état "pas encore branché".
-
+  // Authentification & comptes
   isAuthenticated,
+  getMe: async () => getJSON(`${API_BASE_URL}/me/`),
 
-  // Connexion classique (JWT). Retourne {access, refresh} et les stocke.
   login: async (username, motDePasse) => {
-    const response = await publicFetch(`${API_BASE_URL}/auth/token/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password: motDePasse }),
-    });
+    const response = await publicFetch(`${API_BASE_URL}/auth/token/`, json('POST', { username, password: motDePasse }));
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      const err = new Error((data && data.detail) || "Identifiants incorrects.");
+      const err = new Error(response.status === 401 ? 'Identifiant ou mot de passe incorrect.' : messageErreur(data, response.status));
       err.status = response.status;
       err.data = data;
       throw err;
@@ -574,178 +418,126 @@ export const dqeService = {
     return data;
   },
 
-  // Déconnexion : révoque le refresh token côté serveur (liste noire),
-  // puis nettoie le stockage local dans tous les cas.
   logout: async () => {
     const refresh = getRefreshToken();
     try {
-      if (refresh) {
-        await apiFetch(`${API_BASE_URL}/auth/logout/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh }),
-        });
-      }
-    } finally {
+      if (refresh) await apiFetch(`${API_BASE_URL}/auth/logout/`, json('POST', { refresh }));
+    } catch { /* déconnexion locale garantie ci-dessous */ } finally {
       clearTokens();
     }
   },
 
-  // Inscription d'un nouveau cabinet + premier compte Admin.
   inscription: async ({ nomEntreprise, username, email, motDePasse }) => {
-    const response = await publicFetch(`${API_BASE_URL}/auth/inscription/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        nom_entreprise: nomEntreprise,
-        username,
-        email,
-        mot_de_passe: motDePasse,
-      }),
-    });
+    const response = await publicFetch(`${API_BASE_URL}/auth/inscription/`, json('POST', {
+      nom_entreprise: nomEntreprise, username, email, mot_de_passe: motDePasse,
+    }));
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      const err = new Error("Impossible de créer le compte.");
+      const err = new Error('Impossible de créer le compte.');
       err.status = response.status;
-      err.data = data; // erreurs par champ (nom_entreprise, username, mot_de_passe...)
+      err.data = data;
       throw err;
     }
     setTokens(data);
     return data;
   },
 
-  // Demande de réinitialisation -- ne révèle jamais si l'email existe.
-  demanderReinitialisation: async (email) => {
-    return postJSONPublic(`${API_BASE_URL}/auth/mot-de-passe-oublie/`, { email });
-  },
-
-  confirmerReinitialisation: async ({ uid, token, nouveauMotDePasse }) => {
-    return postJSONPublic(`${API_BASE_URL}/auth/reinitialiser-mot-de-passe/`, {
-      uid,
-      token,
-      nouveau_mot_de_passe: nouveauMotDePasse,
-    });
-  },
-
-  activerCompte: async ({ uid, token, motDePasse }) => {
-    return postJSONPublic(`${API_BASE_URL}/auth/activer/`, {
-      uid,
-      token,
-      mot_de_passe: motDePasse,
-    });
-  },
-
-  changerMotDePasse: async ({ ancienMotDePasse, nouveauMotDePasse }) => {
-    return postJSON(`${API_BASE_URL}/auth/changer-mot-de-passe/`, {
-      ancien_mot_de_passe: ancienMotDePasse,
-      nouveau_mot_de_passe: nouveauMotDePasse,
-    });
-  },
-
-  // Profil (rôle, entreprise) de l'utilisateur connecté.
-  getMoi: async () => {
-    return getJSON(`${API_BASE_URL}/auth/moi/`);
-  },
-
-  // Réservé aux comptes Admin du cabinet.
-  inviterUtilisateur: async ({ email, role }) => {
-    return postJSON(`${API_BASE_URL}/auth/inviter/`, { email, role });
-  },
-
-  listerMembres: async () => {
-    return getJSON(`${API_BASE_URL}/auth/membres/`);
-  },
-
-  desactiverMembre: async (userId) => {
-    return postJSON(`${API_BASE_URL}/auth/membres/${userId}/desactiver/`);
-  },
+  demanderReinitialisation: async (email) => postJSONPublic(`${API_BASE_URL}/auth/mot-de-passe-oublie/`, { email }),
+  confirmerReinitialisation: async ({ uid, token, nouveauMotDePasse }) =>
+    postJSONPublic(`${API_BASE_URL}/auth/reinitialiser-mot-de-passe/`, { uid, token, nouveau_mot_de_passe: nouveauMotDePasse }),
+  activerCompte: async ({ uid, token, motDePasse }) =>
+    postJSONPublic(`${API_BASE_URL}/auth/activer/`, { uid, token, mot_de_passe: motDePasse }),
+  changerMotDePasse: async ({ ancienMotDePasse, nouveauMotDePasse }) =>
+    postJSON(`${API_BASE_URL}/auth/changer-mot-de-passe/`, {
+      ancien_mot_de_passe: ancienMotDePasse, nouveau_mot_de_passe: nouveauMotDePasse,
+    }),
+  getMoi: async () => getJSON(`${API_BASE_URL}/auth/moi/`),
+  inviterUtilisateur: async ({ email, role }) => postJSON(`${API_BASE_URL}/auth/inviter/`, { email, role }),
+  listerMembres: async () => getJSON(`${API_BASE_URL}/auth/membres/`),
+  desactiverMembre: async (userId) => postJSON(`${API_BASE_URL}/auth/membres/${userId}/desactiver/`),
 };
 
-function parseDRFResponse(elements) {
-  if (!elements) return { poteaux: [], poutres: [], semelles: [] };
-  return {
-    poteaux: elements.filter((e) => e.type_element === 'poteau').map(formatElement),
-    poutres: elements.filter((e) => e.type_element === 'poutre').map(formatElement),
-    semelles: elements.filter((e) => e.type_element === 'semelle').map(formatElement),
-  };
+// --- Présentation des éléments renvoyés par l'API -------------------------
+
+export const LIBELLES_TYPES = {
+  poteau: 'Poteau',
+  poutre: 'Poutre',
+  semelle: 'Semelle',
+  semelle_filante: 'Semelle filante',
+  longrine: 'Longrine',
+  chainage: 'Chaînage',
+  dalle: 'Dalle',
+};
+
+const fmt = (v, unite) => (v === null || v === undefined ? null : `${v} ${unite}`);
+
+export function formatSection(type, res = {}) {
+  switch (type) {
+    case 'poteau':
+      return res.cote_cm ? `${res.cote_cm} x ${res.cote_cm} cm` : null;
+    case 'poutre':
+    case 'longrine':
+    case 'chainage':
+    case 'semelle_filante':
+      return res.largeur_cm && res.hauteur_cm ? `${res.largeur_cm} x ${res.hauteur_cm} cm` : null;
+    case 'semelle':
+      if (res.grand_cote_cm && res.petit_cote_cm) return `${res.grand_cote_cm} x ${res.petit_cote_cm} cm`;
+      return res.cote_cm ? `${res.cote_cm} x ${res.cote_cm} cm` : null;
+    case 'dalle':
+      return res.epaisseur_cm ? `ép. ${res.epaisseur_cm} cm` : null;
+    default:
+      return null;
+  }
 }
 
-function formatElement(e) {
+function formatArmatures(res = {}) {
+  const barres = res.barres_proposees || res.barres_transversales;
+  return barres && barres.diametre_mm && barres.nombre_barres
+    ? `${barres.nombre_barres} HA ${barres.diametre_mm}`
+    : null;
+}
+
+// Élément API -> objet d'affichage. Les champs absents restent null :
+// l'interface affiche "—", jamais une valeur de remplacement.
+export function formatElement(e) {
   const res = e.resultat_valide || e.resultat_calcul || {};
   const calculIndisponible = !e.resultat_calcul && !e.resultat_valide;
   return {
-    id: e.identifiant || `EL-${e.id}`,
+    id: e.id,
     elementId: e.id,
     name: e.identifiant,
-    section: calculIndisponible ? 'Calcul manuel requis' : formatSection(e.type_element, res),
-    armatures: calculIndisponible ? '—' : formatArmatures(e.type_element, res),
-    // Champs bruts du modèle Django (ElementStructurel), sérialisés tels
-    // quels par DRF (fields = "__all__") -- ils existaient déjà dans la
-    // réponse API mais n'étaient jamais lus ici. Résultat : Step2_Calculs.jsx
-    // (item.charge / item.effort_axial / item.portee / item.contrainteSol)
-    // ne trouvait jamais ces propriétés et retombait systématiquement sur
-    // ses valeurs par défaut codées en dur ("150 kN", "5.0 m", "0.20 MPa"...)
-    // pour CHAQUE élément, quelle que soit sa charge réelle.
+    type: e.type_element,
+    categorie: LIBELLES_TYPES[e.type_element] || e.type_element,
+    section: formatSection(e.type_element, res),
+    armatures: formatArmatures(res),
     charge: e.charge_calculee != null ? `${Math.round(e.charge_calculee * 10) / 10} kN` : null,
+    chargeLineaire: e.charge_lineaire != null ? `${Math.round(e.charge_lineaire * 10) / 10} kN/m` : null,
     portee: e.portee != null ? `${e.portee.toFixed(2)} m` : null,
-    contrainteSol: e.taux_travail_sol != null ? `${e.taux_travail_sol.toFixed(2)} MPa` : null,
-    hauteur: res.hauteur_cm != null ? `${res.hauteur_cm} cm` : null,
+    longueur: e.longueur_m,
+    surface: e.surface_m2,
+    contrainteSol: e.taux_travail_sol != null ? `${e.taux_travail_sol} kN/m²` : null,
+    hypotheseSol: res.hypothese_sol === true,
+    hauteur: fmt(res.hauteur_cm, 'cm'),
     resultat: res,
     calculIndisponible,
-    erreurCalcul: e.erreur_calcul || null,
     locked: e.statut === 'valide',
     statut: e.statut,
   };
 }
 
-function formatSection(typeElement, res) {
-  if (typeElement === 'poteau') {
-    const cote = res.cote_cm ?? res.largeur_cm;
-    return cote ? `${cote} x ${cote} cm` : 'n/d';
-  }
-  if (typeElement === 'poutre') {
-    if (res.largeur_cm && res.hauteur_cm) return `${res.largeur_cm} x ${res.hauteur_cm} cm`;
-  }
-  if (typeElement === 'semelle') {
-    // dimensionner_semelle() (semelle isolée carrée) renvoie "cote_cm", pas
-    // "largeur_cm"/"hauteur_cm" -- seule dimensionner_semelle_affinee()
-    // (grand_cote_cm/petit_cote_cm, rectangulaire) et dimensionner_semelle_filante()
-    // (largeur_cm) utilisent d'autres noms. Sans ce cas, la colonne "Dimensions
-    // (A x B)" affichait "n/d" pour toutes les semelles carrées, alors que
-    // cote_cm était bien calculé et affiché correctement dans le tableau du
-    // Plan de Fondation (StepPlanFondation.jsx, qui lit une autre source).
-    if (res.grand_cote_cm && res.petit_cote_cm) return `${res.grand_cote_cm} x ${res.petit_cote_cm} cm`;
-    if (res.largeur_cm && res.hauteur_cm) return `${res.largeur_cm} x ${res.hauteur_cm} cm`;
-    if (res.cote_cm) return `${res.cote_cm} x ${res.cote_cm} cm`;
-  }
-  return 'n/d';
+export function elementsParType(elements = []) {
+  const groupes = { poteaux: [], poutres: [], semelles: [], dalles: [], autres: [] };
+  elements.forEach((e) => {
+    const item = formatElement(e);
+    if (e.type_element === 'poteau') groupes.poteaux.push(item);
+    else if (e.type_element === 'poutre') groupes.poutres.push(item);
+    else if (e.type_element === 'semelle') groupes.semelles.push(item);
+    else if (e.type_element === 'dalle') groupes.dalles.push(item);
+    else groupes.autres.push(item);
+  });
+  return groupes;
 }
 
-function formatArmatures(typeElement, res) {
-  const barres = res.barres_proposees || res.barres_transversales;
-  if (barres && barres.diametre_mm && barres.nombre_barres) {
-    return `${barres.nombre_barres} HA ${barres.diametre_mm}`;
-  }
-  return 'n/d';
-}
-
-function parseDQEResponse(data) {
-  const lignes = data.lignes || [];
-  return {
-    quantites: lignes.map((l) => ({
-      materiau: l.designation || l.materiau,
-      unite: l.unite,
-      quantite: l.quantite,
-      prixUnitaire: `${Number(l.prix_unitaire).toLocaleString()} FCFA`,
-      total: `${Number(l.montant).toLocaleString()} FCFA`,
-    })),
-    montantTotalFCFA: `${Number(data.total_general).toLocaleString()} FCFA`,
-    // NB : ce champ n'est PAS généré par l'assistant IA -- c'est une phrase
-    // fixe décrivant le moteur de calcul. Il s'appelait "explicationIA" et
-    // était affiché sous un badge "Sparkles / DKE IA" dans Step4_DQEExport.jsx,
-    // ce qui laissait croire à tort qu'une IA avait produit ce texte alors
-    // qu'aucun appel à /assistant/expliquer-element/ n'était jamais fait ici.
-    syntheseCalcul:
-      'Devis calculé par le moteur de calcul (BAEL 91) à partir des sections validées et verrouillées.',
-  };
-}
+// Formatage monétaire (affichage uniquement -- les montants viennent du serveur).
+export const formatFCFA = (n) =>
+  n === null || n === undefined ? '—' : `${Number(n).toLocaleString('fr-FR')} FCFA`;

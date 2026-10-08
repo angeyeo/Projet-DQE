@@ -22,6 +22,7 @@ from ..constantes import (
     DENSITE_ACIER_KG_M3,
     GAMMA_ELU_ELS_SUPPOSE,
 )
+from ..unites import kn_vers_mn, m2_vers_cm2, m_vers_cm
 from ..validators import valider_portee, EntreeInvalide
 from ..tables_acier import proposer_barres
 from .methode_caquot import calculer_moments_caquot
@@ -106,7 +107,7 @@ def _dimensionner_ferraillage_flexion(moment_flechissant_knm, hauteur_utile, lar
     Pivot B (voir calculer_moment_critique_pivot_b) -- section à
     agrandir, pas un cas silencieusement ignoré.
     """
-    moment_flechissant_mn = moment_flechissant_knm / 1000
+    moment_flechissant_mn = kn_vers_mn(moment_flechissant_knm)
     fbu = 0.85 * fc28 / (1.0 * GAMMA_BETON)
 
     moment_reduit = moment_flechissant_mn / (largeur * hauteur_utile ** 2 * fbu)
@@ -129,11 +130,11 @@ def _dimensionner_ferraillage_flexion(moment_flechissant_knm, hauteur_utile, lar
 
     fsu = LIMITE_ELASTIQUE_ACIER / GAMMA_ACIER
     section_acier_m2 = moment_flechissant_mn / (bras_de_levier * fsu)
-    section_acier_cm2 = section_acier_m2 * 10_000
+    section_acier_cm2 = m2_vers_cm2(section_acier_m2)
 
     # Condition de non-fragilité (fichier technicien) : Amin = (ftj/fe) x 0,23 x d x b
     ftj = 0.6 + 0.06 * fc28
-    section_min_cm2 = (ftj / LIMITE_ELASTIQUE_ACIER) * 0.23 * (hauteur_utile * 100) * (largeur * 100)
+    section_min_cm2 = (ftj / LIMITE_ELASTIQUE_ACIER) * 0.23 * m_vers_cm(hauteur_utile) * m_vers_cm(largeur)
 
     barres = proposer_barres(max(section_acier_cm2, section_min_cm2))
 
@@ -201,8 +202,8 @@ def dimensionner_poutre(portee, charge_lineaire, largeur=0.20, resistance_beton=
     poids_acier_longitudinal_theorique_kg = ferraillage["section_acier_m2"] * portee * DENSITE_ACIER_KG_M3
 
     return {
-        "hauteur_cm": round(hauteur * 100, 1),
-        "largeur_cm": round(largeur * 100, 1),
+        "hauteur_cm": round(m_vers_cm(hauteur), 1),
+        "largeur_cm": round(m_vers_cm(largeur), 1),
         "moment_flechissant_knm": round(moment_flechissant, 2),
         "moment_reduit": ferraillage["moment_reduit"],
         "pivot": ferraillage["pivot"],
@@ -325,8 +326,8 @@ def dimensionner_poutre_continue(
         })
 
     return {
-        "hauteur_cm": round(hauteur * 100, 1),
-        "largeur_cm": round(largeur * 100, 1),
+        "hauteur_cm": round(m_vers_cm(hauteur), 1),
+        "largeur_cm": round(m_vers_cm(largeur), 1),
         "portees_reduites_m": moments["portees_reduites_m"],
         "moments_appuis_knm": moments["moments_appuis_knm"],
         "resultats_travees": resultats_travees,

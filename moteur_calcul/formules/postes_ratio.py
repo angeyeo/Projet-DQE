@@ -31,6 +31,36 @@ from ..validators import EntreeInvalide
 
 TYPES_POSTES = ("maconnerie", "enduit", "chainage", "raidisseur", "acrotere")
 
+# Schéma des données géométriques attendues par chaque poste -- exposé au
+# frontend (GET /api/referentiel/) pour qu'il construise le formulaire
+# sans recopier ces clés. "requis" : obligatoire pour obtenir AU MOINS une
+# ligne ; les champs optionnels ajoutent une ligne ou remplacent une
+# hypothèse par défaut signalée.
+SCHEMA_GEOMETRIE = {
+    "maconnerie": [
+        {"cle": "perimetre_batiment_m", "libelle": "Périmètre du bâtiment", "unite": "m", "requis": True},
+        {"cle": "hauteur_soubassement_m", "libelle": "Hauteur de soubassement (agglos pleins)", "unite": "m", "requis": False},
+        {"cle": "hauteur_etage_m", "libelle": "Hauteur d'étage (agglos creux)", "unite": "m", "requis": False},
+        {"cle": "nb_niveaux", "libelle": "Nombre de niveaux en élévation", "unite": "", "requis": False},
+        {"cle": "coefficient_plein", "libelle": "Coefficient de plein des murs (0 à 1)", "unite": "", "requis": False},
+    ],
+    "enduit": [
+        {"cle": "surface_murs_a_enduire_m2", "libelle": "Surface de murs à enduire (2 faces)", "unite": "m²", "requis": False},
+        {"cle": "surface_dalle_m2", "libelle": "Surface de sous-face de dalle", "unite": "m²", "requis": False},
+    ],
+    "chainage": [
+        {"cle": "longueur_chainage_m", "libelle": "Longueur de chaînage bas", "unite": "m", "requis": True},
+        {"cle": "longueur_chainage_haut_m", "libelle": "Longueur de chaînage haut / linteaux", "unite": "m", "requis": False},
+    ],
+    "raidisseur": [
+        {"cle": "nb_poteaux", "libelle": "Nombre de raidisseurs", "unite": "", "requis": True},
+        {"cle": "hauteur_raidisseur_m", "libelle": "Hauteur d'un raidisseur", "unite": "m", "requis": True},
+    ],
+    "acrotere": [
+        {"cle": "perimetre_acrotere_m", "libelle": "Périmètre de l'acrotère", "unite": "m", "requis": True},
+    ],
+}
+
 
 def _lignes_element_lineaire(prefixe, longueur_m, section_m2, ratio_acier_kg_m3, ratio_coffrage_m2_m3):
     """
@@ -38,6 +68,8 @@ def _lignes_element_lineaire(prefixe, longueur_m, section_m2, ratio_acier_kg_m3,
     armé (chaînage, raidisseur, acrotère) : béton = longueur x section,
     acier et coffrage déduits par ratio du volume de béton.
     """
+    if longueur_m is None or longueur_m <= 0:
+        raise ValueError(f"Longueur de {prefixe} invalide : {longueur_m!r} (doit être > 0 m).")
     volume_beton = longueur_m * section_m2
     return [
         {"designation": f"Béton dosé à 350 kg/m³ (C25/30) — {prefixe}", "unite": "m³", "quantite": round(volume_beton, 2)},
@@ -52,21 +84,33 @@ def _poste_maconnerie(geometrie):
 
     h_soubassement = geometrie.get("hauteur_soubassement_m")
     if h_soubassement:
-        volume_infra = perimetre * h_soubassement * EPAISSEUR_AGGLOS_15_M
+        # Métré en m² de mur (unité validée par le technicien BTP) : la
+        # surface ne dépend pas de l'épaisseur (15 cm), qui figure dans la
+        # désignation et dans le prix unitaire.
+        surface_infra = perimetre * h_soubassement
         lignes.append({
             "designation": "Agglos 15 pleins (infrastructure)",
-            "unite": "m³", "quantite": round(volume_infra, 2),
+            "unite": "m²", "quantite": round(surface_infra, 2),
+            "formule": f"périmètre × hauteur de soubassement = {perimetre:g} × {h_soubassement:g}".replace(".", ","),
         })
 
     h_etage = geometrie.get("hauteur_etage_m")
     nb_niveaux = geometrie.get("nb_niveaux")
     if h_etage and nb_niveaux:
         surface_brute = perimetre * h_etage * nb_niveaux
-        coeff_plein = geometrie.get("coefficient_plein", COEFFICIENT_PLEIN_MACONNERIE_ELEVATION)
-        lignes.append({
-            "designation": "Agglos 15 creux (élévation)",
-            "unite": "m²", "quantite": round(surface_brute * coeff_plein, 2),
-        })
+        coeff_plein = geometrie.get("coefficient_plein")
+        ligne = {"designation": "Agglos 15 creux (élévation)", "unite": "m²"}
+        if coeff_plein is None:
+            coeff_plein = COEFFICIENT_PLEIN_MACONNERIE_ELEVATION
+            ligne["hypothese"] = (
+                f"Coefficient de plein des murs non fourni : hypothèse "
+                f"{COEFFICIENT_PLEIN_MACONNERIE_ELEVATION} (ouvertures = "
+                f"{100 - COEFFICIENT_PLEIN_MACONNERIE_ELEVATION * 100:.0f} % de la surface)."
+            )
+        if not 0 < coeff_plein <= 1:
+            raise ValueError("coefficient_plein doit être compris entre 0 (exclu) et 1.")
+        ligne["quantite"] = round(surface_brute * coeff_plein, 2)
+        lignes.append(ligne)
 
     return lignes
 
@@ -97,13 +141,21 @@ def _poste_chainage(geometrie):
         "chaînage bas", longueur, SECTION_CHAINAGE_M2,
         RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3, RATIO_COFFRAGE_ELEMENT_LINEAIRE_LEGER_M2_M3,
     )
-    # Chaînage haut / linteaux : même trame en général, hypothèse par défaut.
-    longueur_haut = geometrie.get("longueur_chainage_haut_m", longueur)
-    lignes += _lignes_element_lineaire(
+    # Chaînage haut / linteaux : même trame en général -- hypothèse
+    # signalée sur les lignes quand la longueur n'est pas fournie.
+    longueur_haut = geometrie.get("longueur_chainage_haut_m")
+    hypothese = None
+    if longueur_haut is None:
+        longueur_haut = longueur
+        hypothese = "Longueur du chaînage haut non fournie : prise égale au chaînage bas."
+    lignes_haut = _lignes_element_lineaire(
         "chaînage haut / linteaux", longueur_haut, SECTION_CHAINAGE_M2,
         RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3, RATIO_COFFRAGE_ELEMENT_LINEAIRE_LEGER_M2_M3,
     )
-    return lignes
+    if hypothese:
+        for l in lignes_haut:
+            l["hypothese"] = hypothese
+    return lignes + lignes_haut
 
 
 def _poste_raidisseur(geometrie):
@@ -114,6 +166,8 @@ def _poste_raidisseur(geometrie):
     """
     nb_poteaux = geometrie["nb_poteaux"]
     hauteur = geometrie.get("hauteur_raidisseur_m") or geometrie.get("hauteur_etage_m")
+    if not hauteur:
+        raise KeyError("hauteur_raidisseur_m (ou hauteur_etage_m)")
     longueur_totale = nb_poteaux * hauteur
     return _lignes_element_lineaire(
         "raidisseurs", longueur_totale, SECTION_CHAINAGE_M2,
