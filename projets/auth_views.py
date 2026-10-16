@@ -37,7 +37,8 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 
-from .models import Profil, EntrepriseParametres
+from .models import EvenementProduit, Profil, EntrepriseParametres
+from .services.evenements import enregistrer_evenement
 from .permissions import EstAdminEntreprise
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,9 @@ class InscriptionEntrepriseView(APIView):
             entreprise = EntrepriseParametres.objects.create(nom=nom_entreprise, email=email)
             user = User.objects.create_user(username=username, email=email, password=mot_de_passe)
             profil = Profil.objects.create(utilisateur=user, entreprise=entreprise, role=Profil.Role.ADMIN)
+            enregistrer_evenement(
+                EvenementProduit.Type.INSCRIPTION, utilisateur=user, entreprise=entreprise,
+            )
 
         email_envoye = False
         if email:
@@ -342,13 +346,9 @@ class DemanderReinitialisationView(APIView):
     """
     POST /api/auth/mot-de-passe-oublie/  {"email": ...}
     Ne révèle jamais si l'email existe ou non (réponse identique dans les
-    deux cas). Sans backend SMTP configuré, le lien de réinitialisation
-    était auparavant toujours renvoyé dans le JSON pour un email connu --
-    un secours nécessaire vu l'absence d'envoi réel, mais qui revient à
-    révéler l'existence du compte à qui lit la réponse. Ce lien n'est
-    donc renvoyé en JSON que lorsqu'aucun SMTP n'est configuré (dev/tests) ;
-    dès qu'un backend réel est branché, il ne part plus que par email --
-    seul canal qui prouve la possession de la boîte mail.
+    deux cas). Le lien ne part que par email -- seul canal qui prouve la
+    possession de la boîte. Il n'est renvoyé dans le JSON qu'en DEBUG
+    (développement local), jamais en production.
     """
 
     permission_classes = [AllowAny]
@@ -368,25 +368,29 @@ class DemanderReinitialisationView(APIView):
             token = default_token_generator.make_token(user)
             lien_relatif = f"/reinitialiser-mot-de-passe?uid={uid}&token={token}"
 
-            if smtp_configure:
-                envoye = _envoyer_email(
-                    destinataire=user.email,
-                    sujet="Réinitialisation de votre mot de passe -- Projet DQE",
-                    template_base="emails/reinitialisation",
-                    contexte={
-                        "lien_reinitialisation": f"{settings.FRONTEND_URL}{lien_relatif}",
-                    },
-                )
-                if not envoye:
-                    # SMTP configuré mais l'envoi a échoué (panne réseau,
-                    # identifiants invalides...) -- secours exceptionnel
-                    # pour ne pas bloquer l'utilisateur derrière une panne
-                    # d'infra qu'il ne peut pas résoudre lui-même.
-                    reponse["email_envoye"] = False
-                    reponse["lien_reinitialisation"] = lien_relatif
-            else:
-                # Pas de SMTP configuré (dev/tests) : comportement historique.
+            envoye = smtp_configure and _envoyer_email(
+                destinataire=user.email,
+                sujet="Réinitialisation de votre mot de passe -- Projet DQE",
+                template_base="emails/reinitialisation",
+                contexte={
+                    "lien_reinitialisation": f"{settings.FRONTEND_URL}{lien_relatif}",
+                },
+            )
+            reponse["email_envoye"] = bool(envoye)
+            # SÉCURITÉ : le lien n'est JAMAIS renvoyé au demandeur en
+            # production. Avant, il l'était dès que le SMTP était absent
+            # ou en panne : n'importe qui connaissant l'email d'un compte
+            # pouvait en prendre le contrôle. Seul le mode DEBUG (poste de
+            # développement) conserve ce raccourci.
+            if not envoye and settings.DEBUG:
                 reponse["lien_reinitialisation"] = lien_relatif
+
+        if not smtp_configure and not settings.DEBUG:
+            logger.error("Réinitialisation demandée mais aucun serveur SMTP n'est configuré (EMAIL_HOST).")
+            reponse["detail"] = (
+                "Le service d'envoi d'email n'est pas disponible : contactez l'administrateur "
+                "de votre cabinet pour réinitialiser votre mot de passe."
+            )
 
         return Response(reponse)
 

@@ -6,11 +6,14 @@ from projets.views import (
     ElementStructurelViewSet,
     CoucheChargeViewSet,
     PosteComplementaireViewSet,
+    OuvrageTypeViewSet,
     AssistantStructurerView,
     AssistantExpliquerView,
     AssistantSuggererPosteView,
     EntrepriseParametresView,
+    ReferentielView,
 )
+from projets.analytics_views import AnalyticsCabinetView, AnalyticsProjetView, AnalyticsStaffView
 from projets.auth_views import (
     InscriptionEntrepriseView,
     InviterUtilisateurView,
@@ -33,6 +36,7 @@ router.register(
     PosteComplementaireViewSet,
     basename="postecomplementaire",
 )
+router.register(r"ouvrages", OuvrageTypeViewSet, basename="ouvrage")
 
 urlpatterns = [
     # Routes exactes attendues par test_ai.py
@@ -78,6 +82,10 @@ urlpatterns = [
         EntrepriseParametresView.as_view(),
         name="entreprise-parametres",
     ),
+    path("referentiel/", ReferentielView.as_view(), name="referentiel"),
+    path("analytics/cabinet/", AnalyticsCabinetView.as_view(), name="analytics-cabinet"),
+    path("analytics/projets/<int:pk>/", AnalyticsProjetView.as_view(), name="analytics-projet"),
+    path("analytics/staff/", AnalyticsStaffView.as_view(), name="analytics-staff"),
 
     # --- Auth JWT (sprint Comptes & Permissions) ---
     path("auth/token/", TokenObtainPairView.as_view(), name="token-obtain-pair"),

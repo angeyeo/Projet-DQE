@@ -49,6 +49,10 @@ def structurer_description_projet(description: str) -> dict:
             "nombre_niveaux": validated_data["nombre_niveaux"],
             "configuration": validated_data["configuration"],
             "usage": validated_data["usage"],
+            # Clé canonique du moteur (constantes.CHARGES_EXPLOITATION) ou
+            # None si l'usage détecté n'y correspond pas ("AUTRE") -- le
+            # frontend n'a pas à deviner la correspondance.
+            "usage_batiment": _usage_canonique(validated_data["usage"]),
             "portee_m": validated_data["portee_m"],
             "hauteur_niveau_m": validated_data["hauteur_niveau_m"],
             "contrainte_sol_kn_m2": validated_data["contrainte_sol_kn_m2"],
@@ -58,3 +62,10 @@ def structurer_description_projet(description: str) -> dict:
         "confirmation_requise": confirmation_requise,
         "source": source,
     }
+
+
+def _usage_canonique(usage):
+    from moteur_calcul.constantes import CHARGES_EXPLOITATION
+
+    cle = (usage or "").strip().lower()
+    return cle if cle in CHARGES_EXPLOITATION else None

@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Projet, ElementStructurel, Profil, EntrepriseParametres
+from .models import EntrepriseParametres, ElementStructurel, EvenementProduit, Profil, Projet
 
 
 @admin.register(Projet)
@@ -28,3 +28,18 @@ class ProfilAdmin(admin.ModelAdmin):
 class EntrepriseParametresAdmin(admin.ModelAdmin):
     list_display = ["nom", "email", "telephone", "date_modification"]
     search_fields = ["nom"]
+
+@admin.register(EvenementProduit)
+class EvenementProduitAdmin(admin.ModelAdmin):
+    """Journal en lecture seule : un événement modifié à la main fausserait
+    les analytics."""
+
+    list_display = ["date", "type", "entreprise", "utilisateur", "projet"]
+    list_filter = ["type", "entreprise"]
+    date_hierarchy = "date"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

@@ -11,6 +11,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APITestCase
 
 from projets.models import Projet, ElementStructurel
+from projets.tests_projets.utils import authentifier
 
 run = ifcopenshell.api.run
 
@@ -48,7 +49,8 @@ class TestImporterPlanApercu(APITestCase):
     """Phase A : upload + aperçu, aucun élément créé."""
 
     def setUp(self):
-        self.projet = Projet.objects.create(nom="Villa test")
+        self.user, self.cabinet = authentifier(self)
+        self.projet = Projet.objects.create(nom="Villa test", entreprise=self.cabinet)
         self.ifc_bytes = _construire_ifc_bytes(xs=[0.0, 5.0, 10.0], ys=[0.0, 4.0])
 
     def _url(self):
@@ -84,8 +86,10 @@ class TestImporterPlanConfirmation(APITestCase):
     """Phase B : confirmation, création réelle des éléments."""
 
     def setUp(self):
+        self.user, self.cabinet = authentifier(self)
         self.projet = Projet.objects.create(
             nom="Villa test", hauteur_etage=3.0, nb_niveaux=2, charge_exploitation=1.5,
+            usage_batiment="habitation", entreprise=self.cabinet,
         )
         self.ifc_bytes = _construire_ifc_bytes(xs=[0.0, 5.0, 10.0], ys=[0.0, 4.0])
 

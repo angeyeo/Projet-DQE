@@ -5,6 +5,7 @@ une formule produire un résultat absurde silencieusement.
 """
 
 from .constantes import (
+    PORTEE_MIN_POUTRE_M,
     USAGES_VALIDES,
     PORTEE_MIN_M,
     PORTEE_MAX_M,
@@ -23,6 +24,22 @@ def valider_portee(portee):
         raise EntreeInvalide(
             f"La portée doit être comprise entre {PORTEE_MIN_M} m et {PORTEE_MAX_M} m."
         )
+    return portee
+
+
+def valider_portee_poutre(portee):
+    """Portée d'une POUTRE : les poutres courtes (< 1 m) sont admises
+    (section minimale 20 × 25 cm, ingénieur BTP 12/10/2026) tant que les
+    deux poteaux ne se superposent pas."""
+    if portee is None or portee <= 0:
+        raise EntreeInvalide("La portée doit être un nombre positif.")
+    if portee <= PORTEE_MIN_POUTRE_M:
+        raise EntreeInvalide(
+            f"Portée de {portee:g} m : deux poteaux à moins de {PORTEE_MIN_POUTRE_M:g} m d'entraxe se "
+            f"superposent (poteau doublé dans le plan ?)."
+        )
+    if portee > PORTEE_MAX_M:
+        raise EntreeInvalide(f"La portée doit être inférieure ou égale à {PORTEE_MAX_M} m.")
     return portee
 
 
@@ -46,3 +63,30 @@ def valider_surface(surface):
     if surface is None or surface <= 0:
         raise EntreeInvalide("La surface doit être un nombre positif.")
     return surface
+
+# Plage plausible d'une contrainte admissible de sol, en kN/m² : de
+# ~0,25 bar (sol très médiocre) à 20 bar (rocher sain). Sert surtout à
+# détecter une ERREUR D'UNITÉ (0.2 saisi en MPa au lieu de 200 kN/m²,
+# soit un facteur 1000 sur la surface de la semelle).
+CONTRAINTE_SOL_MIN_KN_M2 = 25.0
+CONTRAINTE_SOL_MAX_KN_M2 = 2000.0
+
+
+def valider_contrainte_sol_kn_m2(valeur):
+    """None autorisé (= hypothèse par défaut du moteur, signalée)."""
+    if valeur is None:
+        return None
+    if valeur <= 0:
+        raise EntreeInvalide("La contrainte admissible du sol doit être positive (kN/m²).")
+    if valeur < CONTRAINTE_SOL_MIN_KN_M2:
+        raise EntreeInvalide(
+            f"Contrainte du sol = {valeur} kN/m² : valeur trop faible, probablement "
+            f"saisie en MPa ou en bar. Le moteur attend des kN/m² "
+            f"(0,2 MPa = 2 bar = 200 kN/m²)."
+        )
+    if valeur > CONTRAINTE_SOL_MAX_KN_M2:
+        raise EntreeInvalide(
+            f"Contrainte du sol = {valeur} kN/m² : valeur hors plage plausible "
+            f"(max {CONTRAINTE_SOL_MAX_KN_M2:.0f} kN/m²). Vérifiez l'unité."
+        )
+    return valeur

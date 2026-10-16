@@ -1,259 +1,142 @@
-import React, { useState, useEffect } from 'react';
-import { ArrowLeft, ArrowRight, Download, CheckCircle, AlertTriangle, Grid, FileText, Layers } from 'lucide-react';
-import { dqeService } from '../api/dqeService';
+import React, { useEffect, useState } from 'react';
+import { ArrowLeft, ArrowRight, CheckCircle2, Download, FileText, Layers } from 'lucide-react';
+import { dqeService, formatSection } from '../api/dqeService';
+import Alerte from './ui/Alerte';
 
-export default function StepPlanFondation({ projetId, sections, onBack, onNext }) {
-  const [planData, setPlanData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [downloadingDxf, setDownloadingDxf] = useState(false);
-  const [downloadingPdf, setDownloadingPdf] = useState(false);
-  const [validating, setValidating] = useState(false);
-  const [errorMsg, setErrorMsg] = useState(null);
-  const [pdfPreviewUrl, setPdfPreviewUrl] = useState(null);
+// Plan de fondation : semelles positionnées (coordonnées réelles issues de
+// la trame ou du plan importé), aperçu PDF généré par le serveur, exports.
+export default function StepPlanFondation({ projetId, peutValider, onBack, onNext }) {
+  const [semelles, setSemelles] = useState(null);
+  const [erreurPlan, setErreurPlan] = useState(null);
+  const [apercu, setApercu] = useState({ url: null, erreur: null, detail: null });
+  const [action, setAction] = useState({ enCours: null, erreur: null, succes: null });
 
   useEffect(() => {
-    if (projetId) {
-      chargerPlanFondation();
-      chargerApercuPdf();
-    }
-
-    // Nettoyage de l'URL Blob en mémoire à la destruction du composant
+    let annule = false;
+    let urlCree = null;
+    setSemelles(null);
+    setErreurPlan(null);
+    setApercu({ url: null, erreur: null, detail: null });
+    dqeService.recupererPlanFondation(projetId)
+      .then((d) => { if (!annule) setSemelles(d.semelles || []); })
+      .catch((err) => { if (!annule) setErreurPlan(err.message); });
+    dqeService.recupererPlanFondationPDF(projetId)
+      .then((blob) => {
+        urlCree = window.URL.createObjectURL(blob);
+        if (!annule) setApercu({ url: urlCree, erreur: null, detail: null });
+      })
+      .catch((err) => { if (!annule) setApercu({ url: null, erreur: err.message, detail: err.data?.elements || null }); });
     return () => {
-      if (pdfPreviewUrl) {
-        window.URL.revokeObjectURL(pdfPreviewUrl);
-      }
+      annule = true;
+      if (urlCree) window.URL.revokeObjectURL(urlCree);
     };
   }, [projetId]);
 
-  const chargerPlanFondation = async () => {
-    setLoading(true);
-    setErrorMsg(null);
+  const executer = async (cle, fn, succes) => {
+    setAction({ enCours: cle, erreur: null, succes: null });
     try {
-      const data = await dqeService.recupererPlanFondation(projetId);
-      setPlanData(data);
+      await fn();
+      setAction({ enCours: null, erreur: null, succes });
+      return true;
     } catch (err) {
-      console.warn("Impossible de récupérer le plan de fondation via API :", err.message);
-      setErrorMsg("Impossible de charger le plan depuis l'API backend (Mode local actif).");
-    } finally {
-      setLoading(false);
+      setAction({ enCours: null, erreur: err.message, succes: null });
+      return false;
     }
   };
 
-  // Charge le PDF en Blob pour contourner les erreurs "127.0.0.1 a refusé de se connecter" dans l'iframe
-  const chargerApercuPdf = async () => {
-    try {
-      const blob = await dqeService.recupererPlanFondationPDF(projetId);
-      const url = window.URL.createObjectURL(blob);
-      setPdfPreviewUrl(url);
-    } catch (err) {
-      console.error("Erreur lors du chargement du blob PDF pour l'aperçu :", err);
-    }
-  };
+  const telechargerPDF = () => executer('pdf', async () => {
+    const blob = await dqeService.recupererPlanFondationPDF(projetId);
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Plan_Coffrage_${projetId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  }, null);
 
-  const handleDownloadDXF = async () => {
-    if (!projetId) {
-      alert("Projet non enregistré sur le serveur backend.");
-      return;
-    }
-    setDownloadingDxf(true);
-    try {
-      await dqeService.telechargerPlanFondationDXF(projetId);
-    } catch (err) {
-      alert("Erreur lors du téléchargement du fichier DXF : " + err.message);
-    } finally {
-      setDownloadingDxf(false);
-    }
+  const valider = async () => {
+    if (await executer('valider', () => dqeService.validerPlanFondation(projetId), 'Plan de fondation validé.')) onNext();
   };
-
-  const handleDownloadPDF = async () => {
-    if (!projetId) {
-      alert("Projet non enregistré sur le serveur backend.");
-      return;
-    }
-    setDownloadingPdf(true);
-    try {
-      const blob = await dqeService.recupererPlanFondationPDF(projetId);
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `Plan_Coffrage_${projetId}.pdf`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      alert("Erreur lors du téléchargement du fichier PDF : " + err.message);
-    } finally {
-      setDownloadingPdf(false);
-    }
-  };
-
-  const handleValiderPlan = async () => {
-    if (!projetId) {
-      onNext();
-      return;
-    }
-    setValidating(true);
-    try {
-      await dqeService.validerPlanFondation(projetId);
-      onNext();
-    } catch (err) {
-      console.warn("Erreur validation plan :", err.message);
-      onNext();
-    } finally {
-      setValidating(false);
-    }
-  };
-
-  const listSemelles = (planData && planData.semelles) || (sections && sections.semelles) || [];
 
   return (
-    <div className="glass-panel" style={{ padding: '1.5rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+    <div className="glass-panel etape">
+      <header className="etape-entete">
         <div>
-          <div className="badge badge-info" style={{ marginBottom: '0.4rem' }}>Étape 3bis — Plan de Fondation</div>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 700 }}>
-            Plan de Fondation & Coffrage Général (.PDF / .DXF)
-          </h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-            Positions en coordonnées réelles calculées selon la trame structurelle de l'ouvrage.
-          </p>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(245, 158, 11, 0.1)', color: '#fcd34d', border: '1px solid rgba(245, 158, 11, 0.3)', padding: '0.4rem 0.85rem', borderRadius: '8px', fontSize: '0.8rem', marginTop: '0.6rem', fontWeight: 500 }}>
-            <AlertTriangle size={15} />
-            <span>Positions calculées depuis une trame régulière. Précisez le plan d'exécution pour les bâtiments complexes.</span>
-          </div>
+          <p className="surtitre">Étape 3 bis</p>
+          <h2>Plan de fondation</h2>
+          <p className="texte-discret">Positions réelles des semelles et dimensions issues des résultats validés (sinon calculés).</p>
         </div>
-
-        {/* Boutons d'exportation */}
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={handleDownloadPDF}
-            disabled={downloadingPdf}
-            style={{ gap: '0.5rem' }}
-          >
-            <FileText size={18} />
-            <span>{downloadingPdf ? 'Téléchargement...' : 'Télécharger (.PDF)'}</span>
+        <div className="actions-ligne">
+          <button type="button" className="btn btn-secondary" disabled={!!action.enCours || !apercu.url} onClick={telechargerPDF}>
+            <FileText size={16} aria-hidden="true" /> <span>{action.enCours === 'pdf' ? 'Téléchargement…' : 'PDF'}</span>
           </button>
-
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={handleDownloadDXF}
-            disabled={downloadingDxf}
-            style={{ gap: '0.5rem', border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)' }}
-          >
-            <Download size={18} />
-            <span>{downloadingDxf ? 'Téléchargement...' : 'Télécharger (.DXF)'}</span>
+          <button type="button" className="btn btn-secondary" disabled={!!action.enCours || !apercu.url}
+            onClick={() => executer('dxf', () => dqeService.telechargerPlanFondationDXF(projetId), null)}>
+            <Download size={16} aria-hidden="true" /> <span>{action.enCours === 'dxf' ? 'Téléchargement…' : 'DXF'}</span>
           </button>
         </div>
-      </div>
+      </header>
 
-      {errorMsg && (
-        <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.35)', color: '#fca5a5', padding: '0.75rem 1rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
-          {errorMsg}
+      {action.erreur && <Alerte type="erreur">{action.erreur}</Alerte>}
+      {action.succes && <Alerte type="succes">{action.succes}</Alerte>}
+      {erreurPlan && <Alerte type="erreur" titre="Plan indisponible">{erreurPlan}</Alerte>}
+
+      <section className="apercu-plan" aria-label="Aperçu du plan de coffrage">
+        <h3><Layers size={18} aria-hidden="true" /> Aperçu</h3>
+        {apercu.url ? (
+          <iframe src={`${apercu.url}#toolbar=0&navpanes=0`} title="Aperçu du plan de fondation" className="cadre-pdf" />
+        ) : apercu.erreur ? (
+          <Alerte type="attention" titre="Aperçu non généré" liste={apercu.detail}>{apercu.erreur}</Alerte>
+        ) : (
+          <div className="etat-chargement" role="status">Génération de l'aperçu…</div>
+        )}
+      </section>
+
+      <section>
+        <h3>Semelles</h3>
+        {semelles === null && !erreurPlan && <p className="texte-discret" role="status">Chargement…</p>}
+        {semelles?.length === 0 && <p className="texte-discret">Aucune semelle dans ce projet.</p>}
+        {semelles?.length > 0 && (
+          <div className="table-scroll">
+            <table className="custom-table">
+              <thead><tr><th>Repère</th><th>Dimensions</th><th>X (m)</th><th>Y (m)</th><th>Contrainte sol</th><th>Statut</th></tr></thead>
+              <tbody>
+                {semelles.map((s) => {
+                  const res = s.resultat_valide || s.resultat_calcul || {};
+                  return (
+                    <tr key={s.id}>
+                      <td><strong>{s.identifiant}</strong></td>
+                      <td className="tabular">
+                        {formatSection('semelle', res) || <span className="texte-discret">non calculée</span>}
+                        {res.hauteur_cm && <span className="texte-discret"> · h {res.hauteur_cm} cm</span>}
+                      </td>
+                      <td className="tabular">{s.position_x ?? <span className="texte-erreur">manquante</span>}</td>
+                      <td className="tabular">{s.position_y ?? <span className="texte-erreur">manquante</span>}</td>
+                      <td className="tabular">{s.taux_travail_sol != null ? `${s.taux_travail_sol} kN/m²` : '—'}</td>
+                      <td><span className={s.statut === 'valide' ? 'badge badge-locked' : 'badge badge-unlocked'}>{s.statut === 'valide' ? 'Validée' : 'Non validée'}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <div className="navigation-etapes">
+        <button type="button" className="btn btn-secondary" onClick={onBack}><ArrowLeft size={18} /> <span>Validation</span></button>
+        <div className="actions-ligne">
+          <button type="button" className="btn btn-secondary" onClick={onNext}><span>Passer au DQE</span></button>
+          {peutValider ? (
+            <button type="button" className="btn btn-primary" disabled={!!action.enCours} onClick={valider}>
+              <CheckCircle2 size={18} aria-hidden="true" /> <span>{action.enCours === 'valider' ? 'Validation…' : 'Valider le plan et continuer'}</span> <ArrowRight size={18} />
+            </button>
+          ) : (
+            <span className="texte-discret">Validation du plan réservée aux ingénieurs et administrateurs.</span>
+          )}
         </div>
-      )}
-
-      {/* Aperçu du Plan de Coffrage Intégré via Blob URL */}
-      <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
-        <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
-          <Layers size={18} color="var(--accent-primary)" />
-          <span>Aperçu Graphique du Plan de Coffrage BTP</span>
-        </h4>
-        
-        {projetId ? (
-          <div 
-            style={{ 
-              width: '100%', 
-              height: '600px', 
-              borderRadius: '12px', 
-              overflow: 'hidden', 
-              border: '1px solid var(--core-border)',
-              background: '#ffffff'
-            }}
-          >
-            {pdfPreviewUrl ? (
-              <iframe 
-                src={`${pdfPreviewUrl}#toolbar=0&navpanes=0`} 
-                title="Aperçu Plan de Fondation"
-                width="100%" 
-                height="100%" 
-                style={{ border: 'none' }}
-              />
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748b', fontSize: '0.9rem' }}>
-                Chargement du rendu vectoriel du plan...
-              </div>
-            )}
-          </div>
-        ) : (
-          <div style={{ padding: '2rem', background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--core-border)', borderRadius: '12px', color: 'var(--text-muted)' }}>
-            Enregistrez le projet pour afficher l'aperçu du plan de coffrage.
-          </div>
-        )}
-      </div>
-
-      {/* Tableau des semelles */}
-      <div style={{ marginBottom: '2rem' }}>
-        <h3 style={{ fontSize: '1.05rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Grid size={18} color="var(--accent-primary)" />
-          <span>Coordonnées & Dimensions des Semelles</span>
-        </h3>
-
-        {loading ? (
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Chargement du plan de fondation...</p>
-        ) : (
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Repère</th>
-                <th>Désignation</th>
-                <th>Dimensions (B x H)</th>
-                <th>Coordonnées (X, Y)</th>
-                <th>Statut Implantation</th>
-              </tr>
-            </thead>
-            <tbody>
-              {listSemelles.length > 0 ? (
-                listSemelles.map((sem, idx) => (
-                  <tr key={idx}>
-                    <td style={{ fontWeight: 700, color: '#93c5fd' }}>{sem.identifiant || sem.id || `S${idx + 1}`}</td>
-                    <td>{sem.name || sem.designation || 'Semelle de fondation'}</td>
-                    <td style={{ fontWeight: 600 }}>{sem.section || `${sem.largeur_m || 1.2} x ${sem.hauteur_m || 0.4} m`}</td>
-                    <td>{sem.position_x !== undefined ? `(${sem.position_x} m, ${sem.position_y} m)` : 'Grille (0,0)'}</td>
-                    <td>
-                      <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                        <CheckCircle size={14} />
-                        <span>Implanté sur Grille</span>
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan="5" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
-                    Aucune semelle disponible.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* Navigation */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <button type="button" className="btn btn-secondary" onClick={onBack}>
-          <ArrowLeft size={18} />
-          <span>Retour à la Validation</span>
-        </button>
-
-        <button type="button" className="btn btn-primary" onClick={handleValiderPlan} disabled={validating}>
-          <span>{validating ? 'Validation...' : 'Valider le Plan & Passer au Devis'}</span>
-          <ArrowRight size={18} />
-        </button>
       </div>
     </div>
   );
