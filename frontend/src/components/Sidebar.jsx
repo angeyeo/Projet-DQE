@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   LayoutDashboard, FolderKanban, FileUp, Calculator, Grid3x3, Lock, Layers, FileSpreadsheet,
-  BarChart3, ChevronLeft, ChevronRight, Compass, Settings, Building2, LogOut, Users, Activity,
+  BarChart3, ChevronLeft, ChevronRight, Compass, Settings, Building2, LogOut, Users, Activity, BookOpen,
 } from 'lucide-react';
 
 // Navigation en trois groupes : le CABINET (toujours accessible), le
@@ -38,6 +38,7 @@ export default function Sidebar({
 
   const configuration = [
     { id: 'settingsEntreprise', label: 'Paramètres cabinet', icon: Settings },
+    { id: 'bibliotheque', label: "Bibliothèque d'ouvrages", icon: BookOpen },
     ...(moi?.role === 'admin' ? [{ id: 'equipe', label: 'Équipe', icon: Users }] : []),
     ...(moi?.is_staff ? [{ id: 'staff', label: 'Pilotage produit', icon: Activity }] : []),
   ];

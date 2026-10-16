@@ -16,6 +16,7 @@ varier).
 
 from django.db import transaction
 
+from moteur_calcul.constantes import POIDS_MURS_MAX_KN_M2, POURCENTAGE_BAIES_MAX
 from moteur_calcul.validators import EntreeInvalide
 
 from ..models import ElementStructurel, Projet
@@ -36,6 +37,9 @@ CHAMPS_VARIABLES = {
     "hauteur_etage": float,
     "methode_semelles": str,
     "inclure_poids_propre_ossature": bool,
+    "type_toiture": str,
+    "poids_murs_kn_m2": float,
+    "pourcentage_baies_murs": float,
 }
 MAX_VARIANTES = 5
 
@@ -63,8 +67,15 @@ def _nettoyer(modifications):
             v = typ(valeur) if typ is not bool else bool(valeur)
         except (TypeError, ValueError):
             raise VarianteInvalide(f"Valeur invalide pour « {champ} » : {valeur!r}.") from None
-        if typ in (int, float) and v <= 0:
+        if champ == "pourcentage_baies_murs":
+            if not (0 <= v <= POURCENTAGE_BAIES_MAX):
+                raise VarianteInvalide(f"Part des baies hors bornes : {v:g} % (0 à {POURCENTAGE_BAIES_MAX:g}).")
+        elif typ in (int, float) and v <= 0:
             raise VarianteInvalide(f"« {champ} » doit être strictement positif.")
+        if champ == "poids_murs_kn_m2" and v > POIDS_MURS_MAX_KN_M2:
+            raise VarianteInvalide(f"Poids des murs trop élevé : {v:g} kN/m² (maximum {POIDS_MURS_MAX_KN_M2:g}).")
+        if champ == "type_toiture" and v not in Projet.TypeToiture.values:
+            raise VarianteInvalide(f"Type de toiture inconnu : {v!r}.")
         if champ == "methode_semelles" and v not in Projet.MethodeSemelles.values:
             raise VarianteInvalide(f"Méthode de semelles inconnue : {v!r}.")
         propres[champ] = v

@@ -10,13 +10,18 @@ béton armé ; elles déclenchent une relecture, pas un refus. Elles sont
 regroupées ici pour être relues et ajustées par le métier.
 """
 
+import math
+
 PLAGES = {
     # cle: (min, max, unite, libelle)
     "portee": (2.0, 8.0, "m", "portée de trame"),
+    "portee_poutre": (0.2, 8.0, "m", "portée de poutre"),
     "hauteur_etage": (2.5, 4.5, "m", "hauteur d'étage"),
     "g_plancher": (3.0, 10.0, "kN/m²", "charge permanente des planchers G"),
     "q": (1.0, 10.0, "kN/m²", "charge d'exploitation Q"),
-    "contrainte_sol": (50.0, 600.0, "kN/m²", "contrainte admissible du sol"),
+    # 300 kN/m² (3 bars) = maximum retenu sans étude de sol par l'ingénieur BTP
+    # du projet (10/10/2026) ; au-delà, seule une étude géotechnique le justifie.
+    "contrainte_sol": (50.0, 300.0, "kN/m²", "contrainte admissible du sol"),
     "nb_niveaux": (1, 6, "", "nombre de niveaux (méthode simplifiée)"),
     "cote_poteau": (20, 60, "cm", "côté de poteau"),
     "cote_semelle": (40, 300, "cm", "côté de semelle isolée"),
@@ -63,8 +68,9 @@ def controler_parametres(*, portee_x=None, portee_y=None, hauteur_etage=None, g=
         alertes.append(_alerte("Q_INHABITUELLE", "q", q))
     if _hors("contrainte_sol", contrainte_sol):
         alertes.append(_alerte("SOL_INHABITUEL", "contrainte_sol", contrainte_sol,
-                               detail="Sol très faible : fondations superficielles à justifier par une étude géotechnique."
-                               if contrainte_sol < 50 else None))
+                               detail=("Sol très faible : fondations superficielles à justifier par une étude géotechnique."
+                                       if contrainte_sol < 50 else
+                                       "Au-delà de 3 bars, valeur à justifier par une étude géotechnique.")))
     if _hors("nb_niveaux", nb_niveaux):
         alertes.append(_alerte("NIVEAUX_INHABITUELS", "nb_niveaux", nb_niveaux,
                                detail="Contreventement et effets du second ordre non traités par le moteur."))
@@ -95,9 +101,35 @@ def controler_resultats(elements, portee_min=None):
                                             f"{portee_min:g} m : les semelles se touchent, étudier un radier."),
                                 "message_groupe": "ALERTE — semelles plus larges que l'entraxe des poteaux : "
                                                   "elles se touchent, étudier un radier."})
+        elif type_el == "poutre":
+            portee = res.get("portee_m")
+            if portee and portee > PLAGES["portee_poutre"][1]:
+                alertes.append(_alerte(
+                    "POUTRE_PORTEE_INHABITUELLE", "portee_poutre", round(portee, 2), ident,
+                    detail="Poteau intermédiaire manquant dans le plan, ou mur porteur ? Vérifiez le plan : cette "
+                           "portée charge fortement les deux poteaux et leurs semelles."))
         elif type_el == "dalle":
             if _hors("epaisseur_dalle", res.get("epaisseur_cm")):
                 alertes.append(_alerte("DALLE_INHABITUELLE", "epaisseur_dalle", res["epaisseur_cm"], ident))
+    return alertes
+
+
+def controler_chevauchements(semelles):
+    """semelles : [(identifiant, x, y, cote_cm)] -- semelles carrées centrées
+    sur leur poteau. Deux semelles se chevauchent si leurs carrés se
+    recouvrent : |dx| < (a + b)/2 ET |dy| < (a + b)/2 (positions RÉELLES,
+    valable pour une trame régulière comme pour un plan importé)."""
+    alertes = []
+    for i, (id_a, xa, ya, ca) in enumerate(semelles):
+        for id_b, xb, yb, cb in semelles[i + 1:]:
+            demi = (ca + cb) / 200
+            if abs(xa - xb) < demi and abs(ya - yb) < demi:
+                alertes.append({
+                    "code": "SEMELLES_JOINTIVES", "niveau": "ALERTE", "element": id_a,
+                    "message": (f"ALERTE — {id_a} ({ca:g} cm) et {id_b} ({cb:g} cm) se chevauchent : entraxe "
+                                f"{math.hypot(xa - xb, ya - yb):.2f} m. Étudier une semelle commune ou un radier."),
+                    "message_groupe": "ALERTE — semelles qui se chevauchent : étudier des semelles communes ou un radier.",
+                })
     return alertes
 
 
@@ -109,12 +141,27 @@ def controler_projet(projet):
         g = resoudre_charge_permanente(projet.charge_permanente_kn_m2, projet.couches_permanentes or None)[0]
     except ValueError:
         g = None
+    # Plan importé : portee_x / portee_y ne sont que des moyennes de l'aperçu,
+    # pas des portées de projet -- les portées réelles sont contrôlées poutre
+    # par poutre.
+    importe = bool(projet.fichier_import_origine)
     alertes = controler_parametres(
-        portee_x=projet.portee_x, portee_y=projet.portee_y, hauteur_etage=projet.hauteur_etage,
+        portee_x=None if importe else projet.portee_x, portee_y=None if importe else projet.portee_y,
+        hauteur_etage=projet.hauteur_etage,
         g=g, q=projet.charge_exploitation, contrainte_sol=projet.contrainte_sol_kn_m2,
         nb_niveaux=projet.nb_niveaux,
     )
-    portees = [p for p in (projet.portee_x, projet.portee_y) if p]
-    elements = ((e.identifiant, e.type_element, e.resultat_valide or e.resultat_calcul)
-                for e in projet.elements.all())
-    return alertes + controler_resultats(elements, portee_min=min(portees) if portees else None)
+    elements = list(projet.elements.all())
+    semelles = [(e.identifiant, e.position_x, e.position_y, (e.resultat_valide or e.resultat_calcul or {}).get("cote_cm"))
+                for e in elements if e.type_element == "semelle"]
+    placees = [s for s in semelles if s[1] is not None and s[2] is not None and s[3]]
+    # Positions connues : chevauchement exact. Sinon (semelles saisies sans
+    # position), repli sur l'entraxe minimal de la trame saisie.
+    portees = [p for p in (projet.portee_x, projet.portee_y) if p and not importe]
+    portee_min = None if placees else (min(portees) if portees else None)
+    resultats = controler_resultats(
+        ((e.identifiant, e.type_element,
+          {**(e.resultat_valide or e.resultat_calcul or {}), **({"portee_m": e.portee} if e.type_element == "poutre" else {})})
+         for e in elements),
+        portee_min=portee_min)
+    return alertes + resultats + controler_chevauchements(placees)

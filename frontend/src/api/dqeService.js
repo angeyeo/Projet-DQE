@@ -202,6 +202,17 @@ const versCouche = (c) => {
   return out;
 };
 
+function ouvrageVersApi(o) {
+  return {
+    lot: o.lot,
+    designation: (o.designation || '').trim(),
+    unite: (o.unite || '').trim(),
+    prix_unitaire: nombreOuNull(o.prixUnitaire),
+    source_prix: (o.sourcePrix || '').trim(),
+    date_prix: o.datePrix || null,
+  };
+}
+
 export function formulaireVersProjet(f) {
   return {
     nom: (f.nomProjet || '').trim(),
@@ -219,6 +230,12 @@ export function formulaireVersProjet(f) {
     couches_permanentes: (f.couchesPermanentes || []).map(versCouche),
     methode_semelles: f.methodeSemelles || 'ELU',
     inclure_poids_propre_ossature: !!f.inclurePoidsPropre,
+    type_toiture: f.typeToiture || 'dalle',
+    poids_murs_kn_m2: nombreOuNull(f.poidsMurs),
+    // Vide = aucune baie déduite (prudent), valeur documentée du serveur.
+    pourcentage_baies_murs: nombreOuNull(f.baiesMurs) ?? 0,
+    murs_rdc: f.mursRdc || [],
+    murs_etages: f.mursEtages || [],
   };
 }
 
@@ -248,6 +265,11 @@ export function projetVersFormulaire(p) {
     })),
     methodeSemelles: p.methode_semelles || 'ELU',
     inclurePoidsPropre: !!p.inclure_poids_propre_ossature,
+    typeToiture: p.type_toiture || 'dalle',
+    poidsMurs: versTexte(p.poids_murs_kn_m2),
+    baiesMurs: p.pourcentage_baies_murs ? versTexte(p.pourcentage_baies_murs) : '',
+    mursRdc: p.murs_rdc || [],
+    mursEtages: p.murs_etages || [],
     ifcImporte: !!p.fichier_import_origine,
   };
 }
@@ -303,6 +325,11 @@ export const dqeService = {
     }));
   },
 
+  // DXF à plusieurs plans : choix du plan des fondations (même endpoint,
+  // sans fichier ; le serveur relit le DXF déjà déposé).
+  choisirPlanDXF: async (projetId, plan) =>
+    postJSON(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, { plan }),
+
   analyserPlanImage: async (projetId, file) => {
     const formData = new FormData();
     formData.append('fichier', file);
@@ -327,6 +354,13 @@ export const dqeService = {
   listerPostesComplementaires: async (projetId) =>
     getJSON(`${API_BASE_URL}/postes-complementaires/?projet=${projetId}`),
   ajouterPosteComplementaire: async (projetId, poste) => {
+    // Depuis la bibliothèque : le serveur copie désignation, unité, lot et
+    // prix de l'ouvrage ; un prix saisi ici le remplace pour ce projet.
+    if (poste.mode === 'bibliotheque') {
+      const payload = { projet: projetId, mode: 'simple', ouvrage: poste.ouvrage, quantite: nombreOuNull(poste.quantite) };
+      if (poste.prixUnitaire !== '' && poste.prixUnitaire != null) payload.prix_unitaire = nombreOuNull(poste.prixUnitaire);
+      return postJSON(`${API_BASE_URL}/postes-complementaires/`, payload);
+    }
     const payload = { projet: projetId, lot: poste.lot, mode: poste.mode };
     if (poste.mode === 'simple') {
       payload.designation = poste.designation;
@@ -339,6 +373,27 @@ export const dqeService = {
     }
     return postJSON(`${API_BASE_URL}/postes-complementaires/`, payload);
   },
+  // Bibliothèque d'ouvrages du cabinet
+  listerOuvrages: async (filtres = {}) => {
+    const qs = new URLSearchParams(Object.entries(filtres).filter(([, v]) => v)).toString();
+    return getJSON(`${API_BASE_URL}/ouvrages/${qs ? `?${qs}` : ''}`);
+  },
+  creerOuvrage: async (o) => postJSON(`${API_BASE_URL}/ouvrages/`, ouvrageVersApi(o)),
+  modifierOuvrage: async (id, o) => patchJSON(`${API_BASE_URL}/ouvrages/${id}/`, ouvrageVersApi(o)),
+  supprimerOuvrage: async (id) =>
+    lireReponse(await apiFetch(`${API_BASE_URL}/ouvrages/${id}/`, { method: 'DELETE' })),
+  // Import d'un DQE Excel : aperçu (rien n'est écrit), puis confirmation
+  // des lignes retenues (tout ou rien côté serveur).
+  analyserDQEExcel: async (file) => {
+    const formData = new FormData();
+    formData.append('fichier', file);
+    return lireReponse(await apiFetch(`${API_BASE_URL}/ouvrages/importer/`, { method: 'POST', body: formData }));
+  },
+  confirmerImportDQE: async ({ lignes, sourcePrix, datePrix }) =>
+    postJSON(`${API_BASE_URL}/ouvrages/importer/confirmer/`, {
+      lignes, source_prix: sourcePrix || '', date_prix: datePrix || null,
+    }),
+
   supprimerPosteComplementaire: async (posteId) =>
     lireReponse(await apiFetch(`${API_BASE_URL}/postes-complementaires/${posteId}/`, { method: 'DELETE' })),
 
@@ -374,6 +429,11 @@ export const dqeService = {
       `DQE_projet_${projetId}.${format === 'pdf' ? 'pdf' : 'xlsx'}`,
     ),
 
+  // Fiche d'approvisionnement (calculée par le serveur à partir du DQE)
+  getApprovisionnement: async (projetId) => getJSON(`${API_BASE_URL}/projets/${projetId}/approvisionnement/`),
+  telechargerApprovisionnementExcel: async (projetId) =>
+    telechargerBlob(`${API_BASE_URL}/projets/${projetId}/approvisionnement/?export=excel`, `Approvisionnement_projet_${projetId}.xlsx`),
+
   // Assistant IA
   structurerProjetIA: async (description) =>
     postJSON(`${API_BASE_URL}/assistant/structurer-projet/`, { description }),
@@ -390,7 +450,7 @@ export const dqeService = {
   updateEntreprise: async (champs, logoFile) => {
     const formData = new FormData();
     Object.entries(champs || {}).forEach(([cle, valeur]) => {
-      formData.append(cle, ['prix_unitaires', 'prix_origines'].includes(cle) ? JSON.stringify(valeur || {}) : (valeur ?? ''));
+      formData.append(cle, ['prix_unitaires', 'prix_origines', 'parametres_approvisionnement'].includes(cle) ? JSON.stringify(valeur || {}) : (valeur ?? ''));
     });
     if (logoFile) formData.append('logo', logoFile);
     return lireReponse(await apiFetch(`${API_BASE_URL}/entreprise/`, { method: 'PATCH', body: formData }));

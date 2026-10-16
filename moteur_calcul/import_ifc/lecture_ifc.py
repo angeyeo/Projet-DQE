@@ -168,7 +168,7 @@ def _clusteriser_1d(valeurs: list, tolerance: float = TOLERANCE_ALIGNEMENT_M) ->
     return [mean(g) for g in groupes]
 
 
-def detecter_parametres_trame(poteaux: list, niveaux: list = None) -> dict:
+def detecter_parametres_trame(poteaux: list, niveaux: list = None, avec_niveaux: bool = True) -> dict:
     """
     À partir de la liste de poteaux (extraire_poteaux()) et, si
     disponible, des niveaux (extraire_niveaux()), déduit des paramètres
@@ -207,7 +207,10 @@ def detecter_parametres_trame(poteaux: list, niveaux: list = None) -> dict:
             f"avant de valider."
         )
 
-    nb_niveaux, hauteur_etage = _niveaux_et_hauteur(poteaux, niveaux, avertissements)
+    # Un plan 2D (DXF) ne porte aucun niveau : rien n'est déduit, le
+    # formulaire garde ce que l'utilisateur a saisi.
+    nb_niveaux, hauteur_etage = (_niveaux_et_hauteur(poteaux, niveaux, avertissements)
+                                 if avec_niveaux else (None, None))
 
     return {
         "nb_travees_x": nb_travees_x,

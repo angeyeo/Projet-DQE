@@ -6,6 +6,7 @@ from projets.views import (
     ElementStructurelViewSet,
     CoucheChargeViewSet,
     PosteComplementaireViewSet,
+    OuvrageTypeViewSet,
     AssistantStructurerView,
     AssistantExpliquerView,
     AssistantSuggererPosteView,
@@ -35,6 +36,7 @@ router.register(
     PosteComplementaireViewSet,
     basename="postecomplementaire",
 )
+router.register(r"ouvrages", OuvrageTypeViewSet, basename="ouvrage")
 
 urlpatterns = [
     # Routes exactes attendues par test_ai.py

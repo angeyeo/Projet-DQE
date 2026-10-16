@@ -91,6 +91,38 @@ class Projet(models.Model):
         max_length=3, choices=MethodeSemelles.choices, default=MethodeSemelles.ELU,
         help_text="Choix métier explicite ; ELU = méthode validée par le technicien BTP (07/10/2026)",
     )
+    class TypeToiture(models.TextChoices):
+        DALLE = "dalle", "Toiture-terrasse en dalle (même charge que les planchers)"
+        CHARPENTE = "charpente", "Charpente + couverture (pas de plancher au dernier niveau)"
+
+    # Défaut "dalle" = comportement historique : les projets existants ne
+    # changent pas. Charge de la charpente : moteur_calcul.constantes.
+    type_toiture = models.CharField(
+        max_length=10, choices=TypeToiture.choices, default=TypeToiture.DALLE,
+        help_text="Toiture du dernier niveau ; charpente = G de toiture propre (ingénieur BTP, 10/10/2026)",
+    )
+    # Murs en maçonnerie posés sur les poutres (façades, refends), en kN/m²
+    # de mur, enduits compris. Vide = charge des murs NON comptée, et
+    # signalée par une ALERTE : aucune valeur par défaut n'est inventée.
+    poids_murs_kn_m2 = models.FloatField(
+        null=True, blank=True,
+        help_text="Poids des murs en kN/m² de mur (enduits compris) -- vide = non compté, alerte affichée",
+    )
+    murs_rdc_sur_semelles = models.BooleanField(
+        default=True,
+        help_text="Murs du RDC portés par les longrines jusqu'aux semelles (validé par l'ingénieur BTP, 12/10/2026)",
+    )
+    # Plan des murs : tronçons de poutre (clé moteur_calcul.formules.trame.
+    # cle_segment) qui portent RÉELLEMENT un mur, d'après le plan
+    # architectural. Vide = aucun mur placé (alerte), rien n'est supposé.
+    murs_rdc = models.JSONField(default=list, blank=True,
+                                help_text="Tronçons portant un mur au RDC (sur longrines)")
+    murs_etages = models.JSONField(default=list, blank=True,
+                                   help_text="Tronçons portant un mur aux étages (sur les poutres du plancher)")
+    pourcentage_baies_murs = models.FloatField(
+        default=0.0,
+        help_text="Part des baies déduite de la surface des murs (%) -- 0 = aucune déduction (prudent)",
+    )
     # Défaut True pour les NOUVEAUX projets (le forfait G = 5 kN/m² ne
     # couvre pas poutres et poteaux -- technicien BTP, 07/10/2026). Les
     # projets existants gardent leur valeur enregistrée : les basculer est
@@ -110,6 +142,10 @@ class Projet(models.Model):
     fichier_import_origine = models.FileField(
         upload_to="imports_ifc/", null=True, blank=True
     )
+    # Options de l'import (format, plan des fondations choisi dans un DXF à
+    # plusieurs plans) -- fixées par le serveur à l'aperçu, relues à la
+    # confirmation et à chaque recalcul.
+    parametres_import = models.JSONField(default=dict, blank=True)
 
     date_creation = models.DateTimeField(auto_now_add=True)
     date_modification = models.DateTimeField(auto_now=True)
@@ -333,6 +369,15 @@ class PosteComplementaire(models.Model):
         ELECTRICITE = "lot_06_electricite", "Électricité"
         CHARPENTE = "lot_07_charpente", "Charpente"
         COUVERTURE = "lot_08_couverture", "Couverture"
+        # Lots du second œuvre et des abords (ajoutés le 16/10/2026). Codes
+        # nouveaux uniquement : les postes et DQE existants ne changent pas.
+        MENUISERIE_BOIS = "lot_09_menuiserie_bois", "Menuiserie bois"
+        MENUISERIE_METALLIQUE = "lot_10_menuiserie_metallique", "Menuiserie métallique et aluminium"
+        REVETEMENTS = "lot_11_revetements", "Revêtements de sols et murs"
+        PEINTURE = "lot_12_peinture", "Peinture"
+        FAUX_PLAFOND = "lot_13_faux_plafond", "Faux plafond"
+        VRD = "lot_14_vrd", "VRD (voirie et réseaux divers)"
+        DIVERS = "lot_15_divers", "Divers"
 
     class Mode(models.TextChoices):
         SIMPLE = "simple", "Poste simple"
@@ -365,12 +410,52 @@ class PosteComplementaire(models.Model):
     )
     geometrie = models.JSONField(null=True, blank=True)
     lignes_calculees = models.JSONField(null=True, blank=True)
+    # Poste repris de la bibliothèque d'ouvrages du cabinet : désignation,
+    # unité et prix sont COPIÉS à la création (une modification ultérieure
+    # de la bibliothèque ne change pas les projets existants). Le lien est
+    # conservé pour la traçabilité ; supprimer l'ouvrage ne supprime rien.
+    ouvrage = models.ForeignKey(
+        "OuvrageType", on_delete=models.SET_NULL, null=True, blank=True, related_name="postes",
+    )
+    # Origine du prix unitaire du poste, reprise sur la ligne du DQE.
+    prix_source = models.CharField(max_length=200, blank=True)
+    prix_date = models.DateField(null=True, blank=True)
 
     date_creation = models.DateTimeField(auto_now_add=True)
     date_modification = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.get_lot_display()} - {self.designation or self.type_poste}"
+
+
+class OuvrageType(models.Model):
+    """Bibliothèque d'ouvrages d'un cabinet : désignation, unité et prix
+    unitaire par lot, réutilisables dans tous ses projets. Aucun ouvrage
+    n'est fourni par le logiciel : chaque ligne est saisie (ou importée) par
+    le cabinet, avec l'origine de son prix."""
+
+    entreprise = models.ForeignKey("EntrepriseParametres", on_delete=models.CASCADE, related_name="ouvrages")
+    lot = models.CharField(max_length=50, choices=PosteComplementaire.Lot.choices)
+    designation = models.CharField(max_length=200)
+    unite = models.CharField(max_length=20)
+    # Vide = ouvrage sans prix : le prix sera demandé à l'ajout au projet.
+    prix_unitaire = models.FloatField(null=True, blank=True)
+    source_prix = models.CharField(max_length=200, blank=True,
+                                   help_text="Origine du prix : DQE de l'ingénieur, devis fournisseur...")
+    date_prix = models.DateField(null=True, blank=True)
+    cree_par = models.ForeignKey("auth.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    date_creation = models.DateTimeField(auto_now_add=True)
+    date_modification = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("lot", "designation")
+        constraints = [
+            models.UniqueConstraint(fields=("entreprise", "lot", "designation", "unite"),
+                                    name="ouvrage_unique_par_cabinet"),
+        ]
+
+    def __str__(self):
+        return f"{self.get_lot_display()} - {self.designation} ({self.unite})"
 
 
 class EntrepriseParametres(models.Model):
@@ -429,6 +514,10 @@ class EntrepriseParametres(models.Model):
         max_digits=5, decimal_places=2, null=True, blank=True,
         help_text="% appliqué au déboursé sec (frais généraux + bénéfice) -- seulement si nature = déboursé sec",
     )
+    # Paramètres de la fiche d'approvisionnement (dosages, pertes, camions) :
+    # {clé: valeur}. Clé absente = valeur de référence de l'ingénieur, tracée
+    # comme telle (projets/services/approvisionnement.py).
+    parametres_approvisionnement = models.JSONField(default=dict, blank=True)
     taux_tva_pct = models.DecimalField(
         max_digits=5, decimal_places=2, null=True, blank=True,
         help_text="% de TVA du cabinet -- vide = TTC non calculé (jamais de taux supposé)",

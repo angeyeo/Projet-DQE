@@ -30,6 +30,10 @@ from rest_framework.views import APIView
 
 from moteur_calcul.constantes import (
     CHARGE_EXPLOITATION_TOITURE_KN_M2,
+    G_TOITURE_CHARPENTE_KN_M2,
+    POIDS_MURS_MAX_KN_M2,
+    POIDS_MUR_REFERENCE_KN_M2,
+    POURCENTAGE_BAIES_MAX,
     CHARGES_EXPLOITATION,
     COEFFICIENT_G_ELS,
     COEFFICIENT_G_ELU,
@@ -51,15 +55,19 @@ from .models import (
     CoucheCharge,
     ElementStructurel,
     EvenementProduit,
+    OuvrageType,
     PosteComplementaire,
     Projet,
 )
-from .permissions import EstAdminCabinet, EstMembreEntreprise, PeutValiderElement, entreprise_de
+from .permissions import (
+    EstAdminCabinet, EstMembreEntreprise, PeutModifierBibliotheque, PeutValiderElement, entreprise_de,
+)
 from .serializers import (
     CoucheChargeSerializer,
     ElementStructurelSerializer,
     ElementValidationSerializer,
     EntrepriseParametresSerializer,
+    OuvrageTypeSerializer,
     PosteComplementaireSerializer,
     ProjetResumeSerializer,
     ProjetSerializer,
@@ -80,11 +88,19 @@ from .services.dqe_calculator import (
     DQEIncomplet,
     LIBELLES_PRIX,
     PRIX_UNITAIRES_REFERENCE,
+    TAUX_TVA_REFERENCE_PCT,
     calculer_projet_dqe,
 )
-from .services.dqe_exporters import exporter_dqe_excel, exporter_dqe_pdf
+from .services.approvisionnement import (
+    BORNES_PARAMETRES,
+    LIBELLES_PRIX_MATERIAUX,
+    PARAMETRES_REFERENCE,
+    PRIX_MATERIAUX_REFERENCE,
+    calculer_fiche_approvisionnement,
+)
+from .services.dqe_exporters import exporter_approvisionnement_excel, exporter_dqe_excel, exporter_dqe_pdf
 from .services.evenements import enregistrer_evenement
-from .services.trame_service import TYPES_TRAME, creer_elements_trame
+from .services.trame_service import TYPES_TRAME, creer_elements_trame, murs_orphelins
 from .services.parametres_projet import ParametresIncomplets, parametres_structure
 
 logger = logging.getLogger(__name__)
@@ -453,6 +469,29 @@ class FiltreCabinetMixin:
         return self.queryset.filter(**{self.champ_cabinet: entreprise})
 
 
+# Plans importables. ArchiCAD (.pln) et PDF ne sont pas lus : le message
+# dit comment exporter, au lieu d'un dépôt qui ne fait rien.
+FORMATS_PLAN = (".ifc", ".dxf")
+TAILLE_MAX_PLAN_OCTETS = 50 * 1024 * 1024
+
+
+def _extension_plan(nom):
+    return os.path.splitext(nom or "")[1].lower()
+
+
+def _message_format_refuse(extension):
+    conseils = {
+        ".pln": "Les fichiers ArchiCAD (.pln) ne sont pas lus : exportez le plan en IFC (recommandé) ou en DXF.",
+        ".pdf": "Les PDF ne sont pas lus : exportez le plan en IFC ou en DXF depuis votre logiciel de dessin.",
+        ".dwg": "Les fichiers DWG ne sont pas lus : enregistrez le plan au format DXF.",
+    }
+    return conseils.get(extension, f"Format « {extension or 'inconnu'} » non pris en charge : plans IFC ou DXF uniquement.")
+
+
+def _virgule_m(v):
+    return f"{round(v, 2):g} m".replace(".", ",")
+
+
 class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
     queryset = Projet.objects.all()
     serializer_class = ProjetSerializer
@@ -558,6 +597,31 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
+    def _apercu_dxf(self, projet, plan):
+        """Aperçu d'un DXF : plans détectés, et pour le plan retenu la trame
+        (travées et portées moyennes pour le formulaire) et les murs du
+        dessin rattachés aux poutres (PROPOSÉS, appliqués seulement si
+        l'utilisateur l'accepte). Mémorise le plan retenu."""
+        from moteur_calcul.formules.trame import troncons_adjacents
+        from moteur_calcul.import_dxf.lecture_dxf import analyser_fichier_dxf, associer_murs_aux_poutres
+        from moteur_calcul.import_ifc.lecture_ifc import detecter_parametres_trame
+
+        resultat = analyser_fichier_dxf(projet.fichier_import_origine.path, plan=plan)
+        projet.parametres_import = {"format": "dxf", "plan": resultat["plan_retenu"]}
+        projet.save(update_fields=["parametres_import"])
+        reponse = {k: resultat[k] for k in ("format", "unite", "plans", "plan_retenu", "nb_poteaux_detectes")}
+        avertissements = list(resultat["avertissements"])
+        if resultat["plan_retenu"]:
+            trame = detecter_parametres_trame(resultat["poteaux"], avec_niveaux=False)
+            avertissements += trame["avertissements"]
+            reponse.update({k: trame[k] for k in ("nb_travees_x", "nb_travees_y", "portee_x", "portee_y")})
+            reponse["nb_poteaux_detectes"] = len(resultat["poteaux"])
+            reponse["nb_murs"] = len(resultat["murs"])
+            reponse["murs_proposes"] = associer_murs_aux_poutres(
+                resultat["murs"], troncons_adjacents(resultat["poteaux"]))
+        reponse["avertissements"] = avertissements
+        return reponse
+
     @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser, JSONParser])
     def importer_plan(self, request, pk=None):
         projet = self.get_object()
@@ -566,14 +630,16 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             "1", "true", "vrai", "oui", "yes",
         )
 
-        if fichier is None and not confirmer:
+        plan_choisi = request.data.get("plan")
+        if fichier is None and not confirmer and not plan_choisi:
             return Response(
-                {"erreur": "Fournissez un fichier IFC (champ \"fichier\") pour un aperçu, ou "
+                {"erreur": "Fournissez un plan IFC ou DXF (champ \"fichier\") pour un aperçu, ou "
                            "confirmer=true pour créer les éléments à partir d'un aperçu déjà réalisé."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
+            from moteur_calcul.import_dxf.lecture_dxf import AucunPoteauDXF, FichierDXFInvalide
             from moteur_calcul.import_ifc.lecture_ifc import (
                 AucunPoteauDetecte, FichierIFCInvalide, analyser_fichier_ifc,
             )
@@ -586,31 +652,65 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
+        erreurs_lecture = (FichierIFCInvalide, AucunPoteauDetecte, FichierDXFInvalide, AucunPoteauDXF)
         if fichier is not None:
+            extension = _extension_plan(fichier.name)
+            if extension not in FORMATS_PLAN:
+                return Response({"erreur": _message_format_refuse(extension)}, status=status.HTTP_400_BAD_REQUEST)
+            if fichier.size > TAILLE_MAX_PLAN_OCTETS:
+                return Response(
+                    {"erreur": f"Plan trop volumineux ({fichier.size / 1048576:.1f} Mo) : "
+                               f"{TAILLE_MAX_PLAN_OCTETS // 1048576} Mo au maximum."},
+                    status=status.HTTP_400_BAD_REQUEST)
             projet.fichier_import_origine = fichier
-            projet.save(update_fields=["fichier_import_origine"])
+            projet.parametres_import = {"format": extension.lstrip(".")}
+            projet.save(update_fields=["fichier_import_origine", "parametres_import"])
             try:
+                if extension == ".dxf":
+                    return Response(self._apercu_dxf(projet, plan=None), status=status.HTTP_200_OK)
                 parametres = analyser_fichier_ifc(projet.fichier_import_origine.path)
-            except (FichierIFCInvalide, AucunPoteauDetecte) as exc:
+            except erreurs_lecture as exc:
                 return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
             parametres.pop("poteaux", None)
             return Response(parametres, status=status.HTTP_200_OK)
 
         if not projet.fichier_import_origine:
             return Response(
-                {"erreur": "Aucun plan importé au préalable pour ce projet : envoyez d'abord un fichier IFC."},
+                {"erreur": "Aucun plan importé au préalable pour ce projet : envoyez d'abord un fichier IFC ou DXF."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        format_plan = _extension_plan(projet.fichier_import_origine.name)
+        if plan_choisi and not confirmer:
+            # Choix du plan des fondations dans un DXF à plusieurs plans.
+            if format_plan != ".dxf":
+                return Response({"erreur": "Le choix d'un plan ne concerne que les fichiers DXF."},
+                                status=status.HTTP_400_BAD_REQUEST)
+            try:
+                return Response(self._apercu_dxf(projet, plan=str(plan_choisi)), status=status.HTTP_200_OK)
+            except erreurs_lecture as exc:
+                return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         try:
             prm = parametres_structure(projet, avec_grille=False)
         except ParametresIncomplets as exc:
             return _reponse_parametres_incomplets(exc)
         try:
-            resultat = analyser_fichier_ifc(projet.fichier_import_origine.path)
-        except (FichierIFCInvalide, AucunPoteauDetecte) as exc:
+            if format_plan == ".dxf":
+                from moteur_calcul.import_dxf.lecture_dxf import analyser_fichier_dxf
+
+                plan_dxf = (projet.parametres_import or {}).get("plan")
+                if not plan_dxf:
+                    return Response(
+                        {"erreur": "Ce DXF contient plusieurs plans : choisissez celui des fondations dans "
+                                   "l'aperçu de l'import avant de lancer le calcul."},
+                        status=status.HTTP_400_BAD_REQUEST)
+                resultat = analyser_fichier_dxf(projet.fichier_import_origine.path, plan=plan_dxf)
+                empreinte = resultat["poteaux"]
+            else:
+                resultat = analyser_fichier_ifc(projet.fichier_import_origine.path)
+                empreinte = _empreinte_niveau_bas(resultat["poteaux"])
+        except erreurs_lecture as exc:
             return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        empreinte = _empreinte_niveau_bas(resultat["poteaux"])
         if not empreinte:
             return Response(
                 {"erreur": "Aucun poteau exploitable au niveau bas détecté dans ce plan."},
@@ -655,17 +755,27 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                         type_element=ElementStructurel.TypeElement.SEMELLE,
                         position=ElementStructurel.Position.INFRASTRUCTURE,
                         position_x=d["x"], position_y=d["y"], poteau_associe=poteau,
-                        charge_calculee=d["charge_elu_kn"], charge_service=d["charge_els_kn"],
+                        charge_calculee=d["charge_elu_semelle_kn"], charge_service=d["charge_els_semelle_kn"],
                         taux_travail_sol=prm["contrainte_sol_kn_m2"],
                         resultat_calcul=d["resultat_semelle"],
                     )
                     elements_crees += [poteau, semelle]
 
                 compteur_poutre = 0
-                for pd in detecter_poutres_adjacentes(empreinte, q, hyp=prm["hyp"]):
+                segments_ignores, troncons_non_calcules = [], []
+                poutres_detectees = detecter_poutres_adjacentes(
+                    empreinte, q, hyp=prm["hyp"], nb_niveaux=prm["nb_niveaux"],
+                    hauteur_etage=prm["hauteur_etage"], segments_ignores=segments_ignores)
+                avertissements.extend(segments_ignores)
+                for pd in poutres_detectees:
+                    hypotheses.extend(m for m in pd["hypotheses"] if m.startswith("ALERTE : poutre"))
                     origine = poteau_par_guid.get(pd["poteau_origine_guid"])
                     destination = poteau_par_guid.get(pd["poteau_destination_guid"])
                     if origine is None or destination is None:
+                        troncons_non_calcules.append(pd["resultat_poutre"].get("cle_segment"))
+                        avertissements.append(
+                            f"Poutre de {_virgule_m(pd['portee_m'])} (axe {pd['axe']}) non créée : un de ses deux "
+                            "poteaux n'a pas pu être calculé (voir l'avertissement du poteau).")
                         continue
                     compteur_poutre += 1
                     elements_crees.append(ElementStructurel.objects.create(
@@ -686,6 +796,7 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        hypotheses.extend(murs_orphelins(prm["hyp"], elements_crees, troncons_non_calcules))
         enregistrer_evenement(TypeEv.IMPORT_IFC, utilisateur=request.user, projet=projet,
                               nb_elements=len(elements_crees))
         serializer = ElementStructurelSerializer(elements_crees, many=True)
@@ -825,39 +936,74 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         projet.save(update_fields=["plan_fondation_valide"])
         return Response({"status": "Plan de fondation validé."}, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["get", "post"], url_path="generer-dqe", url_name="generer-dqe")
-    def generer_dqe(self, request, pk=None):
-        projet = self.get_object()
-
+    @staticmethod
+    def _dqe_ou_erreur(projet):
+        """(dqe_data, None) ou (None, Response d'erreur) -- conditions communes
+        au DQE et à la fiche d'approvisionnement."""
         if not projet.elements.exists() and not projet.postes_complementaires.exists():
-            return Response(
+            return None, Response(
                 {"erreur": "Le projet ne contient aucun élément structurel ni poste : rien à chiffrer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         non_valides = projet.elements.exclude(statut=ElementStructurel.Statut.VALIDE)
         if non_valides.exists():
-            return Response(
+            return None, Response(
                 {"erreur": "Tous les éléments doivent être validés par un ingénieur avant le DQE.",
                  "elements_en_attente": list(non_valides.values_list("identifiant", flat=True))},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        export_format = request.query_params.get("export") or (
-            request.data.get("export") if isinstance(request.data, dict) else None
-        )
-        if export_format not in (None, "pdf", "excel"):
-            return Response({"erreur": f"Format d'export invalide : {export_format}"},
-                            status=status.HTTP_400_BAD_REQUEST)
-
         # Barème du cabinet PROPRIÉTAIRE du projet, et lui seul.
         try:
-            dqe_data = calculer_projet_dqe(projet, prix_unitaires=projet.entreprise.get_prix_unitaires())
+            return calculer_projet_dqe(projet, prix_unitaires=projet.entreprise.get_prix_unitaires()), None
         except DQEIncomplet as exc:
-            return Response(
+            return None, Response(
                 {"erreur": "Le DQE ne peut pas être généré : des données indispensables manquent.",
                  "problemes": exc.problemes},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+    @action(detail=True, methods=["get"], url_path="approvisionnement", url_name="approvisionnement")
+    def approvisionnement(self, request, pk=None):
+        """Fiche d'approvisionnement (matériaux à acheter) calculée à partir du DQE."""
+        projet = self.get_object()
+        export_format = request.query_params.get("export")
+        if export_format not in (None, "excel"):
+            return Response({"erreur": f"Format d'export invalide : {export_format}"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        dqe_data, erreur = self._dqe_ou_erreur(projet)
+        if erreur is not None:
+            return erreur
+        cabinet = projet.entreprise
+        fiche = calculer_fiche_approvisionnement(
+            dqe_data, cabinet.parametres_approvisionnement, cabinet.get_prix_unitaires(),
+            taux_tva_pct=cabinet.taux_tva_pct,
+        )
+        if export_format is None:
+            return Response(fiche, status=status.HTTP_200_OK)
+        fiche["projet"]["date_edition"] = timezone.localdate().isoformat()
+        buffer = exporter_approvisionnement_excel(fiche, entreprise=_entreprise_export_dict(cabinet))
+        response = HttpResponse(
+            buffer.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = (
+            f'attachment; filename="Approvisionnement_{projet.nom.replace(" ", "_")}_{projet.id}.xlsx"'
+        )
+        response["Access-Control-Expose-Headers"] = "Content-Disposition"
+        return response
+
+    @action(detail=True, methods=["get", "post"], url_path="generer-dqe", url_name="generer-dqe")
+    def generer_dqe(self, request, pk=None):
+        projet = self.get_object()
+        export_format = request.query_params.get("export") or (
+            request.data.get("export") if isinstance(request.data, dict) else None
+        )
+        dqe_data, erreur = self._dqe_ou_erreur(projet)
+        if erreur is not None:
+            return erreur
+        if export_format not in (None, "pdf", "excel"):
+            return Response({"erreur": f"Format d'export invalide : {export_format}"},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         if export_format is None:
             if not self._dqe_deja_journalise(projet, dqe_data):
@@ -1073,6 +1219,98 @@ class PosteComplementaireViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         self._sauver(serializer)
 
 
+class OuvrageTypeViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
+    """Bibliothèque d'ouvrages du cabinet (filtres : ?lot=, ?q=)."""
+
+    queryset = OuvrageType.objects.all()
+    serializer_class = OuvrageTypeSerializer
+    permission_classes = [PeutModifierBibliotheque]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        lot = self.request.query_params.get("lot")
+        if lot:
+            qs = qs.filter(lot=lot)
+        q = (self.request.query_params.get("q") or "").strip()
+        if q:
+            qs = qs.filter(designation__icontains=q)
+        return qs.annotate(nb_postes_annote=Count("postes")).order_by("lot", "designation")
+
+    def perform_create(self, serializer):
+        serializer.save(entreprise=entreprise_de(self.request.user), cree_par=self.request.user)
+
+    @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser])
+    def importer(self, request):
+        """Aperçu de l'import d'un DQE Excel : rien n'est écrit."""
+        from .services.import_bibliotheque import TAILLE_MAX_OCTETS, FichierDQEInvalide, analyser_dqe_excel
+
+        fichier = request.FILES.get("fichier")
+        if fichier is None:
+            return Response({"erreur": "Joignez un fichier Excel (.xlsx) dans le champ « fichier »."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if not fichier.name.lower().endswith(".xlsx"):
+            return Response({"erreur": "Format non pris en charge : enregistrez le DQE au format Excel .xlsx."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if fichier.size > TAILLE_MAX_OCTETS:
+            return Response({"erreur": f"Fichier trop volumineux : {TAILLE_MAX_OCTETS // 1048576} Mo au maximum."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        existants = self.get_queryset().values_list("lot", "designation", "unite", "prix_unitaire")
+        try:
+            apercu = analyser_dqe_excel(fichier, existants)
+        except FichierDQEInvalide as exc:
+            return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        apercu["fichier"] = fichier.name
+        return Response(apercu)
+
+    @action(detail=False, methods=["post"], url_path="importer/confirmer")
+    def confirmer_import(self, request):
+        """Écrit les lignes retenues dans l'aperçu : tout ou rien. Chaque
+        ligne passe les mêmes validations qu'un ajout à la main."""
+        lignes = request.data.get("lignes")
+        if not isinstance(lignes, list) or not lignes:
+            return Response({"erreur": "Aucune ligne à importer."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(lignes) > 2000:
+            return Response({"erreur": "2 000 lignes au maximum par import."}, status=status.HTTP_400_BAD_REQUEST)
+        commun = {"source_prix": str(request.data.get("source_prix") or "")[:200],
+                  "date_prix": request.data.get("date_prix") or None}
+        entreprise = entreprise_de(request.user)
+        erreurs, crees, maj = {}, 0, 0
+        with transaction.atomic():
+            for i, l in enumerate(lignes):
+                if not isinstance(l, dict):
+                    erreurs[str(i + 1)] = "Ligne invalide."
+                    continue
+                donnees = {k: l.get(k) for k in ("lot", "designation", "unite", "prix_unitaire")} | commun
+                instance = None
+                if l.get("action") == "mettre_a_jour":
+                    instance = self.get_queryset().filter(
+                        lot=donnees["lot"], designation__iexact=(donnees["designation"] or "").strip(),
+                        unite__iexact=(donnees["unite"] or "").strip()).first()
+                    if instance is None:
+                        erreurs[str(i + 1)] = f"« {donnees['designation']} » : ouvrage à mettre à jour introuvable."
+                        continue
+                    # Mise à jour : seul le prix (et son origine) change ; la
+                    # désignation de la bibliothèque garde son écriture.
+                    donnees = {"prix_unitaire": donnees["prix_unitaire"]} | commun
+                s = OuvrageTypeSerializer(instance, data=donnees, partial=instance is not None,
+                                          context={"request": request})
+                if not s.is_valid():
+                    erreurs[str(i + 1)] = f"« {donnees.get('designation') or '?'} » : " + " ".join(
+                        str(m) for msgs in s.errors.values() for m in (msgs if isinstance(msgs, list) else [msgs]))
+                    continue
+                if instance is None:
+                    s.save(entreprise=entreprise, cree_par=request.user)
+                    crees += 1
+                else:
+                    s.save()
+                    maj += 1
+            if erreurs:
+                transaction.set_rollback(True)
+                return Response({"erreur": "Import annulé : aucune ligne n'a été écrite.", "lignes": erreurs},
+                                status=status.HTTP_400_BAD_REQUEST)
+        return Response({"crees": crees, "mis_a_jour": maj}, status=status.HTTP_201_CREATED)
+
+
 class EntrepriseParametresView(APIView):
     """Paramètres du cabinet de l'utilisateur connecté (et de lui seul).
     Lecture : tout membre. Modification : administrateur du cabinet."""
@@ -1138,9 +1376,39 @@ class ReferentielView(APIView):
             },
             "methodes_semelles": [{"cle": c, "libelle": l} for c, l in Projet.MethodeSemelles.choices],
             "charge_exploitation_toiture_kn_m2": CHARGE_EXPLOITATION_TOITURE_KN_M2,
+            "types_toiture": [
+                {"cle": c, "libelle": l,
+                 "g_kn_m2": G_TOITURE_CHARPENTE_KN_M2 if c == "charpente" else None}
+                for c, l in Projet.TypeToiture.choices
+            ],
+            # Aucune valeur par défaut : le poids des murs est une donnée de l'ingénieur.
+            "murs": {
+                "max_kn_m2": POIDS_MURS_MAX_KN_M2, "valeur_par_defaut": None,
+                "baies_max_pct": POURCENTAGE_BAIES_MAX,
+                # Proposée, jamais appliquée d'office : l'utilisateur la choisit.
+                "reference": {
+                    "valeur_kn_m2": round(POIDS_MUR_REFERENCE_KN_M2, 2),
+                    "detail": "agglo de 15 creux 2,5 kN/m² + enduit ciment 2 cm × 2 faces (2 × 0,4 kN/m²)",
+                    "source": "Ingénieur BTP, 12/10/2026",
+                },
+            },
             "defauts_projet": {
                 "methode_semelles": METHODE_SEMELLES_PAR_DEFAUT,
                 "inclure_poids_propre_ossature": POIDS_PROPRE_OSSATURE_PAR_DEFAUT,
+            },
+            # Proposé, jamais appliqué d'office : le cabinet saisit son taux.
+            "taux_tva_reference_pct": TAUX_TVA_REFERENCE_PCT,
+            "approvisionnement": {
+                "parametres": [
+                    {"cle": c, "libelle": l, "unite": u, "valeur_reference": v, "source": src,
+                     "min": BORNES_PARAMETRES[c][0], "max": BORNES_PARAMETRES[c][1]}
+                    for c, (v, l, u, src) in PARAMETRES_REFERENCE.items()
+                ],
+                "cles_prix": [{"cle": c, "libelle": l} for c, l in LIBELLES_PRIX_MATERIAUX.items()],
+                "prix_reference": {
+                    "source": "DQE de l'ingénieur BTP (R+1, 2026) -- sable et gravier vendus au voyage : pas de prix au m³",
+                    "valeurs": PRIX_MATERIAUX_REFERENCE,
+                },
             },
             "prix_reference": {
                 "source": "DQE CIMBAT n°0017-2026 (villa basse 4 pièces) -- à adapter au marché du cabinet",

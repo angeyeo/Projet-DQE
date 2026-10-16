@@ -978,6 +978,40 @@ button.account-card { width: 100%; border: none; background: transparent; color:
 .rotation-180 { transform: rotate(180deg); }
 .valeur-lecture { padding: 0.6rem 0; font-weight: 600; color: var(--ink-700); }
 .aide-champ { display: block; margin-top: 0.3rem; font-size: 0.78rem; color: var(--ink-500); line-height: 1.4; }
+.bloc-murs { margin-top: 1rem; }
+.bouton-reference { margin-top: 0.4rem; }
+
+/* Plan des murs : trame vue de dessus, tronçons cliquables */
+.plan-murs { margin: 1.5rem 0; padding: 1.25rem; border: 1px solid var(--core-border); border-radius: var(--radius-lg); background: var(--core-surface); }
+.plan-murs h3 { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.25rem; }
+.plan-murs-entete { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 1.5rem; }
+.plan-murs-total { margin: 0; text-align: right; white-space: nowrap; }
+.plan-murs-total strong { font-family: var(--font-heading); font-size: 1.5rem; color: var(--ink-900); display: block; }
+.plan-murs-outils { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.75rem 0; }
+.plan-murs-svg { display: block; width: 100%; max-height: 60vh; background:
+  linear-gradient(var(--core-border-subtle) 1px, transparent 1px) 0 0 / 24px 24px,
+  linear-gradient(90deg, var(--core-border-subtle) 1px, transparent 1px) 0 0 / 24px 24px,
+  var(--core-bg); border-radius: var(--radius-md); border: 1px solid var(--core-border); touch-action: manipulation; }
+.troncon { cursor: pointer; outline: none; }
+.troncon.inactif { cursor: not-allowed; opacity: 0.4; }
+.troncon-zone { stroke: transparent; stroke-width: 22px; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.troncon-trait { stroke: var(--ink-300); stroke-width: 2px; vector-effect: non-scaling-stroke; stroke-dasharray: 6 4; transition: stroke 0.15s var(--ease-out), stroke-width 0.15s var(--ease-out); }
+.troncon:hover .troncon-trait { stroke: var(--ink-700); }
+.troncon.avec-mur .troncon-trait { stroke: var(--accent); stroke-width: 8px; stroke-dasharray: none; stroke-linecap: square; }
+.troncon:focus-visible .troncon-zone { stroke: var(--accent-soft-border); }
+.poteau-plan { fill: var(--ink-900); pointer-events: none; }
+.plan-murs-legende { display: flex; gap: 0.35rem 1.25rem; flex-wrap: wrap; list-style: none; padding: 0; margin: 0.6rem 0 0; font-size: 0.8rem; color: var(--ink-500); }
+.plan-murs-legende li { display: flex; align-items: center; gap: 0.4rem; }
+.pastille-mur { width: 18px; height: 6px; background: var(--accent); }
+.pastille-poutre { width: 18px; border-top: 2px dashed var(--ink-300); }
+.pastille-poteau { width: 8px; height: 8px; background: var(--ink-900); }
+.plan-murs-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .plan-murs { padding: 1rem; }
+  .plan-murs-entete { grid-template-columns: 1fr; gap: 0.5rem; }
+  .plan-murs-total { text-align: left; }
+}
+.aide-champ.aide-alerte { color: var(--status-warn); font-weight: 600; }
 
 /* Alertes intégrées */
 .alerte { display: flex; gap: 0.75rem; align-items: flex-start; padding: 0.9rem 1.1rem; border-radius: var(--radius-md); border: 1px solid; margin-bottom: 1rem; font-size: 0.88rem; line-height: 1.45; }
@@ -1293,4 +1327,106 @@ button.account-card { width: 100%; border: none; background: transparent; color:
 @media (max-width: 768px) {
   .recap-finances dl { gap: 0.35rem 0.75rem; }
   .recap-finances dt { font-size: 0.86rem; }
+}
+
+/* ---- Onglets DQE / approvisionnement -------------------------------- */
+.onglets { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--core-border); margin: 0.5rem 0 1.25rem; overflow-x: auto; }
+.onglet { background: none; border: none; border-bottom: 2px solid transparent; padding: 0.6rem 0.9rem; font: inherit; font-weight: 600; color: var(--ink-500); cursor: pointer; white-space: nowrap; }
+.onglet:hover:not(:disabled) { color: var(--ink-900); }
+.onglet.actif { color: var(--accent); border-bottom-color: var(--accent); }
+.onglet:disabled { opacity: 0.5; cursor: not-allowed; }
+.onglet:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- Fiche d'approvisionnement : une carte par matériau ------------- */
+.fiche-appro-entete { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; padding: 1.2rem 1.4rem; border-radius: var(--radius-lg); background: var(--side-bg); color: var(--side-text-active); margin-bottom: 1rem; }
+.fiche-appro-entete .texte-discret, .fiche-appro-entete .surtitre { color: var(--side-text); }
+.cartes-materiaux { list-style: none; padding: 0; margin: 0 0 1rem; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.85rem; }
+.carte-materiau { border: 1px solid var(--core-border); border-radius: var(--radius-md); background: var(--core-surface); padding: 0.9rem 1rem; box-shadow: var(--shadow-subtle); display: flex; flex-direction: column; gap: 0.35rem; }
+.carte-materiau-titre { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+.carte-materiau-titre .quantite-commande { font-family: var(--font-heading); font-size: 1.25rem; font-weight: 700; color: var(--ink-900); }
+.carte-materiau p { margin: 0; }
+.carte-materiau .conditionnement { display: flex; align-items: center; gap: 0.35rem; font-weight: 600; color: var(--accent); }
+.carte-materiau-prix { display: flex; justify-content: space-between; gap: 0.5rem; margin-top: 0.3rem; padding-top: 0.45rem; border-top: 1px dashed var(--core-border); font-size: 0.9rem; }
+.barre-part { height: 4px; border-radius: 2px; background: var(--core-border-subtle); overflow: hidden; }
+.barre-part span { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+.carte-materiau details summary { cursor: pointer; font-size: 0.82rem; color: var(--ink-500); }
+.carte-materiau details code { display: block; font-size: 0.78rem; white-space: normal; margin-top: 0.3rem; }
+.details-appro { margin: 0.75rem 0; }
+.details-appro summary { cursor: pointer; font-weight: 600; }
+.titre-section-icone { display: flex; align-items: center; gap: 0.75rem; margin: 2rem 0 0.5rem; }
+.titre-section-icone h2 { font-size: 1.4rem; font-weight: 700; }
+.pastille-icone { width: 36px; height: 36px; border-radius: 10px; background: var(--accent); display: flex; align-items: center; justify-content: center; color: #fff; }
+@media (max-width: 640px) {
+  .cartes-materiaux { grid-template-columns: 1fr; }
+  .fiche-appro-entete { padding: 1rem; }
+}
+@media (max-width: 640px) {
+  /* Sur mobile, le bouton d'action d'une alerte passe sous le texte. */
+  .alerte { flex-wrap: wrap; }
+  .alerte-corps { flex-basis: calc(100% - 2rem); }
+  .alerte-action { margin-left: 1.9rem; }
+  .onglets { flex-wrap: wrap; overflow-x: visible; }
+  .onglet { padding: 0.55rem 0.6rem; font-size: 0.9rem; }
+}
+.etape-entete h2 { overflow-wrap: break-word; hyphens: auto; min-width: 0; }
+@media (max-width: 640px) { .etape-entete h2 { font-size: 1.35rem; } }
+
+/* Aperçu d'un import DXF : choix du plan des fondations */
+.apercu-dxf { margin: 0 0 1.5rem; padding: 1.25rem; border: 1px solid var(--accent-soft-border); border-radius: var(--radius-lg); background: var(--core-surface); }
+.apercu-dxf h3 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+.choix-plans { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; margin: 0.75rem 0; }
+.carte-plan { display: flex; flex-direction: column; align-items: flex-start; gap: 0.3rem; padding: 0.75rem; border: 1px solid var(--core-border); border-radius: var(--radius-md); background: var(--core-bg); font: inherit; text-align: left; cursor: pointer; transition: border-color 0.15s var(--ease-out), box-shadow 0.15s var(--ease-out); }
+.carte-plan:hover:not(:disabled) { border-color: var(--ink-300); }
+.carte-plan.actif { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--accent-soft); }
+.carte-plan:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.carte-plan-titre { display: flex; align-items: center; gap: 0.3rem; font-weight: 600; color: var(--ink-900); }
+.vignette-plan { width: 100%; height: 110px; background: var(--core-surface); border-radius: var(--radius-sm); }
+.vignette-plan rect { fill: var(--ink-900); }
+.apercu-dxf-retenu { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--core-border-subtle); }
+.apercu-dxf-retenu p { margin: 0 0 0.5rem; }
+
+/* Bibliothèque d'ouvrages du cabinet */
+.compteur-bibliotheque { margin: 0; color: var(--ink-500); white-space: nowrap; }
+.compteur-bibliotheque strong { font-family: var(--font-heading); font-size: 1.6rem; color: var(--ink-900); margin-right: 0.25rem; }
+.formulaire-ouvrage { padding: 1.25rem; border: 1px solid var(--core-border); border-radius: var(--radius-lg); background: var(--core-bg); margin: 1rem 0 1.5rem; }
+.grille-ouvrage { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.75rem 1rem; align-items: end; margin-bottom: 0.75rem; }
+.grille-ouvrage .champ-large { grid-column: span 2; }
+.grille-ouvrage .form-group { margin-bottom: 0; }
+.filtres-bibliotheque { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.filtres-bibliotheque .form-select { max-width: 280px; }
+.champ-recherche { position: relative; flex: 1; min-width: 200px; }
+.champ-recherche svg { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: var(--ink-300); }
+.champ-recherche .form-control { padding-left: 2.25rem; }
+.ligne-edition td { background: var(--accent-soft); }
+.actions-cellule { white-space: nowrap; display: flex; gap: 0.35rem; }
+/* Import d'un DQE Excel dans la bibliothèque */
+.ouvrir-import { margin: -0.5rem 0 1.25rem; }
+.import-dqe { padding: 1.25rem; border: 1px solid var(--core-border); border-radius: var(--radius-lg); background: var(--core-bg); margin: 0 0 1.5rem; }
+.import-dqe-entete { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
+.import-dqe-entete h3 { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 0.25rem; }
+.depot-excel { display: flex; align-items: center; gap: 0.6rem; padding: 0.9rem 1rem; margin: 0.75rem 0; border: 1.5px dashed var(--core-border); border-radius: var(--radius-md, 10px); cursor: pointer; color: var(--ink-700, #334); background: var(--core-surface); }
+.depot-excel:hover, .depot-excel:focus-within { border-color: var(--accent); background: var(--accent-soft); }
+.bilan-import { display: flex; align-items: center; gap: 0.4rem; color: var(--status-ok); font-weight: 600; }
+.sections-a-classer { padding: 0.75rem 1rem; border-radius: var(--radius-md, 10px); background: var(--status-warn-soft); margin-bottom: 0.75rem; }
+.sections-a-classer p { margin: 0 0 0.5rem; }
+.section-a-classer { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.25rem 0; flex-wrap: wrap; }
+.section-a-classer .form-select { max-width: 280px; }
+.table-import td { vertical-align: top; }
+.table-import tr:not(.ligne-retenue) td { color: var(--ink-500); }
+.table-import tr.ligne-retenue td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.origine-import { display: block; font-size: 0.75rem; color: var(--ink-500); margin-top: 0.15rem; }
+.select-compact { padding-top: 0.3rem; padding-bottom: 0.3rem; font-size: 0.85rem; min-width: 150px; }
+.badge-import { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
+.badge-import.ok { background: var(--status-ok-soft); color: var(--status-ok); }
+.badge-import.attention { background: var(--status-warn-soft); color: #7d570b; }
+.badge-import.neutre { background: var(--status-neutral-soft); color: var(--status-neutral); }
+.pied-import { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; margin-top: 1rem; }
+.pied-import .form-group { margin-bottom: 0; flex: 1; min-width: 180px; }
+@media (max-width: 1100px) { .grille-ouvrage { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 640px) {
+  .grille-ouvrage { grid-template-columns: 1fr; }
+  .grille-ouvrage .champ-large { grid-column: auto; }
+  .filtres-bibliotheque .form-select { max-width: none; }
+  .pied-import .btn { width: 100%; justify-content: center; }
+  .section-a-classer .form-select { max-width: none; }
 }

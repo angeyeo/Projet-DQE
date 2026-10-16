@@ -15,6 +15,7 @@ import StepPlanFondation from './components/StepPlanFondation';
 import Step4_DQEExport from './components/Step4_DQEExport';
 import SettingsEntreprise from './components/settingsentreprise';
 import TeamManagementView from './components/TeamManagementView';
+import BibliothequeOuvrages from './components/bibliotheque/BibliothequeOuvrages';
 import MesProjetsView from './components/MesProjetsView';
 import CabinetDashboard from './components/dashboards/CabinetDashboard';
 import ProjetDashboard from './components/dashboards/ProjetDashboard';
@@ -51,6 +52,12 @@ const FORMULAIRE_VIDE = {
   methodeSemelles: 'ELU',
   // Défaut validé par le technicien BTP : le forfait G ne couvre pas poutres et poteaux.
   inclurePoidsPropre: true,
+  typeToiture: 'dalle',
+  // Poids des murs : aucune valeur par défaut (donnée de l'ingénieur).
+  poidsMurs: '',
+  baiesMurs: '',
+  mursRdc: [],
+  mursEtages: [],
   ifcImporte: false,
 };
 
@@ -163,6 +170,15 @@ export default function App() {
         avertissements: [],
       });
     }
+  };
+
+  // Plan des murs (étape 2) : enregistre les tronçons désignés puis relance
+  // le calcul. L'erreur remonte au composant, qui l'affiche.
+  const enregistrerMurs = async (murs) => {
+    const f = { ...formulaire, ...murs };
+    const res = await dqeService.enregistrerEtGenerer(f);
+    await courant.ouvrir(res.projetId);
+    setCalcul({ enCours: false, erreur: null, champs: [], hypotheses: res.hypotheses, avertissements: res.avertissements });
   };
 
   // Crée le projet côté serveur si besoin (import IFC / Vision avant calcul).
@@ -330,6 +346,7 @@ export default function App() {
             hypotheses={calcul.hypotheses.length ? calcul.hypotheses : courant.projet?.hypotheses_calcul?.hypotheses || []}
             alertes={courant.projet?.alertes_plausibilite || []}
             avertissements={calcul.avertissements}
+            onEnregistrerMurs={enregistrerMurs}
             onBack={() => naviguer('step1')}
             onNext={() => naviguer('stepDalles')}
           />
@@ -377,10 +394,13 @@ export default function App() {
             onBack={() => naviguer('step3bis')}
             onCorriger={() => naviguer('step3')}
             onAnalyse={() => naviguer('analyse')}
+            onParametres={() => naviguer('settingsEntreprise')}
           />
         );
       case 'settingsEntreprise':
         return <SettingsEntreprise estAdmin={moi?.role === 'admin'} />;
+      case 'bibliotheque':
+        return <BibliothequeOuvrages peutModifier={moi?.role === 'admin' || moi?.role === 'ingenieur'} />;
       case 'equipe':
         return <TeamManagementView moiProfil={moi ? { role: moi.role } : null} />;
       default:

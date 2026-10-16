@@ -46,6 +46,13 @@ LOT_NOMS = {
     "06": "ÉLECTRICITÉ",
     "07": "CHARPENTE",
     "08": "COUVERTURE",
+    "09": "MENUISERIE BOIS",
+    "10": "MENUISERIE MÉTALLIQUE ET ALUMINIUM",
+    "11": "REVÊTEMENTS DE SOLS ET MURS",
+    "12": "PEINTURE",
+    "13": "FAUX PLAFOND",
+    "14": "VRD",
+    "15": "DIVERS",
 }
 
 
@@ -386,6 +393,90 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
         ws_lot.column_dimensions["G"].width = 14
         ws_lot.column_dimensions["H"].width = 30
         ws_lot.column_dimensions["I"].width = 13
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+def exporter_approvisionnement_excel(fiche: dict, entreprise: dict = None) -> BytesIO:
+    """Fiche d'approvisionnement : matériaux à commander, origine de chaque
+    paramètre, et ce qui n'a pas pu être converti (rien n'est caché)."""
+    projet = fiche.get("projet", {})
+    gras = Font(name="Calibri", size=11, bold=True)
+    titre = Font(name="Calibri", size=16, bold=True, color="2C3E50")
+    entete = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    petit = Font(name="Calibri", size=9, color="555555")
+    fond = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
+    fond_total = PatternFill(start_color="ECF0F1", end_color="ECF0F1", fill_type="solid")
+    bord = Border(*(Side(style="thin", color="BDC3C7"),) * 4)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Approvisionnement"
+    ws["A1"] = _entreprise_champ(entreprise, "nom") or ""
+    ws["A1"].font = gras
+    ws["A2"] = "FICHE D'APPROVISIONNEMENT EN MATÉRIAUX"
+    ws["A2"].font = titre
+    ws["A3"] = f"Projet : {projet.get('nom', '')}"
+    ws["A4"] = f"Édité le {formater_date(projet.get('date_edition', ''))} — béton total {formater_nombre(fiche['volume_beton_m3'])} m³"
+    ws["A4"].font = petit
+
+    colonnes = ["Matériau", "Unité", "Quantité nette", "Pertes (%)", "À commander", "Conditionnement / voyages",
+                "Prix unitaire", "Montant (FCFA)", "Calcul"]
+    r = 6
+    for c, nom in enumerate(colonnes, start=1):
+        cell = ws.cell(row=r, column=c, value=nom)
+        cell.font, cell.fill, cell.border = entete, fond, bord
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for l in fiche["lignes"]:
+        r += 1
+        cond = l["conditionnement"] or (l["voyages"] or {}).get("message") or ""
+        valeurs = [l["materiau"], l["unite"], l["quantite_nette"], l["pertes_pct"], l["quantite_commande"], cond,
+                   l["prix_unitaire"] if l["prix_unitaire"] is not None else "prix non renseigné",
+                   l["montant"] if l["montant"] is not None else "non calculé", l["formule"]]
+        for c, v in enumerate(valeurs, start=1):
+            cell = ws.cell(row=r, column=c, value=v)
+            cell.border = bord
+            if c in (3, 5):
+                cell.number_format = "#,##0.000" if l["unite"] != "u" else "#,##0"
+            if c in (7, 8) and isinstance(v, (int, float)):
+                cell.number_format = "#,##0"
+    r += 2
+    totaux = [("Total HT", fiche["total_ht"]),
+              (f"TVA ({formater_nombre(fiche['taux_tva_pct'])} %)" if fiche["taux_tva_pct"] is not None else "TVA",
+               fiche["montant_tva"]),
+              ("Total TTC", fiche["total_ttc"])]
+    for libelle, valeur in totaux:
+        ws.cell(row=r, column=7, value=libelle).font = gras
+        cell = ws.cell(row=r, column=8, value=valeur if valeur is not None else "non calculé")
+        cell.font, cell.fill = gras, fond_total
+        if isinstance(valeur, int):
+            cell.number_format = "#,##0"
+        r += 1
+    for m in fiche["messages"]:
+        ws.cell(row=r, column=1, value=m).font = petit
+        r += 1
+
+    r += 1
+    ws.cell(row=r, column=1, value="Paramètres utilisés").font = gras
+    for p in fiche["parametres"].values():
+        r += 1
+        ws.cell(row=r, column=1, value=p["libelle"])
+        ws.cell(row=r, column=3, value=p["valeur"] if p["valeur"] is not None else "non renseigné")
+        ws.cell(row=r, column=4, value=p["unite"])
+        ws.cell(row=r, column=6, value=p["source"]).font = petit
+    if fiche["non_convertis"]:
+        r += 2
+        ws.cell(row=r, column=1, value="Lignes du DQE non converties en matériaux").font = gras
+        for n in fiche["non_convertis"]:
+            r += 1
+            ws.cell(row=r, column=1, value=n["designation"])
+            ws.cell(row=r, column=3, value=n["quantite"])
+            ws.cell(row=r, column=4, value=n["unite"])
+            ws.cell(row=r, column=6, value=n["raison"]).font = petit
+    for col, largeur in zip("ABCDEFGHI", (30, 8, 15, 10, 15, 30, 16, 18, 60)):
+        ws.column_dimensions[col].width = largeur
 
     buffer = BytesIO()
     wb.save(buffer)

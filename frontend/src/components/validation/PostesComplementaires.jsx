@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
-import { HardHat, Loader2, Plus, Sparkles, Trash2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { BookOpen, HardHat, Loader2, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { dqeService, formatFCFA } from '../../api/dqeService';
 import useReferentiel from '../../hooks/useReferentiel';
 import Alerte from '../ui/Alerte';
 
 const UNITES = ['forfait', 'ens.', 'u', 'm²', 'm³', 'ml', 'kg', 'jour'];
-const VIDE = { lot: '', mode: 'simple', designation: '', unite: '', quantite: '', prixUnitaire: '', typePoste: '', geometrie: {} };
+const VIDE = { lot: '', mode: 'simple', designation: '', unite: '', quantite: '', prixUnitaire: '', typePoste: '', geometrie: {}, ouvrage: '' };
 
 // Postes hors structure (installation de chantier, maçonnerie, enduits…).
 // Mode simple : quantité et prix SAISIS. Mode ratio : géométrie saisie,
@@ -15,13 +15,28 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
   const [p, setP] = useState(VIDE);
   const [enCours, setEnCours] = useState(false);
   const [ia, setIa] = useState({ description: '', chargement: false, erreur: null, info: null });
+  // Bibliothèque du cabinet (chargée au premier passage en mode bibliothèque).
+  const [ouvrages, setOuvrages] = useState(null);
+  const [erreurOuvrages, setErreurOuvrages] = useState(null);
+  const [enregistrerBiblio, setEnregistrerBiblio] = useState(false);
+  const [infoBiblio, setInfoBiblio] = useState(null);
+  useEffect(() => {
+    if (p.mode !== 'bibliotheque' || ouvrages !== null) return;
+    dqeService.listerOuvrages().then(setOuvrages).catch((err) => setErreurOuvrages(err.message));
+  }, [p.mode, ouvrages]);
+  const ouvragesDuLot = (ouvrages || []).filter((o) => !p.lot || o.lot === p.lot);
+  const ouvrage = (ouvrages || []).find((o) => String(o.id) === String(p.ouvrage));
 
   const libelleLot = (cle) => ref?.lots.find((l) => l.cle === cle)?.libelle || cle;
   const typeRatio = ref?.types_postes_ratio.find((t) => t.cle === p.typePoste);
 
   const manquants = [];
-  if (!p.lot) manquants.push('lot');
-  if (p.mode === 'simple') {
+  if (!p.lot && p.mode !== 'bibliotheque') manquants.push('lot');
+  if (p.mode === 'bibliotheque') {
+    if (!ouvrage) manquants.push('ouvrage');
+    if (!(Number(p.quantite) > 0)) manquants.push('quantité > 0');
+    if (ouvrage && ouvrage.prix_unitaire == null && (p.prixUnitaire === '' || Number(p.prixUnitaire) < 0)) manquants.push('prix unitaire');
+  } else if (p.mode === 'simple') {
     if (!p.designation.trim()) manquants.push('désignation');
     if (!p.unite) manquants.push('unité');
     if (!(Number(p.quantite) > 0)) manquants.push('quantité > 0');
@@ -41,6 +56,19 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
       Object.entries(p.geometrie).filter(([, v]) => v !== '' && v !== undefined).map(([k, v]) => [k, Number(v)]),
     );
     const ok = await onAjouter({ ...p, geometrie });
+    setInfoBiblio(null);
+    if (ok && p.mode === 'simple' && enregistrerBiblio) {
+      // Le poste est créé ; l'enregistrer en bibliothèque est une seconde
+      // action, dont l'échec (doublon, droits) est dit sans annuler le poste.
+      try {
+        await dqeService.creerOuvrage({ lot: p.lot, designation: p.designation, unite: p.unite, prixUnitaire: p.prixUnitaire,
+          sourcePrix: 'saisi dans un projet', datePrix: new Date().toISOString().slice(0, 10) });
+        setInfoBiblio(`« ${p.designation.trim()} » enregistré dans la bibliothèque du cabinet.`);
+        setOuvrages(null);
+      } catch (err) {
+        setInfoBiblio(`Poste ajouté, mais non enregistré dans la bibliothèque : ${err.message}`);
+      }
+    }
     setEnCours(false);
     if (ok) setP({ ...VIDE, lot: p.lot, mode: p.mode });
   };
@@ -84,7 +112,7 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
                   <td>{libelleLot(x.lot)}</td>
                   <td>
                     <strong>{x.mode === 'ratio' ? (ref?.types_postes_ratio.find((t) => t.cle === x.type_poste)?.libelle || x.type_poste) : x.designation}</strong>
-                    <div className="texte-discret">{x.mode === 'ratio' ? 'ratio — quantités calculées au DQE' : 'saisi'}</div>
+                    <div className="texte-discret">{x.mode === 'ratio' ? 'ratio — quantités calculées au DQE' : (x.prix_source || 'saisi')}</div>
                   </td>
                   <td className="tabular">
                     {x.mode === 'ratio'
@@ -122,22 +150,58 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
       <form className="formulaire-poste" onSubmit={ajouter}>
         <div className="grid-2">
           <div className="form-group">
-            <label className="form-label" htmlFor="poste-lot">Lot</label>
-            <select id="poste-lot" className="form-select" value={p.lot} onChange={(e) => setP({ ...p, lot: e.target.value })}>
-              <option value="">— Choisir —</option>
+            <label className="form-label" htmlFor="poste-lot">{p.mode === 'bibliotheque' ? 'Lot (filtre)' : 'Lot'}</label>
+            <select id="poste-lot" className="form-select" value={p.lot} onChange={(e) => setP({ ...p, lot: e.target.value, ouvrage: '' })}>
+              <option value="">{p.mode === 'bibliotheque' ? 'Tous les lots' : '— Choisir —'}</option>
               {ref?.lots.map((l) => <option key={l.cle} value={l.cle}>{l.libelle}</option>)}
             </select>
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="poste-mode">Mode</label>
             <select id="poste-mode" className="form-select" value={p.mode} onChange={(e) => setP({ ...p, mode: e.target.value })}>
+              <option value="bibliotheque">Depuis la bibliothèque du cabinet</option>
               <option value="simple">Saisie directe (quantité × prix)</option>
               <option value="ratio">Calcul par ratio (géométrie)</option>
             </select>
           </div>
         </div>
 
-        {p.mode === 'simple' ? (
+        {p.mode === 'bibliotheque' && (
+          <div className="grid-3">
+            {erreurOuvrages && <Alerte type="erreur">Bibliothèque indisponible : {erreurOuvrages}</Alerte>}
+            <div className="form-group">
+              <label className="form-label" htmlFor="poste-ouvrage">Ouvrage{p.lot ? ` (${libelleLot(p.lot)})` : ''}</label>
+              <select id="poste-ouvrage" className="form-select" value={p.ouvrage} disabled={ouvrages === null}
+                onChange={(e) => setP({ ...p, ouvrage: e.target.value, prixUnitaire: '' })}>
+                <option value="">{ouvrages === null ? 'Chargement…' : ouvragesDuLot.length ? '— Choisir —' : 'Aucun ouvrage dans ce lot'}</option>
+                {ouvragesDuLot.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.designation} ({o.unite}){o.prix_unitaire != null ? ` — ${formatFCFA(o.prix_unitaire)}` : ' — sans prix'}
+                  </option>
+                ))}
+              </select>
+              {ouvrage && (
+                <small className="aide-champ">
+                  <BookOpen size={12} aria-hidden="true" /> {ouvrage.lot_libelle}
+                  {ouvrage.source_prix ? ` · prix : ${ouvrage.source_prix}` : ''}
+                </small>
+              )}
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="poste-qte-b">Quantité{ouvrage ? ` (${ouvrage.unite})` : ''}</label>
+              <input id="poste-qte-b" type="number" min="0" step="0.01" className="form-control" value={p.quantite}
+                onChange={(e) => setP({ ...p, quantite: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="poste-pu-b">Prix unitaire pour ce projet (FCFA)</label>
+              <input id="poste-pu-b" type="number" min="0" step="1" className="form-control" value={p.prixUnitaire}
+                onChange={(e) => setP({ ...p, prixUnitaire: e.target.value })}
+                placeholder={ouvrage?.prix_unitaire != null ? `vide = ${formatFCFA(ouvrage.prix_unitaire)} (bibliothèque)` : 'requis : ouvrage sans prix'} />
+            </div>
+          </div>
+        )}
+
+        {p.mode === 'bibliotheque' ? null : p.mode === 'simple' ? (
           <div className="grid-4">
             <div className="form-group">
               <label className="form-label" htmlFor="poste-des">Désignation</label>
@@ -178,6 +242,13 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
           </div>
         )}
 
+        {p.mode === 'simple' && (
+          <label className="case-a-cocher">
+            <input type="checkbox" checked={enregistrerBiblio} onChange={(e) => setEnregistrerBiblio(e.target.checked)} />
+            <span>Enregistrer aussi ce poste dans la bibliothèque du cabinet, pour le réutiliser dans d'autres projets.</span>
+          </label>
+        )}
+        {infoBiblio && <p className="texte-discret" role="status">{infoBiblio}</p>}
         {manquants.length > 0 && <p className="texte-discret">À renseigner : {manquants.join(', ')}.</p>}
         <button type="submit" className="btn btn-success" disabled={enCours || manquants.length > 0}>
           <Plus size={16} aria-hidden="true" /> <span>{enCours ? 'Ajout…' : 'Ajouter le poste'}</span>

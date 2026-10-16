@@ -59,6 +59,20 @@ class PeutValiderElement(permissions.BasePermission):
         return request.user.profil.role in (ROLE_ADMIN, ROLE_INGENIEUR)
 
 
+class PeutModifierBibliotheque(permissions.BasePermission):
+    """Bibliothèque d'ouvrages : lecture pour tout membre du cabinet,
+    modification par l'administrateur ou un ingénieur (prix du cabinet)."""
+
+    message = "Seul un ingénieur ou l'administrateur du cabinet peut modifier la bibliothèque d'ouvrages."
+
+    def has_permission(self, request, view):
+        if entreprise_de(request.user) is None:
+            return False
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return request.user.profil.role in (ROLE_ADMIN, ROLE_INGENIEUR)
+
+
 class EstStaff(permissions.BasePermission):
     """Équipe interne du produit (is_staff) -- analytics commerciales."""
 

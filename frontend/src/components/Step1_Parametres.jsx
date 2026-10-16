@@ -4,6 +4,7 @@ import { dqeService } from '../api/dqeService';
 import useReferentiel from '../hooks/useReferentiel';
 import Alerte from './ui/Alerte';
 import HypothesesCharges from './parametres/HypothesesCharges';
+import ApercuDXF from './import/ApercuDXF';
 
 const TYPE_LABELS = {
   semelle: 'Semelles',
@@ -24,6 +25,48 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
   const [analysisSuccess, setAnalysisSuccess] = useState(false);
   const [analysisWarnings, setAnalysisWarnings] = useState([]);
 
+  // Import DXF : aperçu (plans détectés, murs proposés) et choix du plan.
+  const [dxf, setDxf] = useState(null);
+  const [choixPlanEnCours, setChoixPlanEnCours] = useState(false);
+  const [reprendreMurs, setReprendreMurs] = useState(true);
+
+  // Pré-remplit le formulaire à partir de l'aperçu d'un plan importé. Les
+  // niveaux ne sont lus que dans un IFC (absents d'un DXF : formulaire inchangé).
+  const appliquerApercu = (params, reprise = reprendreMurs) => {
+    updateProjectData({
+      nbTraveesX: params.nb_travees_x ?? projectData.nbTraveesX,
+      nbTraveesY: params.nb_travees_y ?? projectData.nbTraveesY,
+      porteeX: params.portee_x ?? projectData.porteeX,
+      porteeY: params.portee_y ?? projectData.porteeY,
+      nombreNiveaux: params.nb_niveaux ?? projectData.nombreNiveaux,
+      hauteurEtage: params.hauteur_etage ?? projectData.hauteurEtage,
+      // Plan importé : le calcul passera par l'import (le serveur refuse
+      // clairement un DXF dont le plan des fondations n'est pas choisi).
+      ifcImporte: true,
+      ...(params.format === 'dxf' && params.plan_retenu ? { mursRdc: reprise ? params.murs_proposes || [] : [] } : {}),
+    });
+    setAnalysisWarnings(params.avertissements || []);
+  };
+
+  const choisirPlan = async (plan) => {
+    setChoixPlanEnCours(true);
+    setAnalysisError(null);
+    try {
+      const params = await dqeService.choisirPlanDXF(projectData.id, plan);
+      setDxf(params);
+      appliquerApercu(params);
+    } catch (err) {
+      setAnalysisError(`Erreur de lecture du plan : ${err.message}`);
+    } finally {
+      setChoixPlanEnCours(false);
+    }
+  };
+
+  const basculerRepriseMurs = (oui) => {
+    setReprendreMurs(oui);
+    if (dxf?.plan_retenu) updateProjectData({ mursRdc: oui ? dxf.murs_proposes || [] : [] });
+  };
+
   // État de l'analyse en langage naturel (Assistant IA)
   const [nlpDescription, setNlpDescription] = useState('');
   const [nlpAnalyzing, setNlpAnalyzing] = useState(false);
@@ -41,11 +84,14 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
     const file = files[0];
     const ext = file.name.split('.').pop().toLowerCase();
     const isImage = ['jpg', 'jpeg', 'png'].includes(ext);
-    const isIfc = ext === 'ifc';
-    const isCAD = ['pln', 'pl', 'pdf'].includes(ext);
+    const isPlan = ['ifc', 'dxf'].includes(ext);
 
-    if (!isImage && !isIfc && !isCAD) {
-      setAnalysisError("Format non supporté. Veuillez déposer une image (.png, .jpg), un fichier IFC (.ifc) ou ArchiCAD (.pln).");
+    if (!isImage && !isPlan) {
+      setAnalysisError(
+        ['pln', 'pdf', 'dwg'].includes(ext)
+          ? `Les fichiers .${ext} ne sont pas lus : exportez le plan en IFC (recommandé pour ArchiCAD) ou en DXF.`
+          : 'Format non pris en charge : déposez un plan IFC ou DXF, ou une image (.png, .jpg).',
+      );
       return;
     }
 
@@ -57,24 +103,18 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
       planFileSize: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
     });
 
-    // Import IFC : aperçu Phase A -- détection des paramètres de trame,
-    // pré-remplissage du formulaire (aucun ElementStructurel créé ici).
-    if (isIfc) {
+    // Import IFC ou DXF : aperçu -- détection de la trame, pré-remplissage
+    // du formulaire (aucun ElementStructurel créé ici).
+    if (isPlan) {
       setAnalyzing(true);
       setAnalysisError(null);
+      setDxf(null);
       try {
         const projetId = await assurerProjet();
 
         const params = await dqeService.importerPlanIFC(projetId, file);
-        updateProjectData({
-          nbTraveesX: params.nb_travees_x ?? projectData.nbTraveesX,
-          nbTraveesY: params.nb_travees_y ?? projectData.nbTraveesY,
-          porteeX: params.portee_x ?? projectData.porteeX,
-          porteeY: params.portee_y ?? projectData.porteeY,
-          nombreNiveaux: params.nb_niveaux ?? projectData.nombreNiveaux,
-          hauteurEtage: params.hauteur_etage ?? projectData.hauteurEtage,
-          ifcImporte: true,
-        });
+        if (params.format === 'dxf') setDxf(params);
+        appliquerApercu(params);
         // Le backend (detecter_parametres_trame) calcule des avertissements
         // explicites quand la grille détectée est irrégulière (nb de poteaux
         // incohérent avec une grille parfaite, portées ou hauteurs d'étage trop
@@ -82,10 +122,9 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         // affichés : l'utilisateur voyait "575 poteaux" comme une donnée fiable
         // alors que le fichier n'en contenait réellement que 72, sans aucune
         // indication que la grille était une approximation.
-        setAnalysisWarnings(params.avertissements || []);
         setAnalysisSuccess(true);
       } catch (err) {
-        setAnalysisError(`Erreur d'import IFC : ${err.message || "Impossible d'extraire le plan"}`);
+        setAnalysisError(`Erreur d'import du plan : ${err.message || "Impossible d'extraire le plan"}`);
       } finally {
         setAnalyzing(false);
       }
@@ -194,7 +233,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
           Étape 1 : Chargement des plans & Saisie des paramètres
         </h2>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Importez vos plans d'architecture (Image 2D, `.IFC`, `.PLN`) pour auto-remplir les paramètres ou saisissez-les manuellement.
+          Importez votre plan (IFC ou DXF, ou une image) pour pré-remplir les paramètres, ou saisissez-les manuellement.
         </p>
       </div>
 
@@ -227,7 +266,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
             </div>
             {analysisSuccess && (
               <p style={{ fontSize: '0.85rem', color: 'var(--status-ok)', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
-                <CheckCircle2 size={16} /> Annotations du plan détectées automatiquement — vérification humaine requise.
+                <CheckCircle2 size={16} /> Plan lu automatiquement : vérifiez les valeurs pré-remplies avant le calcul.
               </p>
             )}
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
@@ -237,18 +276,21 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         ) : (
           <div>
             <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-              Déposez votre fichier de plan ici (Image, .IFC, .PLN, .PDF)
+              Déposez votre plan ici (IFC, DXF ou image)
             </h3>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
-              Plans 2D scannés/images, fichiers IFC BIM et exports ArchiCAD supportés.
+              IFC et DXF (AutoCAD, ArchiCAD) : poteaux et murs lus. Fichier ArchiCAD .pln : exportez-le en IFC.
             </p>
             <label className="btn btn-secondary">
               Parcourir les fichiers
-              <input type="file" accept="image/png,image/jpeg,.ifc,.pln,.pl,.pdf" onChange={handleFileUpload} style={{ display: 'none' }} />
+              <input type="file" accept="image/png,image/jpeg,.ifc,.dxf" onChange={handleFileUpload} style={{ display: 'none' }} />
             </label>
           </div>
         )}
       </div>
+
+      <ApercuDXF apercu={dxf} choixEnCours={choixPlanEnCours} onChoisirPlan={choisirPlan}
+        reprendreMurs={reprendreMurs} onReprendreMurs={basculerRepriseMurs} />
 
       {analysisError && (
         <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--status-critical)', fontSize: '0.88rem' }}>

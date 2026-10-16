@@ -13,12 +13,15 @@ const CHAMPS = [
   ['nb_niveaux', 'Nombre de niveaux', 'nombre'],
   ['methode_semelles', 'Méthode des semelles', ['ELU', 'ELS']],
   ['inclure_poids_propre_ossature', 'Poids propre ossature', ['oui', 'non']],
+  ['type_toiture', 'Toiture', ['dalle', 'charpente']],
+  ['poids_murs_kn_m2', 'Poids des murs (kN/m²)', 'nombre'],
+  ['pourcentage_baies_murs', 'Baies dans les murs (%)', 'nombre'],
 ];
 const VIDE = () => ({ nom: '', champ: CHAMPS[0][0], valeur: '' });
 
 const versValeur = (champ, v) => {
   if (champ === 'inclure_poids_propre_ossature') return v === 'oui';
-  if (champ === 'methode_semelles') return v;
+  if (champ === 'methode_semelles' || champ === 'type_toiture') return v;
   return v === '' ? null : Number(v);
 };
 

@@ -14,6 +14,9 @@ export default function HypothesesCharges({ projectData, updateProjectData, refe
   const majCouche = (i, champs) => setCouches(couches.map((c, k) => (k === i ? { ...c, ...champs } : c)));
   const ref = (type) => catalogue.find((c) => c.type === type);
 
+  const murs = referentiel?.murs;
+  const mursVides = projectData.poidsMurs === '' || projectData.poidsMurs == null;
+  const virgule = (v) => String(v).replace('.', ',');
   const origine = couches.length ? 'couches' : projectData.chargePermanente !== '' ? 'saisie' : 'forfait';
 
   return (
@@ -46,11 +49,55 @@ export default function HypothesesCharges({ projectData, updateProjectData, refe
         </div>
       </div>
 
+      <div className="form-group">
+        <label className="form-label" htmlFor="champ-s1-toit">Toiture du dernier niveau</label>
+        <select id="champ-s1-toit" className="form-select" value={projectData.typeToiture || 'dalle'}
+          onChange={(e) => updateProjectData({ typeToiture: e.target.value })}>
+          {(referentiel?.types_toiture || []).map((t) => <option key={t.cle} value={t.cle}>{t.libelle}</option>)}
+        </select>
+        <small className="aide-champ">
+          {projectData.typeToiture === 'charpente'
+            ? `Charpente : G toiture = ${String(referentiel?.types_toiture?.find((t) => t.cle === 'charpente')?.g_kn_m2 ?? '—').replace('.', ',')} kN/m² (valeur de l'ingénieur), pas de plancher au dernier niveau.`
+            : 'Dalle : le dernier niveau est un plancher (même G que les autres).'}
+        </small>
+      </div>
+
       {referentiel?.charge_exploitation_toiture_kn_m2 != null && (
         <p className="texte-discret">
           Toiture : Q = {String(referentiel.charge_exploitation_toiture_kn_m2).replace('.', ',')} kN/m² (valeur validée), quel que soit l'usage des étages.
         </p>
       )}
+
+      <div className="grid-2 bloc-murs">
+        <div className="form-group">
+          <label className="form-label" htmlFor="champ-s1-murs">Poids des murs en maçonnerie (kN/m² de mur)</label>
+          <input id="champ-s1-murs" type="number" min="0" max={murs?.max_kn_m2} step="0.1" className="form-control"
+            placeholder="non renseigné" aria-describedby="aide-s1-murs"
+            value={projectData.poidsMurs ?? ''} onChange={(e) => updateProjectData({ poidsMurs: e.target.value })} />
+          {murs?.reference && String(murs.reference.valeur_kn_m2) !== String(projectData.poidsMurs) && (
+            <button type="button" className="btn btn-secondary btn-compact bouton-reference"
+              onClick={() => updateProjectData({ poidsMurs: String(murs.reference.valeur_kn_m2) })}>
+              Utiliser {virgule(murs.reference.valeur_kn_m2)} kN/m²
+            </button>
+          )}
+          <small id="aide-s1-murs" className={mursVides ? 'aide-champ aide-alerte' : 'aide-champ'}>
+            {mursVides
+              ? "Non renseigné : la charge des murs n'est PAS comptée (efforts et semelles sous-estimés)."
+              : 'Valeur saisie pour le projet.'}
+            {murs?.reference && ` Référence : ${murs.reference.detail} = ${virgule(murs.reference.valeur_kn_m2)} kN/m² (${murs.reference.source}).`}
+          </small>
+        </div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="champ-s1-baies">Part des baies dans les murs (%)</label>
+          <input id="champ-s1-baies" type="number" min="0" max={murs?.baies_max_pct} step="1" className="form-control"
+            placeholder="0 : aucune baie déduite" value={projectData.baiesMurs ?? ''}
+            onChange={(e) => updateProjectData({ baiesMurs: e.target.value })} />
+          <small className="aide-champ">
+            Portes et fenêtres déduites de la surface des murs. Vide : aucune déduction (prudent).
+            Les murs se placent ensuite sur le plan des murs (étape Calculs structurels), là où ils existent.
+          </small>
+        </div>
+      </div>
 
       <label className="case-a-cocher">
         <input type="checkbox" checked={!!projectData.inclurePoidsPropre}

@@ -3,7 +3,7 @@ Création des éléments d'une trame régulière -- partagée par l'endpoint
 generer_trame et par le calcul de variantes (même moteur, même chemin).
 """
 
-from moteur_calcul.formules.trame import generer_poteau_sur_grille, generer_poutre_sur_grille
+from moteur_calcul.formules.trame import cle_segment, generer_poteau_sur_grille, generer_poutre_sur_grille
 
 from ..models import ElementStructurel
 
@@ -50,14 +50,17 @@ def creer_elements_trame(projet, prm):
                 type_element=ElementStructurel.TypeElement.SEMELLE,
                 position=ElementStructurel.Position.INFRASTRUCTURE,
                 position_x=d["x"], position_y=d["y"], poteau_associe=poteau,
-                charge_calculee=d["charge_elu_kn"], charge_service=d["charge_els_kn"],
+                charge_calculee=d["charge_elu_semelle_kn"], charge_service=d["charge_els_semelle_kn"],
                 taux_travail_sol=prm["contrainte_sol_kn_m2"],
                 resultat_calcul=d["resultat_semelle"],
             )
             elements_crees += [poteau, semelle]
 
-    def creer_poutre(ident, portee, largeur_influence, origine, destination, x, y):
-        d = generer_poutre_sur_grille(portee, largeur_influence, q, hyp=prm["hyp"])
+    def creer_poutre(ident, portee, largeur_influence, origine, destination, x, y, rive):
+        cle = cle_segment((origine.position_x, origine.position_y), (destination.position_x, destination.position_y))
+        d = generer_poutre_sur_grille(portee, largeur_influence, q, hyp=prm["hyp"], nb_niveaux=prm["nb_niveaux"],
+                                      hauteur_etage=prm["hauteur_etage"], cle=cle, rive=rive)
+        hypotheses.extend(m for m in d["hypotheses"] if m.startswith("ALERTE : poutre"))
         return ElementStructurel.objects.create(
             projet=projet, identifiant=ident,
             type_element=ElementStructurel.TypeElement.POUTRE,
@@ -73,13 +76,34 @@ def creer_elements_trame(projet, prm):
             largeur = py if 0 < j < nb_y else py / 2
             elements_crees.append(creer_poutre(
                 f"PX_{i}_{j}", px, largeur, poteaux[(i, j)], poteaux[(i + 1, j)],
-                (i + 0.5) * px, j * py,
+                (i + 0.5) * px, j * py, rive=j in (0, nb_y),
             ))
     for i in range(nb_x + 1):
         for j in range(nb_y):
             largeur = px if 0 < i < nb_x else px / 2
             elements_crees.append(creer_poutre(
                 f"PY_{i}_{j}", py, largeur, poteaux[(i, j)], poteaux[(i, j + 1)],
-                i * px, (j + 0.5) * py,
+                i * px, (j + 0.5) * py, rive=i in (0, nb_x),
             ))
+    hypotheses.extend(murs_orphelins(prm["hyp"], elements_crees))
     return elements_crees, hypotheses
+
+
+def murs_orphelins(hyp, elements, troncons_non_calcules=()):
+    """Murs du plan qui ne portent sur aucune poutre créée : signalés,
+    jamais comptés. Deux causes, dites séparément : la poutre existe dans
+    le plan mais un de ses poteaux n'a pas pu être calculé, ou la
+    géométrie a changé depuis le placement des murs."""
+    cles = {(e.resultat_calcul or {}).get("cle_segment") for e in elements
+            if e.type_element == ElementStructurel.TypeElement.POUTRE}
+    sans_poutre = (set(hyp.murs_rdc) | set(hyp.murs_etages)) - cles
+    non_calcules = sans_poutre & set(troncons_non_calcules)
+    orphelins = sans_poutre - non_calcules
+    messages = []
+    if non_calcules:
+        messages.append(f"ALERTE : {len(non_calcules)} mur(s) posé(s) sur des poutres non calculées (un de leurs "
+                        f"poteaux n'a pas pu l'être, voir les avertissements) : leur charge n'est pas comptée.")
+    if orphelins:
+        messages.append(f"ALERTE : {len(orphelins)} tronçon(s) de mur du plan des murs ne correspondent plus à aucune "
+                        f"poutre (trame modifiée) : ils ne sont pas comptés. Replacez les murs sur le plan.")
+    return messages

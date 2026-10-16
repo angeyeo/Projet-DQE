@@ -8,7 +8,7 @@ sol 0.2 en MPa au lieu de kN/m²...). Une donnée manquante produit
 désormais une erreur explicite, jamais une valeur par défaut cachée.
 """
 
-from moteur_calcul.constantes import CHARGE_EXPLOITATION_TOITURE_KN_M2, CHARGES_EXPLOITATION
+from moteur_calcul.constantes import CHARGE_EXPLOITATION_TOITURE_KN_M2, CHARGES_EXPLOITATION, G_TOITURE_CHARPENTE_KN_M2
 from moteur_calcul.hypotheses import HypothesesCalcul, resoudre_charge_permanente
 
 
@@ -78,9 +78,17 @@ def parametres_structure(projet, avec_grille: bool):
         g_plancher_kn_m2=g, origine_g=origine_g, detail_g=detail_g,
         q_kn_m2=charge_q, origine_q=origine_q,
         q_toiture_kn_m2=CHARGE_EXPLOITATION_TOITURE_KN_M2, origine_q_toiture="valide_technicien",
+        type_toiture=projet.type_toiture,
+        g_toiture_kn_m2=G_TOITURE_CHARPENTE_KN_M2 if projet.type_toiture == "charpente" else None,
         inclure_poids_propre_ossature=projet.inclure_poids_propre_ossature,
         methode_semelles=projet.methode_semelles,
         contrainte_sol_kn_m2=projet.contrainte_sol_kn_m2,
+        poids_murs_kn_m2=projet.poids_murs_kn_m2,
+        origine_poids_murs="saisie" if projet.poids_murs_kn_m2 is not None else None,
+        murs_rdc_sur_semelles=projet.murs_rdc_sur_semelles,
+        murs_rdc=frozenset(projet.murs_rdc or ()),
+        murs_etages=frozenset(projet.murs_etages or ()),
+        pourcentage_baies_murs=projet.pourcentage_baies_murs or 0.0,
     )
     hypotheses = hyp.messages()
 

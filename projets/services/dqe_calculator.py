@@ -55,6 +55,11 @@ PRIX_UNITAIRES_REFERENCE = {
 
 CLE_PRIX_AGGLOS_PLEINS_OBSOLETE = "agglos_pleins_m3"
 
+# Taux normal de TVA en Côte d'Ivoire (confirmé par l'ingénieur BTP, 10/10/2026).
+# Seulement PROPOSÉ dans les paramètres du cabinet : un taux non saisi
+# n'est jamais supposé (TTC « non calculé »).
+TAUX_TVA_REFERENCE_PCT = 18
+
 LIBELLES_PRIX = {
     "beton_m3": "Béton (FCFA/m³)",
     "acier_kg": "Acier (FCFA/kg)",
@@ -564,7 +569,8 @@ def calculer_poste_simple_dqe(poste: PosteComplementaire, problemes: list) -> li
         pu=_dec(poste.prix_unitaire),
         source_quantite="saisie",
         formule="quantité saisie",
-    ) | {"poste_id": poste.id, "prix_source": "saisie (poste)", "prix_date": None}]
+    ) | {"poste_id": poste.id, "prix_source": poste.prix_source or "saisie (poste)",
+         "prix_date": poste.prix_date.isoformat() if poste.prix_date else None}]
 
 
 # --- Montant en toutes lettres (Jour 4) ----------------------------------

@@ -3,6 +3,7 @@ import { Building2, UploadCloud, Save, Loader2, Image as ImageIcon, Coins } from
 import { dqeService } from '../api/dqeService';
 import useReferentiel from '../hooks/useReferentiel';
 import Alerte from './ui/Alerte';
+import ParametresApprovisionnement from './parametres/ParametresApprovisionnement';
 
 const CHAMPS_VIDES = {
   nom: '',
@@ -29,6 +30,7 @@ export default function SettingsEntreprise({ estAdmin }) {
   const { data: referentiel, erreur: erreurReferentiel } = useReferentiel();
   const [champs, setChamps] = useState(CHAMPS_VIDES);
   const [prix, setPrix] = useState({});
+  const [paramsAppro, setParamsAppro] = useState({});
   const [meta, setMeta] = useState({});
   const [origines, setOrigines] = useState({});
   const [logoUrl, setLogoUrl] = useState(null);
@@ -62,6 +64,7 @@ export default function SettingsEntreprise({ estAdmin }) {
         setMeta(data.prix_unitaires_meta || {});
         setLogoUrl(data.logo || null);
         setPrix(data.prix_unitaires || {});
+        setParamsAppro(data.parametres_approvisionnement || {});
       })
       .catch((err) => {
         if (!annule) setErreur(`Impossible de charger les paramètres du cabinet : ${err.message}`);
@@ -112,7 +115,9 @@ export default function SettingsEntreprise({ estAdmin }) {
     setSucces(false);
     setEnregistrement(true);
     try {
-      const data = await dqeService.updateEntreprise({ ...champs, prix_unitaires: prix, prix_origines: origines }, logoFile);
+      const params = Object.fromEntries(Object.entries(paramsAppro).filter(([, v]) => v !== '' && v != null).map(([k, v]) => [k, Number(v)]));
+      const data = await dqeService.updateEntreprise({ ...champs, prix_unitaires: prix, prix_origines: origines, parametres_approvisionnement: params }, logoFile);
+      setParamsAppro(data.parametres_approvisionnement || params);
       setMeta(data.prix_unitaires_meta || {});
       setOrigines({});
       setLogoUrl(data.logo || logoUrl);
@@ -140,6 +145,27 @@ export default function SettingsEntreprise({ estAdmin }) {
       const suivant = { ...prev };
       const marques = {};
       Object.entries(reference?.valeurs || {}).forEach(([cle, v]) => {
+        if (suivant[cle] === undefined || suivant[cle] === '' || suivant[cle] === null) {
+          suivant[cle] = v;
+          marques[cle] = 'reference';
+        }
+      });
+      setOrigines((o) => ({ ...o, ...marques }));
+      return suivant;
+    });
+  };
+
+  const handleParamAppro = (cle, valeur) => {
+    setSucces(false);
+    setParamsAppro((p) => ({ ...p, [cle]: valeur }));
+  };
+
+  const preremplirMateriaux = (valeurs) => {
+    setSucces(false);
+    setPrix((prev) => {
+      const suivant = { ...prev };
+      const marques = {};
+      Object.entries(valeurs).forEach(([cle, v]) => {
         if (suivant[cle] === undefined || suivant[cle] === '' || suivant[cle] === null) {
           suivant[cle] = v;
           marques[cle] = 'reference';
@@ -308,8 +334,17 @@ export default function SettingsEntreprise({ estAdmin }) {
           <label className="form-label" htmlFor="ent-tva">TVA (%)</label>
           <input id="ent-tva" type="number" min="0" max="100" step="0.1" className="form-control" disabled={!estAdmin}
             value={champs.taux_tva_pct} onChange={handleChamp('taux_tva_pct')} placeholder="vide : TTC non calculé" />
+          {referentiel?.taux_tva_reference_pct != null && champs.taux_tva_pct === '' && estAdmin && (
+            <button type="button" className="btn btn-secondary btn-compact" style={{ marginTop: '0.4rem' }}
+              onClick={() => handleChamp('taux_tva_pct')({ target: { value: String(referentiel.taux_tva_reference_pct) } })}>
+              Utiliser {referentiel.taux_tva_reference_pct} % (taux normal en Côte d'Ivoire)
+            </button>
+          )}
         </div>
       </div>
+
+      <ParametresApprovisionnement referentiel={referentiel} params={paramsAppro} onParam={handleParamAppro}
+        prix={prix} onPrix={handlePrix} origines={origines} onPreremplir={preremplirMateriaux} estAdmin={estAdmin} />
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
         <button type="button" className="btn btn-primary" onClick={handleEnregistrer} disabled={enregistrement || !estAdmin}>

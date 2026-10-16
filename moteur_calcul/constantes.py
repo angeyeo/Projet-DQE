@@ -143,6 +143,17 @@ COEFFICIENTS_DEGRESSION = [1.00, 0.95, 0.90, 0.85]  # n = 1, 2, 3, 4
 # soit l'usage des étages.
 CHARGE_EXPLOITATION_TOITURE_KN_M2 = 1.5
 
+# Type de toiture du dernier niveau.
+#   "dalle"     : toiture-terrasse en béton armé -> G = G des planchers ;
+#   "charpente" : charpente + couverture -> pas de plancher au dernier
+#                 niveau, G de toiture propre.
+# G charpente + couverture = 2,5 kN/m² : VALEUR DONNÉE PAR L'INGÉNIEUR BTP
+# (10/10/2026). Elle est plus forte que les valeurs usuelles d'une
+# charpente légère en tôle (environ 0,3 à 0,6 kN/m²) : elle va dans le sens
+# de la sécurité et reste à reconfirmer si la couverture est légère.
+TYPES_TOITURE = ("dalle", "charpente")
+G_TOITURE_CHARPENTE_KN_M2 = 2.5
+
 # La dégression suppose des occupations indépendantes d'un niveau à
 # l'autre. Elle ne s'applique PAS aux usages où tous les niveaux
 # peuvent être chargés à fond simultanément (commerce, industrie), ni
@@ -214,6 +225,33 @@ DENSITE_ACIER_KG_M3 = 7850.0
 # à remplacer par un vrai calcul si G et Q sont un jour fournis
 # séparément à dimensionner_poutre().
 GAMMA_ELU_ELS_SUPPOSE = 1.45
+
+# Poids des murs en maçonnerie (kN/m² de mur) : AUCUNE valeur par défaut,
+# il doit être saisi (donnée de l'ingénieur). Borne de saisie seulement :
+# au-delà, il s'agit d'une erreur d'unité (kg/m² saisis en kN/m²...).
+POIDS_MURS_MAX_KN_M2 = 10.0
+# Valeur de RÉFÉRENCE (proposée, jamais appliquée d'office) donnée par
+# l'ingénieur BTP le 12/10/2026 : agglo de 15 creux 2,5 kN/m² + enduit
+# ciment 2 cm × 2 faces (0,4 kN/m² par face).
+POIDS_MUR_AGGLO_15_CREUX_KN_M2 = 2.5
+POIDS_ENDUIT_2CM_PAR_FACE_KN_M2 = 0.4
+POIDS_MUR_REFERENCE_KN_M2 = POIDS_MUR_AGGLO_15_CREUX_KN_M2 + 2 * POIDS_ENDUIT_2CM_PAR_FACE_KN_M2  # 3,3
+POURCENTAGE_BAIES_MAX = 90.0
+
+# Poutres courtes (ingénieur BTP, 12/10/2026) : sous 1 m de portée, la
+# section est fixée par les dispositions constructives et l'effort
+# tranchant. Section recommandée pour une poutre qui reprend un plancher
+# ou un mur porteur : 20 × 25 cm. Appliquée comme hauteur MINIMALE à toutes
+# les poutres (h = max(L/8 ; 25 cm)) pour éviter un saut absurde à 1 m
+# (une poutre de 1,2 m aurait sinon 15 cm, moins qu'une poutre de 0,9 m).
+HAUTEUR_MIN_POUTRE_M = 0.25
+# Deux poteaux de 20 cm (côté minimal) se touchent à 0,20 m d'entraxe :
+# en dessous, ce n'est plus une poutre mais des poteaux superposés.
+PORTEE_MIN_POUTRE_M = 0.20
+# Cisaillement BAEL 91 (A.5.1,211), fissuration peu préjudiciable,
+# armatures d'âme droites : tau_lim = min(0,2 fc28 / gamma_b ; 5 MPa).
+CISAILLEMENT_COEF_FC28 = 0.20
+CISAILLEMENT_PLAFOND_MPA = 5.0
 
 # Bornes réalistes pour la validation des entrées
 PORTEE_MIN_M = 1.0

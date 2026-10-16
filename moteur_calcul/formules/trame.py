@@ -21,11 +21,11 @@ ajoutés côté Projet/ElementStructurel (nb_travees_x, position_x...).
 
 from ..hypotheses import CONTENU_G_FORFAITAIRE, G_PLANCHER_FORFAITAIRE_KN_M2, HypothesesCalcul, hypotheses_par_defaut
 from ..import_ifc.lecture_ifc import TOLERANCE_ALIGNEMENT_M
-from ..constantes import RESISTANCE_BETON_DEFAUT
+from ..constantes import PORTEE_MAX_M, PORTEE_MIN_POUTRE_M, RESISTANCE_BETON_DEFAUT
 from ..unites import cm_vers_m
 from .descente_charges import calculer_surface_influence, cumuler_charges_exploitation_degressives
 from .dimensionnement_poteaux import dimensionner_poteau
-from .dimensionnement_poutres import dimensionner_poutre, predimensionner_hauteur_poutre
+from .dimensionnement_poutres import dimensionner_poutre, hauteur_poutre_retenue
 from .dimensionnement_semelles import dimensionner_semelle
 
 # Conservé pour compatibilité : la valeur vit désormais dans hypotheses.py
@@ -52,18 +52,69 @@ def _etape(etape, formule, calcul, resultat, unite):
     return {"etape": etape, "formule": formule, "calcul": calcul, "resultat": resultat, "unite": unite}
 
 
+def cle_segment(a, b):
+    """Identifiant d'un tronçon de poutre entre deux poteaux, indépendant
+    du sens et de la numérotation : coordonnées des extrémités au cm,
+    triées. Sert à placer les murs (plan des murs du projet) et survit à
+    une régénération de la trame tant que la géométrie ne change pas."""
+    def pt(p):
+        return (round(float(p[0]), 2) + 0.0, round(float(p[1]), 2) + 0.0)
+    p1, p2 = sorted((pt(a), pt(b)))
+    return f"{p1[0]:.2f};{p1[1]:.2f}|{p2[0]:.2f};{p2[1]:.2f}"
+
+
 def poids_propre_poutre_kn_m(portee, hyp: HypothesesCalcul):
     """Poids propre linéique d'une poutre de la trame : b × h(portée) × γ_béton (kN/m),
-    avec la MÊME hauteur que celle retenue par dimensionner_poutre()."""
+    avec la MÊME hauteur que celle retenue par dimensionner_poutre() : h = max(L/8 ; 25 cm)."""
     if not portee:
         return 0.0
-    return LARGEUR_POUTRE_M * predimensionner_hauteur_poutre(portee, isostatique=True) * hyp.poids_volumique_beton_kn_m3
+    return LARGEUR_POUTRE_M * hauteur_poutre_retenue(portee) * hyp.poids_volumique_beton_kn_m3
 
 
-def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, hauteur_etage):
+def charge_mur_kn_m(portee, hyp: HypothesesCalcul, hauteur_etage):
+    """Charge linéique d'un mur posé sur une poutre (kN/m) :
+        h_mur = h_étage − h_poutre(l)                   [m]
+        q_mur = p_mur × h_mur × (1 − baies / 100)       [kN/m² × m = kN/m]
+    Renvoie (q_mur, h_mur)."""
+    if hauteur_etage is None or hauteur_etage <= 0:
+        raise ValueError("Hauteur d'étage requise pour calculer la charge des murs.")
+    h_poutre = hauteur_poutre_retenue(portee)
+    h_mur = hauteur_etage - h_poutre
+    if h_mur <= 0:
+        raise ValueError(
+            f"Hauteur d'étage ({_virgule(hauteur_etage)} m) inférieure à la hauteur de la poutre "
+            f"({_virgule(round(h_poutre, 3))} m) pour une portée de {_virgule(portee)} m : mur impossible."
+        )
+    return hyp.poids_murs_kn_m2 * h_mur * (1 - hyp.pourcentage_baies_murs / 100), h_mur
+
+
+def _somme_murs(hyp, portees, segments, niveau, hauteur_etage):
+    """Σ (l/2) × q_mur sur les tronçons aboutissant au poteau qui portent un
+    mur de ce niveau. Renvoie (total kN, détail [(l, h_mur)])."""
+    detail = []
+    for cote, l in portees.items():
+        if l and hyp.mur_sur((segments or {}).get(cote), niveau):
+            q, h = charge_mur_kn_m(l, hyp, hauteur_etage)
+            detail.append((l, h, q))
+    return sum((l / 2) * q for l, _, q in detail), detail
+
+
+def _etape_murs(titre, hyp, total, detail):
+    facteur = f"×{_virgule(round(1 - hyp.pourcentage_baies_murs / 100, 4))}" if hyp.pourcentage_baies_murs else ""
+    return _etape(
+        titre, "Σ (l/2) × p_mur × (h_étage − h_poutre)" + (" × (1 − baies)" if facteur else ""),
+        " + ".join(f"({_virgule(l)}/2)×{_virgule(hyp.poids_murs_kn_m2)}×{_virgule(round(h, 3))}{facteur}"
+                   for l, h, _ in detail),
+        round(total, 2), "kN",
+    )
+
+
+def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, hauteur_etage, segments=None):
     """Descente de charges d'UN poteau (tous niveaux), puis poteau et semelle.
 
     portees : dict gauche/droite/avant/arriere (m), 0 en rive.
+    segments : dict gauche/droite/avant/arriere -> cle_segment() du tronçon
+    (pour savoir s'il porte un mur) ; None = aucun mur rattachable.
     Renvoie un dict avec charges ELU/ELS, résultats et TRACE complète.
     """
     nb_niveaux = nb_niveaux or 1
@@ -80,6 +131,11 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
     q_toiture = surface * hyp.q_toiture_effective
     trace.append(_etape("G planchers / niveau", "G = S × g", f"{round(surface, 3)} × {hyp.g_plancher_kn_m2}",
                         round(g_plancher, 2), "kN"))
+    charpente = hyp.type_toiture == "charpente"
+    g_toiture = surface * hyp.g_toiture_effective
+    if charpente:
+        trace.append(_etape("G toiture (charpente + couverture)", "G0 = S × g_toiture",
+                            f"{round(surface, 3)} × {hyp.g_toiture_kn_m2}", round(g_toiture, 2), "kN"))
     if nb_niveaux > 1:
         trace.append(_etape("Q / étage", "Q = S × q", f"{round(surface, 3)} × {hyp.q_kn_m2}", round(q_niveau, 2), "kN"))
     trace.append(_etape("Q toiture", "Q0 = S × q_toiture", f"{round(surface, 3)} × {hyp.q_toiture_effective}",
@@ -90,11 +146,22 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
         # Moitié de chaque poutre aboutissant au poteau.
         pp_poutres = sum((l / 2) * poids_propre_poutre_kn_m(l, hyp) for l in (pg, pd, pa, pr) if l)
         trace.append(_etape(
-            "Poids propre poutres / niveau", "Σ (l/2) × b × h(l) × γ, h = l/8",
-            " + ".join(f"({l}/2)×{LARGEUR_POUTRE_M}×{round(l / 8, 3)}×{hyp.poids_volumique_beton_kn_m3}"
+            "Poids propre poutres / niveau", "Σ (l/2) × b × h(l) × γ, h = max(l/8 ; 25 cm)",
+            " + ".join(f"({l}/2)×{LARGEUR_POUTRE_M}×{round(hauteur_poutre_retenue(l), 3)}×{hyp.poids_volumique_beton_kn_m3}"
                        for l in (pg, pd, pa, pr) if l) or "0",
             round(pp_poutres, 2), "kN",
         ))
+
+    # Moitié de chaque mur porté par un tronçon aboutissant au poteau, et
+    # seulement là où un mur est placé. Les murs d'un étage reposent sur
+    # les poutres du plancher situé dessous : le poteau du RDC porte les
+    # murs des n − 1 étages ; ceux du RDC reposent sur les longrines.
+    nb_murs_poteau = nb_niveaux - 1
+    g_murs, detail_etages = (_somme_murs(hyp, portees, segments, "etages", hauteur_etage)
+                             if nb_murs_poteau else (0.0, []))
+    g_murs_rdc_total, detail_rdc = _somme_murs(hyp, portees, segments, "rdc", hauteur_etage)
+    if detail_etages:
+        trace.append(_etape_murs("Murs d'étage / niveau", hyp, g_murs, detail_etages))
 
     q_deg = cumuler_charges_exploitation_degressives(
         charge_toiture_kn=q_toiture, charges_etages_kn=[q_niveau] * (nb_niveaux - 1), usage_batiment=usage_batiment,
@@ -106,7 +173,10 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
     for _ in range(MAX_ITERATIONS_POIDS_PROPRE):
         pp_poteau = (cm_vers_m(cote_cm) ** 2 * hauteur_etage * hyp.poids_volumique_beton_kn_m3
                      if hyp.inclure_poids_propre_ossature else 0.0)
-        g_cumul = nb_niveaux * (g_plancher + pp_poutres + pp_poteau)
+        # Dalle : le dernier niveau est un plancher comme les autres.
+        # Charpente : le dernier niveau ne porte que la toiture (G0).
+        g_cumul = ((nb_niveaux - 1) * g_plancher + g_toiture + nb_niveaux * (pp_poutres + pp_poteau)
+                   + nb_murs_poteau * g_murs)
         nu = hyp.elu(g_cumul, q_cumul)
         resultat_poteau = dimensionner_poteau(charge_calculee=nu, hauteur_poteau=hauteur_etage)
         if not hyp.inclure_poids_propre_ossature or resultat_poteau["cote_cm"] == cote_cm:
@@ -118,9 +188,16 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
         trace.append(_etape("Poids propre poteau / niveau", "a² × h_étage × γ",
                             f"{cm_vers_m(cote_cm)}² × {hauteur_etage} × {hyp.poids_volumique_beton_kn_m3}",
                             round(pp_poteau, 2), "kN"))
-    trace.append(_etape("G cumulée", "G = n × (G planchers + poids propres)",
-                        f"{nb_niveaux} × ({round(g_plancher, 2)} + {round(pp_poutres, 2)} + {round(pp_poteau, 2)})",
-                        round(g_cumul, 2), "kN"))
+    formule_murs = " + (n − 1) × G murs" if g_murs else ""
+    calcul_murs = f" + {nb_murs_poteau} × {round(g_murs, 2)}" if g_murs else ""
+    if charpente:
+        trace.append(_etape("G cumulée", "G = (n − 1) × G plancher + G toiture + n × poids propres" + formule_murs,
+                            f"{nb_niveaux - 1} × {round(g_plancher, 2)} + {round(g_toiture, 2)} + {nb_niveaux} × "
+                            f"({round(pp_poutres, 2)} + {round(pp_poteau, 2)})" + calcul_murs, round(g_cumul, 2), "kN"))
+    else:
+        trace.append(_etape("G cumulée", "G = n × (G planchers + poids propres)" + formule_murs,
+                            f"{nb_niveaux} × ({round(g_plancher, 2)} + {round(pp_poutres, 2)} + {round(pp_poteau, 2)})"
+                            + calcul_murs, round(g_cumul, 2), "kN"))
     if q_deg["degression_appliquee"]:
         calcul_q = f"{_virgule(round(q_toiture, 2))} + " + " + ".join(
             f"{_virgule(k)} × {_virgule(round(q_niveau, 2))}" for k in q_deg["coefficients_par_etage"])
@@ -144,12 +221,25 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
                "Br = (a − 2)² cm²", resultat_poteau["section_acier_retenue_cm2"], "cm²"),
     ]
 
+    # Semelle : effort du poteau + murs du RDC apportés par les longrines.
+    g_murs_rdc = g_murs_rdc_total if hyp.murs_rdc_sur_semelles else 0.0
+    nu_semelle = nu + hyp.gamma_g_elu * g_murs_rdc
+    ns_semelle = ns + hyp.gamma_g_els * g_murs_rdc
+    etapes_murs_rdc = []
+    if g_murs_rdc:
+        etapes_murs_rdc = [
+            _etape_murs("Murs du RDC (longrines → semelle)", hyp, g_murs_rdc, detail_rdc),
+            _etape("Effort ELU semelle", f"Nu,s = Nu + {hyp.gamma_g_elu} G murs RDC",
+                   f"{round(nu, 2)} + {hyp.gamma_g_elu} × {round(g_murs_rdc, 2)}", round(nu_semelle, 2), "kN"),
+            _etape("Effort ELS semelle", "Ns,s = Ns + G murs RDC",
+                   f"{round(ns, 2)} + {round(g_murs_rdc, 2)}", round(ns_semelle, 2), "kN"),
+        ]
     resultat_semelle = dimensionner_semelle(
-        charge_poteau=nu, taux_travail_sol=hyp.contrainte_sol_kn_m2, cote_poteau_cm=resultat_poteau["cote_cm"],
-        charge_service=ns, methode=hyp.methode_semelles, inclure_poids_propre=hyp.inclure_poids_propre_ossature,
+        charge_poteau=nu_semelle, taux_travail_sol=hyp.contrainte_sol_kn_m2, cote_poteau_cm=resultat_poteau["cote_cm"],
+        charge_service=ns_semelle, methode=hyp.methode_semelles, inclure_poids_propre=hyp.inclure_poids_propre_ossature,
     )
     n_dim = resultat_semelle["charge_dimensionnement_kn"]
-    trace_semelle = trace + [
+    trace_semelle = trace + etapes_murs_rdc + [
         _etape("Côté théorique", f"A = √(N{'u' if hyp.methode_semelles == 'ELU' else 's'} / σsol)",
                f"√({n_dim} / {resultat_semelle['contrainte_sol_kn_m2']})", resultat_semelle["cote_theorique_cm"], "cm"),
         _etape("Côté retenu", "arrondi 5 cm" + (" + poids propre" if hyp.inclure_poids_propre_ossature else ""),
@@ -158,16 +248,20 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
         _etape("Hauteur", "d ≥ (A − b)/4 ; h = arrondi5(d + 5), h ≥ 20",
                f"({resultat_semelle['cote_cm']} − {resultat_poteau['cote_cm']})/4", resultat_semelle["hauteur_cm"], "cm"),
         _etape("Acier / direction", "As = Nu (A − b) / (8 d fsu)",
-               f"Nu = {round(nu, 2)} kN, d = {resultat_semelle['hauteur_utile_cm']} cm",
+               f"Nu = {round(nu_semelle, 2)} kN, d = {resultat_semelle['hauteur_utile_cm']} cm",
                resultat_semelle["section_acier_par_direction_cm2"], "cm²"),
     ]
     resultat_poteau = {**resultat_poteau, "trace": trace_poteau, "hypotheses_calcul": hyp.vers_dict(),
                        "charge_elu_kn": round(nu, 2), "charge_els_kn": round(ns, 2)}
     resultat_semelle = {**resultat_semelle, "trace": trace_semelle, "hypotheses_calcul": hyp.vers_dict(),
-                        "charge_elu_kn": round(nu, 2), "charge_els_kn": round(ns, 2)}
+                        "charge_elu_kn": round(nu_semelle, 2), "charge_els_kn": round(ns_semelle, 2)}
     return {
         "charge_elu_kn": nu,
         "charge_els_kn": ns,
+        "charge_elu_semelle_kn": nu_semelle,
+        "charge_els_semelle_kn": ns_semelle,
+        "charge_murs_niveau_kn": round(g_murs, 2),
+        "charge_murs_rdc_kn": round(g_murs_rdc, 2),
         "resultat_poteau": resultat_poteau,
         "resultat_semelle": resultat_semelle,
         "nb_niveaux": nb_niveaux,
@@ -242,8 +336,15 @@ def generer_poteau_sur_grille(
         "arriere": portee_y if j < nb_travees_y else 0,
     }
     hyp = _hyp(hyp, charge_exploitation, taux_travail_sol)
-    noeud = _calcul_noeud(portees, hyp, nb_niveaux, usage_batiment, hauteur_etage)
-    return {"x": i * portee_x, "y": j * portee_y, **noeud}
+    x, y = i * portee_x, j * portee_y
+    segments = {
+        "gauche": cle_segment((x, y), ((i - 1) * portee_x, y)),
+        "droite": cle_segment((x, y), ((i + 1) * portee_x, y)),
+        "avant": cle_segment((x, y), (x, (j - 1) * portee_y)),
+        "arriere": cle_segment((x, y), (x, (j + 1) * portee_y)),
+    }
+    noeud = _calcul_noeud(portees, hyp, nb_niveaux, usage_batiment, hauteur_etage, segments=segments)
+    return {"x": x, "y": y, **noeud}
 
 
 def _trouver_voisin_direct(poteau, voisins, axe, sens):
@@ -283,6 +384,11 @@ def _trouver_voisin_direct(poteau, voisins, axe, sens):
     return meilleur, (meilleure_distance or 0.0)
 
 
+def _nom_poteau(p):
+    nom = p.get("nom") or p.get("guid") or "sans nom"
+    return f"Poteau {nom} (x = {_virgule(round(p['x'], 2))} m ; y = {_virgule(round(p['y'], 2))} m)"
+
+
 def generer_poteau_depuis_position_reelle(
     poteau_ifc, voisins, charge_exploitation, hauteur_etage, nb_niveaux=1, usage_batiment=None,
     taux_travail_sol=None, hyp=None,
@@ -309,10 +415,10 @@ def generer_poteau_depuis_position_reelle(
     "nom" (traçabilité vers le poteau IFC d'origine) et
     "portees_detectees" (diagnostic : les 4 distances utilisées).
     """
-    _, portee_gauche = _trouver_voisin_direct(poteau_ifc, voisins, axe="x", sens=-1)
-    _, portee_droite = _trouver_voisin_direct(poteau_ifc, voisins, axe="x", sens=+1)
-    _, portee_avant = _trouver_voisin_direct(poteau_ifc, voisins, axe="y", sens=-1)
-    _, portee_arriere = _trouver_voisin_direct(poteau_ifc, voisins, axe="y", sens=+1)
+    v_gauche, portee_gauche = _trouver_voisin_direct(poteau_ifc, voisins, axe="x", sens=-1)
+    v_droite, portee_droite = _trouver_voisin_direct(poteau_ifc, voisins, axe="x", sens=+1)
+    v_avant, portee_avant = _trouver_voisin_direct(poteau_ifc, voisins, axe="y", sens=-1)
+    v_arriere, portee_arriere = _trouver_voisin_direct(poteau_ifc, voisins, axe="y", sens=+1)
 
     surface = calculer_surface_influence(portee_gauche, portee_droite, portee_avant, portee_arriere)
     if surface <= 0:
@@ -333,7 +439,24 @@ def generer_poteau_depuis_position_reelle(
 
     hyp = _hyp(hyp, charge_exploitation, taux_travail_sol)
     portees = {"gauche": portee_gauche, "droite": portee_droite, "avant": portee_avant, "arriere": portee_arriere}
-    noeud = _calcul_noeud(portees, hyp, nb_niveaux, usage_batiment, hauteur_etage)
+    hors_domaine = {cote: l for cote, l in portees.items() if l and not (PORTEE_MIN_POUTRE_M < l <= PORTEE_MAX_M)}
+    if hors_domaine:
+        # Poteaux superposés (entraxe ≤ 20 cm) ou portée > 15 m : le poteau
+        # n'est PAS calculé, et on dit exactement pourquoi -- jamais de
+        # charge inventée ni perdue en silence. Les poutres courtes
+        # (20 cm à 1 m) sont, elles, calculées (section 20 × 25 cm).
+        raise ValueError(
+            f"{_nom_poteau(poteau_ifc)} non calculé : portée "
+            + ", ".join(f"{_virgule(round(l, 2))} m ({cote})" for cote, l in hors_domaine.items())
+            + f" hors du domaine du moteur (plus de {_virgule(PORTEE_MIN_POUTRE_M)} m et au plus "
+            f"{_virgule(PORTEE_MAX_M)} m). Sa charge, sa semelle et ses poutres ne sont pas comptées : vérifiez "
+            "le plan (poteaux doublés ?) ou dimensionnez ces éléments à la main."
+        )
+    pos = (poteau_ifc["x"], poteau_ifc["y"])
+    segments = {cote: cle_segment(pos, (v["x"], v["y"])) if v is not None else None
+                for cote, v in (("gauche", v_gauche), ("droite", v_droite), ("avant", v_avant),
+                                ("arriere", v_arriere))}
+    noeud = _calcul_noeud(portees, hyp, nb_niveaux, usage_batiment, hauteur_etage, segments=segments)
     return {
         "guid": poteau_ifc.get("guid"),
         "nom": poteau_ifc.get("nom"),
@@ -359,7 +482,8 @@ def calculer_longueur_chainage(nb_travees_x, nb_travees_y, portee_x, portee_y):
     return longueur_x + longueur_y
 
 
-def generer_poutre_sur_grille(portee, largeur_influence, charge_exploitation, hyp=None):
+def generer_poutre_sur_grille(portee, largeur_influence, charge_exploitation, hyp=None, nb_niveaux=None,
+                              hauteur_etage=None, cle=None, rive=None):
     """
     Poutre reliant deux poteaux adjacents de la grille.
 
@@ -367,14 +491,27 @@ def generer_poutre_sur_grille(portee, largeur_influence, charge_exploitation, hy
     perpendiculaire pour une poutre intérieure (demi-travée de chaque
     côté), moitié pour une poutre de rive.
 
-        g_lin = g × largeur (+ b × h × γ si poids propre inclus)   [kN/m]
+        g_lin = g × largeur (+ mur porté) (+ b × h × γ si poids propre inclus)   [kN/m]
+        mur porté = p_mur × (h_étage − h_poutre) × (1 − baies), seulement
+        pour une poutre de plancher (un étage au-dessus) dont le tronçon
+        `cle` porte un mur d'étage sur le plan des murs.
         q_lin = q × largeur                                         [kN/m]
         pu = 1,35 g_lin + 1,5 q_lin ; pser = g_lin + q_lin
         γ = pu / pser  (transmis au calcul de la poutre : plus d'estimation 1,45)
     """
     hyp = _hyp(hyp, charge_exploitation, None)
     pp = poids_propre_poutre_kn_m(portee, hyp) if hyp.inclure_poids_propre_ossature else 0.0
-    g_lin = hyp.g_plancher_kn_m2 * largeur_influence + pp
+    # Mêmes poutres à tous les niveaux : on retient le niveau le plus chargé.
+    # Poutre de plancher (s'il y a un étage au-dessus) : G plancher + mur
+    # de l'étage posé dessus. Poutre du dernier niveau : G de toiture
+    # (= G plancher pour une dalle), aucun mur au-dessus.
+    niveaux = nb_niveaux or 1
+    candidats = [("toiture", hyp.g_toiture_effective, 0.0)]
+    if niveaux >= 2:
+        q_mur = charge_mur_kn_m(portee, hyp, hauteur_etage)[0] if hyp.mur_sur(cle, "etages") else 0.0
+        candidats.append(("plancher", hyp.g_plancher_kn_m2, q_mur))
+    _, g_surf, q_mur = max(candidats, key=lambda c: c[1] * largeur_influence + c[2])
+    g_lin = g_surf * largeur_influence + q_mur + pp
     # Mêmes poutres à tous les niveaux (règle validée) : on retient la
     # charge d'exploitation du niveau le plus chargé (étage ou toiture).
     q_poutre = max(hyp.q_kn_m2, hyp.q_toiture_effective)
@@ -383,32 +520,50 @@ def generer_poutre_sur_grille(portee, largeur_influence, charge_exploitation, hy
     pser = hyp.els(g_lin, q_lin)
     resultat_poutre = dimensionner_poutre(portee=portee, charge_lineaire=pu, gamma_elu_els=pu / pser)
     trace = [
-        _etape("Charge permanente linéique", "g_lin = g × largeur" + (" + b·h·γ" if pp else ""),
-               f"{hyp.g_plancher_kn_m2} × {round(largeur_influence, 3)}" + (f" + {round(pp, 2)}" if pp else ""),
+        _etape("Charge permanente linéique",
+               "g_lin = g × largeur" + (" + p_mur × (h_étage − h)" if q_mur else "") + (" + b·h·γ" if pp else ""),
+               f"{g_surf} × {round(largeur_influence, 3)}" + (f" + {round(q_mur, 2)}" if q_mur else "")
+               + (f" + {round(pp, 2)}" if pp else ""),
                round(g_lin, 2), "kN/m"),
         _etape("Charge d'exploitation linéique", "q_lin = q × largeur (niveau le plus chargé)",
                f"{q_poutre} × {round(largeur_influence, 3)}", round(q_lin, 2), "kN/m"),
         _etape("Charge ELU", f"pu = {hyp.gamma_g_elu} g + {hyp.gamma_q_elu} q",
                f"{hyp.gamma_g_elu} × {round(g_lin, 2)} + {hyp.gamma_q_elu} × {round(q_lin, 2)}", round(pu, 2), "kN/m"),
         _etape("Charge ELS", "pser = g + q", f"{round(g_lin, 2)} + {round(q_lin, 2)}", round(pser, 2), "kN/m"),
-        _etape("Hauteur", "h = L / 8 (isostatique, prudent)", f"{portee} / 8", resultat_poutre["hauteur_cm"], "cm"),
+        _etape("Hauteur", "h = max(L / 8 ; 25 cm) (isostatique, prudent ; 25 cm : section minimale)",
+               f"max({portee} / 8 ; 0,25)", resultat_poutre["hauteur_cm"], "cm"),
         _etape("Moment ELU", "Mu = pu L² / 8", f"{round(pu, 2)} × {portee}² / 8",
                resultat_poutre["moment_flechissant_knm"], "kN·m"),
         _etape("Moment réduit", "µ = Mu / (b d² fbu), d = 0,9 h", "", resultat_poutre["moment_reduit"], "—"),
         _etape("Acier tendu", "As = Mu / (z fsu), z = d(1 − 0,4α)", "",
                resultat_poutre["section_acier_theorique_cm2"], "cm²"),
+        _etape("Effort tranchant", "Vu = pu L / 2 ; τu = Vu / (b d) ≤ min(0,2 fc28 / γb ; 5 MPa)",
+               f"Vu = {resultat_poutre['effort_tranchant_kn']} kN ; τu = {resultat_poutre['contrainte_cisaillement_mpa']} MPa",
+               resultat_poutre["contrainte_cisaillement_limite_mpa"], "MPa (limite)"),
     ]
+    messages = hyp.messages()
+    if not resultat_poutre["cisaillement_verifie"]:
+        messages = messages + [
+            f"ALERTE : poutre de {_virgule(portee)} m -- contrainte de cisaillement "
+            f"{_virgule(resultat_poutre['contrainte_cisaillement_mpa'])} MPa supérieure à la limite "
+            f"{_virgule(resultat_poutre['contrainte_cisaillement_limite_mpa'])} MPa : section à agrandir."
+        ]
     resultat_poutre = {**resultat_poutre, "trace": trace, "hypotheses_calcul": hyp.vers_dict(),
-                       "charge_elu_kn_m": round(pu, 2), "charge_els_kn_m": round(pser, 2)}
+                       "charge_elu_kn_m": round(pu, 2), "charge_els_kn_m": round(pser, 2),
+                       # Plan des murs : identifiant du tronçon, façade ou non,
+                       # murs placés (affichés, jamais déduits ici).
+                       "cle_segment": cle, "rive": rive,
+                       "mur_etage": hyp.mur_sur(cle, "etages"), "mur_rdc": hyp.mur_sur(cle, "rdc")}
     return {
         "charge_lineaire_kn_m": pu,
         "charge_lineaire_service_kn_m": pser,
         "resultat_poutre": resultat_poutre,
-        "hypotheses": hyp.messages(),
+        "hypotheses": messages,
     }
 
 
-def generer_poutre_depuis_positions_reelles(poteau_a, poteau_b, axe, voisins, charge_exploitation, hyp=None):
+def generer_poutre_depuis_positions_reelles(poteau_a, poteau_b, axe, voisins, charge_exploitation, hyp=None,
+                                            nb_niveaux=None, hauteur_etage=None):
     """
     Phase B (import) -- une poutre entre deux poteaux RÉELLEMENT
     adjacents (au lieu d'une boucle i, i+1 sur une grille). `axe`
@@ -440,6 +595,8 @@ def generer_poutre_depuis_positions_reelles(poteau_a, poteau_b, axe, voisins, ch
     largeur_influence = (
         ((perp_a_pos + perp_a_neg) / 2) + ((perp_b_pos + perp_b_neg) / 2)
     ) / 2
+    # Poutre de façade : aucun poteau d'un même côté aux deux extrémités.
+    rive = (not perp_a_pos and not perp_b_pos) or (not perp_a_neg and not perp_b_neg)
 
     if largeur_influence <= 0:
         # Aucun poteau perpendiculaire détecté à AUCUNE des deux
@@ -460,6 +617,8 @@ def generer_poutre_depuis_positions_reelles(poteau_a, poteau_b, axe, voisins, ch
 
     resultat = generer_poutre_sur_grille(
         portee=portee, largeur_influence=largeur_influence, charge_exploitation=charge_exploitation, hyp=hyp,
+        nb_niveaux=nb_niveaux, hauteur_etage=hauteur_etage,
+        cle=cle_segment((poteau_a["x"], poteau_a["y"]), (poteau_b["x"], poteau_b["y"])), rive=rive,
     )
     resultat["poteau_origine_guid"] = poteau_a.get("guid")
     resultat["poteau_destination_guid"] = poteau_b.get("guid")
@@ -468,7 +627,22 @@ def generer_poutre_depuis_positions_reelles(poteau_a, poteau_b, axe, voisins, ch
     return resultat
 
 
-def detecter_poutres_adjacentes(voisins, charge_exploitation, hyp=None):
+def troncons_adjacents(voisins):
+    """Tronçons de poutre entre poteaux directement voisins (géométrie
+    seule, sans calcul) : [(cle_segment, (xa, ya), (xb, yb))], chaque
+    tronçon une seule fois -- mêmes paires que detecter_poutres_adjacentes()."""
+    troncons = []
+    for poteau in voisins:
+        for axe in ("x", "y"):
+            voisin, _ = _trouver_voisin_direct(poteau, voisins, axe=axe, sens=+1)
+            if voisin is not None:
+                a, b = (poteau["x"], poteau["y"]), (voisin["x"], voisin["y"])
+                troncons.append((cle_segment(a, b), a, b))
+    return troncons
+
+
+def detecter_poutres_adjacentes(voisins, charge_exploitation, hyp=None, nb_niveaux=None, hauteur_etage=None,
+                                segments_ignores=None):
     """
     Phase B (import) -- génère une poutre par paire de poteaux
     directement adjacents dans le nuage de points détecté, sans passer
@@ -485,7 +659,9 @@ def detecter_poutres_adjacentes(voisins, charge_exploitation, hyp=None):
     échouer tout l'import : voir generer_poutre_depuis_positions_reelles().
 
     Retour : liste de résultats de generer_poutre_depuis_positions_reelles(),
-    un par segment détecté et exploitable.
+    un par segment détecté et exploitable. Chaque segment écarté est
+    décrit (raison comprise) dans `segments_ignores` si une liste est
+    fournie : l'appelant DOIT l'afficher.
     """
     poutres = []
     for poteau in voisins:
@@ -495,8 +671,11 @@ def detecter_poutres_adjacentes(voisins, charge_exploitation, hyp=None):
                 continue
             try:
                 poutres.append(
-                    generer_poutre_depuis_positions_reelles(poteau, voisin, axe, voisins, charge_exploitation, hyp=hyp)
+                    generer_poutre_depuis_positions_reelles(poteau, voisin, axe, voisins, charge_exploitation, hyp=hyp,
+                                                            nb_niveaux=nb_niveaux, hauteur_etage=hauteur_etage)
                 )
-            except ValueError:
-                continue
+            except ValueError as exc:
+                if segments_ignores is not None:
+                    segments_ignores.append(
+                        f"Poutre entre {_nom_poteau(poteau)} et {_nom_poteau(voisin)} non calculée : {exc}")
     return poutres

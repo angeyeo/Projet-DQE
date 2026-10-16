@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AlertCircle, ArrowLeft, ArrowRight, Loader2, Sparkles } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
 import Alerte from './ui/Alerte';
+import PlanMurs from './murs/PlanMurs';
 
 const ND = <span className="texte-discret" title="Aucun résultat de calcul pour cet élément">ND</span>;
 
@@ -62,7 +63,7 @@ function Tableau({ titre, elements, entetes, cellules, explications, onExpliquer
   );
 }
 
-export default function Step2_Calculs({ sections, projet, hypotheses = [], avertissements = [], alertes = [], onBack, onNext }) {
+export default function Step2_Calculs({ sections, projet, hypotheses = [], avertissements = [], alertes = [], onEnregistrerMurs, onBack, onNext }) {
   const { poteaux = [], poutres = [], semelles = [], autres = [] } = sections || {};
   const total = poteaux.length + poutres.length + semelles.length + autres.length;
   const sansResultat = [...poteaux, ...poutres, ...semelles, ...autres].filter((e) => e.calculIndisponible).length;
@@ -106,6 +107,10 @@ export default function Step2_Calculs({ sections, projet, hypotheses = [], avert
       )}
 
       {total === 0 && <p className="texte-discret etat-vide-compact">Aucun élément : enregistrez les paramètres à l'étape 1 pour générer la trame.</p>}
+
+      {total > 0 && onEnregistrerMurs && (
+        <PlanMurs projet={projet} poidsRenseigne={projet?.poids_murs_kn_m2 != null} onEnregistrer={onEnregistrerMurs} />
+      )}
 
       <Tableau titre="Poteaux" {...communs} elements={poteaux}
         entetes={['Repère', 'Effort normal', 'Section', 'Armatures']}

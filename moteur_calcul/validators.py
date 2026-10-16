@@ -5,6 +5,7 @@ une formule produire un résultat absurde silencieusement.
 """
 
 from .constantes import (
+    PORTEE_MIN_POUTRE_M,
     USAGES_VALIDES,
     PORTEE_MIN_M,
     PORTEE_MAX_M,
@@ -23,6 +24,22 @@ def valider_portee(portee):
         raise EntreeInvalide(
             f"La portée doit être comprise entre {PORTEE_MIN_M} m et {PORTEE_MAX_M} m."
         )
+    return portee
+
+
+def valider_portee_poutre(portee):
+    """Portée d'une POUTRE : les poutres courtes (< 1 m) sont admises
+    (section minimale 20 × 25 cm, ingénieur BTP 12/10/2026) tant que les
+    deux poteaux ne se superposent pas."""
+    if portee is None or portee <= 0:
+        raise EntreeInvalide("La portée doit être un nombre positif.")
+    if portee <= PORTEE_MIN_POUTRE_M:
+        raise EntreeInvalide(
+            f"Portée de {portee:g} m : deux poteaux à moins de {PORTEE_MIN_POUTRE_M:g} m d'entraxe se "
+            f"superposent (poteau doublé dans le plan ?)."
+        )
+    if portee > PORTEE_MAX_M:
+        raise EntreeInvalide(f"La portée doit être inférieure ou égale à {PORTEE_MAX_M} m.")
     return portee
 
 

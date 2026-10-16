@@ -21,9 +21,12 @@ from ..constantes import (
     RATIO_HAUTEUR_POUTRE_ISOSTATIQUE,
     DENSITE_ACIER_KG_M3,
     GAMMA_ELU_ELS_SUPPOSE,
+    HAUTEUR_MIN_POUTRE_M,
+    CISAILLEMENT_COEF_FC28,
+    CISAILLEMENT_PLAFOND_MPA,
 )
 from ..unites import kn_vers_mn, m2_vers_cm2, m_vers_cm
-from ..validators import valider_portee, EntreeInvalide
+from ..validators import valider_portee, valider_portee_poutre, EntreeInvalide
 from ..tables_acier import proposer_barres
 from .methode_caquot import calculer_moments_caquot
 
@@ -39,12 +42,39 @@ def predimensionner_hauteur_poutre(portee, isostatique=True):
     return portee / ratio_min
 
 
+def hauteur_poutre_retenue(portee):
+    """Hauteur d'une poutre isostatique de la trame :
+        h = max(L / 8 ; 25 cm)
+    L/8 : pré-dimensionnement prudent ; 25 cm : section minimale d'une
+    poutre qui reprend un plancher ou un mur (ingénieur BTP, 12/10/2026)."""
+    valider_portee_poutre(portee)
+    return max(portee / RATIO_HAUTEUR_POUTRE_ISOSTATIQUE[0], HAUTEUR_MIN_POUTRE_M)
+
+
+def verifier_effort_tranchant(charge_lineaire, portee, largeur, hauteur_utile, fc28):
+    """Vérification au cisaillement (BAEL 91, A.5.1) d'une poutre
+    isostatique sous charge uniforme :
+        Vu = pu L / 2                       [kN]
+        tau_u = Vu / (b d)                  [MPa]
+        tau_lim = min(0,2 fc28 / gamma_b ; 5 MPa)
+    Déterminante pour les poutres très courtes."""
+    effort = charge_lineaire * portee / 2
+    contrainte = kn_vers_mn(effort) / (largeur * hauteur_utile)
+    limite = min(CISAILLEMENT_COEF_FC28 * fc28 / GAMMA_BETON, CISAILLEMENT_PLAFOND_MPA)
+    return {
+        "effort_tranchant_kn": round(effort, 2),
+        "contrainte_cisaillement_mpa": round(contrainte, 3),
+        "contrainte_cisaillement_limite_mpa": round(limite, 3),
+        "cisaillement_verifie": contrainte <= limite,
+    }
+
+
 def calculer_moment_flechissant(charge_lineaire, portee):
     """
     Mu = charge_repartie x portee² / 8  (poutre simplement appuyée,
     charge uniforme).
     """
-    valider_portee(portee)
+    valider_portee_poutre(portee)
     if charge_lineaire is None or charge_lineaire <= 0:
         raise EntreeInvalide("La charge linéaire doit être positive.")
     return charge_lineaire * portee ** 2 / 8
@@ -182,7 +212,7 @@ def dimensionner_poutre(portee, charge_lineaire, largeur=0.20, resistance_beton=
         "gamma_estime": bool,              # True si gamma_elu_els n'a pas été fourni
     }
     """
-    hauteur = predimensionner_hauteur_poutre(portee, isostatique=True)
+    hauteur = hauteur_poutre_retenue(portee)
     hauteur_utile = 0.9 * hauteur
 
     moment_flechissant = calculer_moment_flechissant(charge_lineaire, portee)
@@ -200,6 +230,7 @@ def dimensionner_poutre(portee, charge_lineaire, largeur=0.20, resistance_beton=
     )
 
     poids_acier_longitudinal_theorique_kg = ferraillage["section_acier_m2"] * portee * DENSITE_ACIER_KG_M3
+    tranchant = verifier_effort_tranchant(charge_lineaire, portee, largeur, hauteur_utile, fc28)
 
     return {
         "hauteur_cm": round(m_vers_cm(hauteur), 1),
@@ -213,6 +244,8 @@ def dimensionner_poutre(portee, charge_lineaire, largeur=0.20, resistance_beton=
         "poids_acier_longitudinal_theorique_kg": round(poids_acier_longitudinal_theorique_kg, 2),
         "barres_proposees": ferraillage["barres_proposees"],
         "gamma_estime": gamma_estime,
+        "hauteur_minimale_appliquee": hauteur > portee / RATIO_HAUTEUR_POUTRE_ISOSTATIQUE[0],
+        **tranchant,
     }
 
 

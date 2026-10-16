@@ -2,7 +2,9 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from rest_framework import serializers
 
-from moteur_calcul.constantes import CHARGES_EXPLOITATION
+import re
+
+from moteur_calcul.constantes import CHARGES_EXPLOITATION, POIDS_MURS_MAX_KN_M2, POURCENTAGE_BAIES_MAX
 from moteur_calcul.hypotheses import resoudre_charge_permanente
 from moteur_calcul.validators import EntreeInvalide, valider_contrainte_sol_kn_m2
 
@@ -12,6 +14,7 @@ from .models import (
     CoucheCharge,
     PosteComplementaire,
     EntrepriseParametres,
+    OuvrageType,
 )
 from .permissions import entreprise_de
 
@@ -118,7 +121,10 @@ class PosteComplementaireSerializer(serializers.ModelSerializer):
     class Meta:
         model = PosteComplementaire
         fields = "__all__"
-        read_only_fields = ("lignes_calculees",)
+        # Origine du prix : fixée par le serveur (bibliothèque ou saisie).
+        read_only_fields = ("lignes_calculees", "prix_source", "prix_date")
+        # Le lot peut venir de l'ouvrage de la bibliothèque (voir validate).
+        extra_kwargs = {"lot": {"required": False}}
 
     def get_montant(self, obj):
         if obj.mode != PosteComplementaire.Mode.SIMPLE or obj.quantite is None or obj.prix_unitaire is None:
@@ -129,12 +135,44 @@ class PosteComplementaireSerializer(serializers.ModelSerializer):
     def validate_projet(self, projet):
         return _verifier_projet_du_cabinet(self, projet)
 
+    def validate_ouvrage(self, ouvrage):
+        if ouvrage is None:
+            return ouvrage
+        entreprise = _entreprise_requete(self)
+        if entreprise is None or ouvrage.entreprise_id != entreprise.id:
+            raise serializers.ValidationError("Ouvrage introuvable dans la bibliothèque du cabinet.")
+        return ouvrage
+
+    def _reprendre_ouvrage(self, attrs):
+        """Poste repris de la bibliothèque : désignation, unité et lot copiés
+        s'ils ne sont pas saisis ; prix copié s'il n'est pas saisi. L'origine
+        du prix est tracée sur le poste (et donc sur la ligne du DQE)."""
+        ouvrage = attrs.get("ouvrage")
+        if ouvrage is None:
+            if "prix_unitaire" in attrs:
+                attrs["prix_source"], attrs["prix_date"] = "saisie (poste)", None
+            return
+        for champ in ("designation", "unite"):
+            if not (attrs.get(champ) or "").strip():
+                attrs[champ] = getattr(ouvrage, champ)
+        attrs.setdefault("lot", ouvrage.lot)
+        if attrs.get("prix_unitaire") is None and ouvrage.prix_unitaire is not None:
+            attrs["prix_unitaire"] = ouvrage.prix_unitaire
+            attrs["prix_source"] = "bibliothèque du cabinet" + (f" ({ouvrage.source_prix})" if ouvrage.source_prix else "")
+            attrs["prix_date"] = ouvrage.date_prix
+        elif "prix_unitaire" in attrs:
+            attrs["prix_source"], attrs["prix_date"] = "saisie (poste)", None
+
     def validate(self, attrs):
+        self._reprendre_ouvrage(attrs)
+
         def val(champ):
             return attrs.get(champ, getattr(self.instance, champ, None))
 
         mode = val("mode") or PosteComplementaire.Mode.SIMPLE
         erreurs = {}
+        if not val("lot"):
+            erreurs["lot"] = "Le lot est requis."
         if mode == PosteComplementaire.Mode.SIMPLE:
             if not (val("designation") or "").strip():
                 erreurs["designation"] = "La désignation est requise."
@@ -156,6 +194,58 @@ class PosteComplementaireSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class OuvrageTypeSerializer(serializers.ModelSerializer):
+    """Ouvrage de la bibliothèque du cabinet. Le cabinet et l'auteur sont
+    fixés par le serveur ; un même ouvrage (lot, désignation, unité) n'existe
+    qu'une fois par cabinet."""
+
+    lot_libelle = serializers.CharField(source="get_lot_display", read_only=True)
+    nb_postes = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OuvrageType
+        fields = ("id", "lot", "lot_libelle", "designation", "unite", "prix_unitaire", "source_prix", "date_prix",
+                  "nb_postes", "date_modification")
+        read_only_fields = ("date_modification",)
+
+    def get_nb_postes(self, obj):
+        annote = getattr(obj, "nb_postes_annote", None)
+        return annote if annote is not None else obj.postes.count()
+
+    def validate_designation(self, v):
+        v = (v or "").strip()
+        if not v:
+            raise serializers.ValidationError("La désignation est requise.")
+        return v
+
+    def validate_unite(self, v):
+        v = (v or "").strip()
+        if not v:
+            raise serializers.ValidationError("L'unité est requise.")
+        return v
+
+    def validate_prix_unitaire(self, v):
+        if v is not None and v < 0:
+            raise serializers.ValidationError("Le prix unitaire doit être positif ou nul (FCFA).")
+        return v
+
+    def validate(self, attrs):
+        entreprise = _entreprise_requete(self)
+        cle = {k: attrs.get(k, getattr(self.instance, k, None)) for k in ("lot", "designation", "unite")}
+        doublons = OuvrageType.objects.filter(entreprise=entreprise, **cle)
+        if self.instance is not None:
+            doublons = doublons.exclude(pk=self.instance.pk)
+        if doublons.exists():
+            raise serializers.ValidationError(
+                f"« {cle['designation']} » ({cle['unite']}) existe déjà dans ce lot de la bibliothèque.")
+        return attrs
+
+
+# Clé d'un tronçon (moteur_calcul.formules.trame.cle_segment) : "x;y|x;y" au cm.
+MOTIF_CLE_SEGMENT = re.compile(r"^-?\d+\.\d{2};-?\d+\.\d{2}\|-?\d+\.\d{2};-?\d+\.\d{2}$")
+MAX_TRONCONS_MURS = 2000
+
+
 class ProjetSerializer(serializers.ModelSerializer):
     elements = ElementStructurelSerializer(many=True, read_only=True)
     couches_charges = CoucheChargeSerializer(many=True, read_only=True)
@@ -170,7 +260,8 @@ class ProjetSerializer(serializers.ModelSerializer):
         # Le cabinet et l'auteur sont fixés par le serveur à partir de
         # l'utilisateur connecté : jamais modifiables par le client (avant,
         # un utilisateur pouvait déplacer un projet dans un autre cabinet).
-        read_only_fields = ("entreprise", "cree_par", "plan_fondation_valide", "fichier_import_origine")
+        read_only_fields = ("entreprise", "cree_par", "plan_fondation_valide", "fichier_import_origine",
+                            "parametres_import")
 
     def validate_usage_batiment(self, usage):
         if usage and usage not in CHARGES_EXPLOITATION:
@@ -184,6 +275,33 @@ class ProjetSerializer(serializers.ModelSerializer):
             return valider_contrainte_sol_kn_m2(valeur)
         except EntreeInvalide as exc:
             raise serializers.ValidationError(str(exc))
+
+    def validate_poids_murs_kn_m2(self, valeur):
+        if valeur is not None and not (0 < valeur <= POIDS_MURS_MAX_KN_M2):
+            raise serializers.ValidationError(
+                f"Le poids des murs doit être compris entre 0 et {POIDS_MURS_MAX_KN_M2:g} kN/m² de mur "
+                f"(enduits compris). Vide = charge des murs non comptée."
+            )
+        return valeur
+
+    def _valider_murs(self, valeur):
+        if not isinstance(valeur, list) or len(valeur) > MAX_TRONCONS_MURS:
+            raise serializers.ValidationError(f"Liste de tronçons de mur attendue (au plus {MAX_TRONCONS_MURS}).")
+        if any(not isinstance(c, str) or not MOTIF_CLE_SEGMENT.match(c) for c in valeur):
+            raise serializers.ValidationError("Tronçon de mur invalide : identifiant de poutre inconnu.")
+        return sorted(set(valeur))
+
+    def validate_murs_rdc(self, valeur):
+        return self._valider_murs(valeur)
+
+    def validate_murs_etages(self, valeur):
+        return self._valider_murs(valeur)
+
+    def validate_pourcentage_baies_murs(self, valeur):
+        if valeur is None or not (0 <= valeur <= POURCENTAGE_BAIES_MAX):
+            raise serializers.ValidationError(
+                f"La part des baies doit être comprise entre 0 et {POURCENTAGE_BAIES_MAX:g} %.")
+        return valeur
 
     def get_hypotheses_calcul(self, obj):
         from .services.parametres_projet import messages_hypotheses
@@ -288,6 +406,13 @@ class EntrepriseParametresSerializer(serializers.ModelSerializer):
                 meta.pop(cle, None)
             validated_data["prix_unitaires_meta"] = meta
         return super().update(instance, validated_data)
+
+    def validate_parametres_approvisionnement(self, params):
+        from .services.approvisionnement import valider_parametres
+        try:
+            return valider_parametres(params)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc))
 
     def validate_prix_unitaires(self, prix):
         if not isinstance(prix, dict):

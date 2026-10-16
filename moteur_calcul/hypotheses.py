@@ -31,10 +31,14 @@ from dataclasses import asdict, dataclass, field
 from .constantes import (
     CHARGE_EXPLOITATION_TOITURE_KN_M2,
     COEFFICIENT_G_ELS,
+    G_TOITURE_CHARPENTE_KN_M2,
+    TYPES_TOITURE,
     COEFFICIENT_G_ELU,
     COEFFICIENT_Q_ELS,
     COEFFICIENT_Q_ELU,
     CONTRAINTE_SOL_DEFAUT,
+    POIDS_MURS_MAX_KN_M2,
+    POURCENTAGE_BAIES_MAX,
     POIDS_VOLUMIQUE_BETON,
 )
 from .formules.descente_charges import calculer_charge_permanente_composee
@@ -69,7 +73,29 @@ class HypothesesCalcul:
     # passent la valeur validée (1,5 kN/m²) via parametres_projet.
     q_toiture_kn_m2: float | None = None
     origine_q_toiture: str | None = None
+    # Toiture du dernier niveau : "dalle" (G = G planchers, comportement
+    # historique) ou "charpente" (G = g_toiture_kn_m2, aucun plancher au
+    # dernier niveau).
+    type_toiture: str = "dalle"
+    g_toiture_kn_m2: float | None = None
     contrainte_sol_kn_m2: float | None = None
+    # Murs en maçonnerie posés sur les poutres (façades, refends). None =
+    # poids non renseigné : charge NON comptée et ALERTE affichée. Les
+    # cloisons légères restent comprises dans G des planchers.
+    poids_murs_kn_m2: float | None = None
+    origine_poids_murs: str | None = None
+    # Un mur n'est compté que LÀ OÙ IL EXISTE (ingénieur BTP, 12/10/2026) :
+    # tronçons de poutre désignés sur le plan des murs (clés de
+    # trame.cle_segment). RDC : murs sur les longrines ; étages : murs sur
+    # les poutres du plancher situé dessous (même plan à chaque étage).
+    murs_rdc: frozenset = frozenset()
+    murs_etages: frozenset = frozenset()
+    # Part des baies (portes, fenêtres) déduite de la surface des murs, en %.
+    # 0 = aucune baie déduite (prudent).
+    pourcentage_baies_murs: float = 0.0
+    # Murs du RDC posés sur les longrines, qui reportent leur charge sur
+    # les semelles (validé par l'ingénieur BTP, 12/10/2026).
+    murs_rdc_sur_semelles: bool = True
     detail_g: tuple = field(default_factory=tuple)
     gamma_g_elu: float = COEFFICIENT_G_ELU
     gamma_q_elu: float = COEFFICIENT_Q_ELU
@@ -87,6 +113,17 @@ class HypothesesCalcul:
             )
         if self.q_toiture_kn_m2 is not None and self.q_toiture_kn_m2 <= 0:
             raise ValueError("La charge d'exploitation de toiture doit être strictement positive (kN/m²).")
+        if self.type_toiture not in TYPES_TOITURE:
+            raise ValueError(f"Type de toiture inconnu : {self.type_toiture!r} (dalle ou charpente).")
+        if self.type_toiture == "charpente" and (self.g_toiture_kn_m2 is None or self.g_toiture_kn_m2 <= 0):
+            raise ValueError("Toiture en charpente : la charge permanente de toiture doit être strictement positive (kN/m²).")
+        if self.poids_murs_kn_m2 is not None and not (0 < self.poids_murs_kn_m2 <= POIDS_MURS_MAX_KN_M2):
+            raise ValueError(
+                f"Le poids des murs doit être compris entre 0 et {POIDS_MURS_MAX_KN_M2:g} kN/m² de mur "
+                f"(valeur reçue : {self.poids_murs_kn_m2})."
+            )
+        if not (0 <= self.pourcentage_baies_murs <= POURCENTAGE_BAIES_MAX):
+            raise ValueError(f"La part des baies doit être comprise entre 0 et {POURCENTAGE_BAIES_MAX:g} %.")
         if self.methode_semelles not in METHODES_SEMELLES:
             raise ValueError(f"Méthode de dimensionnement des semelles inconnue : {self.methode_semelles!r}.")
 
@@ -102,6 +139,21 @@ class HypothesesCalcul:
     @property
     def q_toiture_effective(self):
         return self.q_toiture_kn_m2 if self.q_toiture_kn_m2 is not None else self.q_kn_m2
+
+    @property
+    def g_toiture_effective(self):
+        """G du dernier niveau (kN/m²) : celle des planchers pour une dalle."""
+        return self.g_toiture_kn_m2 if self.type_toiture == "charpente" else self.g_plancher_kn_m2
+
+    @property
+    def murs_comptes(self):
+        return self.poids_murs_kn_m2 is not None and bool(self.murs_rdc or self.murs_etages)
+
+    def mur_sur(self, cle, niveau):
+        """True si un mur est placé sur ce tronçon ("rdc" ou "etages") et compté."""
+        if self.poids_murs_kn_m2 is None or cle is None:
+            return False
+        return cle in (self.murs_rdc if niveau == "rdc" else self.murs_etages)
 
     @property
     def contrainte_sol_effective(self):
@@ -132,6 +184,11 @@ class HypothesesCalcul:
             m.append(f"Q de toiture = {n(self.q_toiture_kn_m2)} kN/m²"
                      + (" (valeur validée par le technicien BTP)." if self.origine_q_toiture == "valide_technicien"
                         else "."))
+        if self.type_toiture == "charpente":
+            m.append(f"Toiture en charpente : G = {n(self.g_toiture_kn_m2)} kN/m² (charpente + couverture, "
+                     f"valeur donnée par l'ingénieur BTP) ; pas de plancher au dernier niveau.")
+        else:
+            m.append("Toiture-terrasse en dalle : même G que les planchers.")
         m.append(
             "Poids propre des poutres et poteaux "
             + ("AJOUTÉ à G (b × h × 25 kN/m³)." if self.inclure_poids_propre_ossature
@@ -142,6 +199,39 @@ class HypothesesCalcul:
                 "ALERTE : le forfait G des planchers ne couvre PAS le poids propre des poutres et poteaux "
                 "(règle validée par le technicien BTP) -- activez son ajout, sinon les efforts sont sous-estimés."
             )
+        places = len(self.murs_rdc) + len(self.murs_etages)
+        if self.poids_murs_kn_m2 is None:
+            m.append(
+                "ALERTE : poids des murs non renseigné -- la charge des murs en maçonnerie n'est PAS comptée : "
+                "efforts des poteaux, poutres et semelles sous-estimés. Renseignez le poids des murs "
+                "(kN/m² de mur, enduits compris)"
+                + (f" ; {places} tronçon(s) de mur placé(s) en attente." if places else
+                   ", puis placez les murs sur le plan des murs.")
+            )
+        elif not places:
+            m.append(
+                "ALERTE : aucun mur placé sur le plan des murs -- la charge des murs n'est PAS comptée. Placez les "
+                "murs de façade et de séparation qui figurent au plan architectural."
+            )
+        else:
+            m.append(
+                f"Murs en maçonnerie : {n(self.poids_murs_kn_m2)} kN/m² de mur (enduits compris), comptés "
+                f"seulement là où ils existent : {len(self.murs_etages)} tronçon(s) aux étages, "
+                f"{len(self.murs_rdc)} au rez-de-chaussée (plan des murs). Hauteur du mur = hauteur d'étage − "
+                f"hauteur de la poutre. Les cloisons légères restent comprises dans G des planchers."
+            )
+            m.append(
+                f"Baies déduites : {n(self.pourcentage_baies_murs)} % de la surface des murs."
+                if self.pourcentage_baies_murs else
+                "Aucune baie déduite de la surface des murs (prudent) : renseignez la part des baies si elle est connue."
+            )
+            if self.murs_rdc:
+                m.append(
+                    "Murs du rez-de-chaussée posés sur les longrines, qui reportent leur charge sur les semelles "
+                    "(validé par l'ingénieur BTP le 12/10/2026)."
+                    if self.murs_rdc_sur_semelles else
+                    "Murs du rez-de-chaussée sur leur propre fondation : leur charge n'est pas ajoutée aux semelles."
+                )
         m.append(
             "Semelles dimensionnées à l'"
             + ("ELU : surface ≥ effort ultime Nu / contrainte admissible du sol (méthode validée par le technicien BTP)."
@@ -158,6 +248,10 @@ class HypothesesCalcul:
     def vers_dict(self):
         d = asdict(self)
         d["detail_g"] = list(self.detail_g)
+        # Le plan des murs n'est pas recopié dans chaque élément : seul le
+        # nombre de tronçons l'est (le détail vit sur le projet).
+        d["murs_rdc"] = len(self.murs_rdc)
+        d["murs_etages"] = len(self.murs_etages)
         d["contrainte_sol_effective_kn_m2"] = self.contrainte_sol_effective
         return d
 
