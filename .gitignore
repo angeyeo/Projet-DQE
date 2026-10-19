@@ -9,3 +9,5 @@ frontend/dist/
 .vite/
 demo_dqe_jury.pdf
 demo_dqe_jury.xlsx
+# Fichiers envoyés par les utilisateurs (plans, logos) : jamais dans git (#61)
+media/
