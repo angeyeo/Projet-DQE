@@ -14,7 +14,6 @@ from ..constantes import (
     COEFFICIENT_DEGRESSION_MINIMUM,
     COEFFICIENTS_DEGRESSION_AU_DELA,
     COEFFICIENTS_DEGRESSION_PAR_ETAGE,
-    NB_ETAGES_DEGRESSION_VALIDES,
     USAGES_AVEC_DEGRESSION,
     POIDS_COUCHES_COURANTES,
 )
@@ -179,7 +178,7 @@ def coefficient_degression_etage(rang):
     Coefficient appliqué à la charge d'exploitation de l'étage de rang
     `rang` (1 = étage juste sous la toiture), règle validée par le
     technicien BTP : 1 ; 0,9 ; 0,8 ; 0,7 -- puis 0,6 et 0,5 minimum
-    au-delà du 4e étage (continuation NON validée, signalée).
+    au-delà du 4e étage (règle B9 confirmée le 21/10/2026).
     """
     if rang is None or rang < 1:
         raise ValueError("Le rang d'un étage commence à 1 (étage juste sous la toiture).")
@@ -272,7 +271,6 @@ def cumuler_charges_exploitation_degressives(
         "coefficients": coefficients,
         "coefficients_par_etage": coefficients_etages,
         "degression_appliquee": appliquer and len(charges_etages_kn) > 1,
-        "au_dela_regle_validee": appliquer and len(charges_etages_kn) > NB_ETAGES_DEGRESSION_VALIDES,
     }
 
 

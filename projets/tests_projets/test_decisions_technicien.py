@@ -104,7 +104,6 @@ class Decision8Degression(SimpleTestCase):
         r = cumuler_charges_exploitation_degressives(10, [20] * 4, "habitation")
         self.assertEqual(r["coefficients_par_etage"], [1.0, 0.9, 0.8, 0.7])
         self.assertEqual(r["cumuls_kn"], [10, 30, 48, 64, 78])
-        self.assertFalse(r["au_dela_regle_validee"])
 
     def test_equivalence_avec_la_forme_nf_p06_001(self):
         """Étages identiques : Q0 + Σ k_i Q = Q0 + c(n) n Q, c = 1 ; 0,95 ; 0,90 ; 0,85 ; (3+n)/2n."""
@@ -115,15 +114,26 @@ class Decision8Degression(SimpleTestCase):
                 r = cumuler_charges_exploitation_degressives(0, [10.0] * n, "habitation")
                 self.assertAlmostEqual(r["cumuls_kn"][-1], round(attendu * n * 10.0, 2), places=2)
 
-    def test_au_dela_du_quatrieme_etage_signale(self):
-        r = cumuler_charges_exploitation_degressives(10, [20] * 5, "habitation")
-        self.assertEqual(r["coefficients_par_etage"][-1], 0.6)
-        self.assertTrue(r["au_dela_regle_validee"])
+    def test_au_dela_du_quatrieme_etage_valide_b9(self):
+        """Règle B9 confirmée (21/10/2026) : Q0 = 10, six étages de 20 kN :
+        10 + 20 + 18 + 16 + 14 + 12 + 10 = 100 kN (coefficients 1 ; 0,9 ; 0,8 ; 0,7 ; 0,6 ; 0,5)."""
+        r = cumuler_charges_exploitation_degressives(10, [20] * 6, "habitation")
+        self.assertEqual(r["coefficients_par_etage"], [1.0, 0.9, 0.8, 0.7, 0.6, 0.5])
+        self.assertEqual(r["cumuls_kn"][-1], 100)
+        self.assertNotIn("au_dela_regle_validee", r)
         hyp = HypothesesCalcul(g_plancher_kn_m2=5.0, origine_g="saisie", q_kn_m2=1.5, origine_q="saisie",
                                contrainte_sol_kn_m2=200)
         noeud = generer_poteau_sur_grille(1, 1, 4.0, 4.0, 2, 2, 1.5, 3.0, nb_niveaux=6,
                                           usage_batiment="habitation", hyp=hyp)
-        self.assertTrue(any("au-delà du 4e étage" in m for m in noeud["hypotheses"]))
+        self.assertFalse(any("non validés" in m for m in noeud["hypotheses"]))
+
+    def test_r_plus_1_sans_degression_b9(self):
+        """Règle B9 : la dégression ne commence qu'à partir de 2 étages.
+        R+1 = toiture + 1 étage : Q0 = 10, Q1 = 20 -> 10 + 1,0 × 20 = 30 kN, sans réduction."""
+        r = cumuler_charges_exploitation_degressives(10, [20], "habitation")
+        self.assertEqual(r["coefficients_par_etage"], [1.0])
+        self.assertEqual(r["cumuls_kn"], [10, 30])
+        self.assertFalse(r["degression_appliquee"])
 
     def test_pas_de_degression_en_commerce(self):
         r = cumuler_charges_exploitation_degressives(10, [20] * 3, "commerce")
@@ -156,14 +166,14 @@ class Decision4MetreDallePoutre(TestCase):
     def test_deduction_appliquee(self):
         """Panneau 4 × 5 m entre axes, poutres b = 20 cm, e = 15 cm :
         béton = (4 − 0,2) × (5 − 0,2) × 0,15 = 3,8 × 4,8 × 0,15 = 2,736 m³ (au lieu de 3,000) ;
-        acier (ratio 85 kg/m³) = 232,56 kg ; coffrage de sous-face inchangé = 20 m²."""
+        acier (ratio 90 kg/m³, B4) = 2,736 × 90 = 246,24 kg ; coffrage de sous-face inchangé = 20 m²."""
         self.poutre("PX1", 20)
         self.dalle()
         l, d = self.lignes_dalle()
         self.assertEqual(l["BETON"]["quantite"], 2.736)
         self.assertEqual(l["BETON"]["formule_quantite"], "(Lx − b) × (Ly − b) × e = (4 − 0,2) × (5 − 0,2) × 0,15")
         self.assertIn("règle de métré validée", l["BETON"]["hypothese"])
-        self.assertEqual(l["ACIER"]["quantite"], 232.56)
+        self.assertEqual(l["ACIER"]["quantite"], 246.24)
         self.assertEqual(l["COFFRAGE"]["quantite"], 20.0)
         self.assertIn(l["BETON"]["hypothese"], d["hypotheses"])
 
@@ -264,7 +274,7 @@ class ToitureCharpenteAPI(TestCase):
                                   nb_travees_x=2, nb_travees_y=2, portee_x=4.0, portee_y=3.5, contrainte_sol_kn_m2=150,
                                   type_toiture="charpente")
         hyp = parametres_structure(p, avec_grille=True)["hyp"]
-        self.assertEqual((hyp.type_toiture, hyp.g_toiture_kn_m2), ("charpente", 2.5))
+        self.assertEqual((hyp.type_toiture, hyp.g_toiture_kn_m2), ("charpente", 1.5))  # B14, 21/10/2026
         self.assertEqual(Projet._meta.get_field("type_toiture").default, "dalle")
         self.assertEqual(_nettoyer({"type_toiture": "dalle"}), {"type_toiture": "dalle"})
         with self.assertRaises(VarianteInvalide):

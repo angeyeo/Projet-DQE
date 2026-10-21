@@ -121,18 +121,18 @@ DELAI_APPLICATION_CHARGES_SUPPOSE = "superieur_90_jours"
 #
 #   Q_cumulé sous l'étage n = Q0 + 1,0 Q1 + 0,9 Q2 + 0,8 Q3 + 0,7 Q4 + ...
 #
-# Au-delà du 4e étage, le technicien n'a pas donné de valeur : on
-# poursuit la loi classique (0,6 puis 0,5 minimum) -- À CONFIRMER, et
-# signalé dans les hypothèses de tout projet concerné (R+5 et plus).
+# Au-delà du 4e étage : 0,6 puis 0,5 minimum -- CONFIRMÉ PAR LE
+# TECHNICIEN BTP (règle B9, issue #64, 21/10/2026), qui précise aussi que
+# la dégression ne commence qu'à partir de 2 étages : un R+1 n'en a pas
+# (le premier étage sous la toiture garde le coefficient 1).
 #
 # Pour des étages identiques, cette règle donne EXACTEMENT les mêmes
 # cumuls que la forme NF P06-001 « Q0 + c(n) × (Q1 + ... + Qn) » avec
 # c(n) = 1 ; 0,95 ; 0,90 ; 0,85 puis (3 + n)/(2n) : les deux
 # écritures sont équivalentes (vérifié dans les tests).
-COEFFICIENTS_DEGRESSION_PAR_ETAGE = (1.0, 0.9, 0.8, 0.7)   # validés technicien
-COEFFICIENTS_DEGRESSION_AU_DELA = (0.6,)                   # non validés -- à confirmer
-COEFFICIENT_DEGRESSION_MINIMUM = 0.5                       # non validé -- à confirmer
-NB_ETAGES_DEGRESSION_VALIDES = len(COEFFICIENTS_DEGRESSION_PAR_ETAGE)
+COEFFICIENTS_DEGRESSION_PAR_ETAGE = (1.0, 0.9, 0.8, 0.7)   # validés technicien (07/10/2026)
+COEFFICIENTS_DEGRESSION_AU_DELA = (0.6,)                   # validé technicien (B9, 21/10/2026)
+COEFFICIENT_DEGRESSION_MINIMUM = 0.5                       # validé technicien (B9, 21/10/2026)
 
 # Forme « coefficient appliqué à la somme » (équivalente, conservée pour
 # compatibilité de coefficient_degression()) : c(n) = Σ k_i / n.
@@ -147,12 +147,11 @@ CHARGE_EXPLOITATION_TOITURE_KN_M2 = 1.5
 #   "dalle"     : toiture-terrasse en béton armé -> G = G des planchers ;
 #   "charpente" : charpente + couverture -> pas de plancher au dernier
 #                 niveau, G de toiture propre.
-# G charpente + couverture = 2,5 kN/m² : VALEUR DONNÉE PAR L'INGÉNIEUR BTP
-# (10/10/2026). Elle est plus forte que les valeurs usuelles d'une
-# charpente légère en tôle (environ 0,3 à 0,6 kN/m²) : elle va dans le sens
-# de la sécurité et reste à reconfirmer si la couverture est légère.
+# G charpente + couverture = 1,5 kN/m² : VALEUR CORRIGÉE PAR LE TECHNICIEN
+# BTP (règle B14, issue #64, 21/10/2026 ; 2,5 kN/m² auparavant). Elle reste
+# supérieure aux charpentes légères en tôle (environ 0,3 à 0,6 kN/m²).
 TYPES_TOITURE = ("dalle", "charpente")
-G_TOITURE_CHARPENTE_KN_M2 = 2.5
+G_TOITURE_CHARPENTE_KN_M2 = 1.5
 
 # La dégression suppose des occupations indépendantes d'un niveau à
 # l'autre. Elle ne s'applique PAS aux usages où tous les niveaux
@@ -214,6 +213,16 @@ RATIO_ACIER_SEMELLES_KG_M3 = (40, 60)
 RATIO_ACIER_POTEAUX_KG_M3 = (100, 150)
 RATIO_ACIER_POUTRES_KG_M3 = (120, 180)
 RATIO_ACIER_DALLES_KG_M3 = (70, 100)
+
+# Ratios RETENUS pour le DQE quand le moteur ne fournit pas le poids
+# d'acier réel (lignes marquées « estimé »). VALEURS DU TECHNICIEN BTP
+# (règle B4, issue #64, 21/10/2026) ; auparavant le milieu des fourchettes
+# ci-dessus (125 / 150 / 85 / 90). Les fourchettes restent la plage de
+# plausibilité utilisée par les contrôles et les tableaux de bord.
+RATIO_ACIER_POTEAUX_RETENU_KG_M3 = 100.0
+RATIO_ACIER_POUTRES_RETENU_KG_M3 = 130.0   # poutres ET longrines
+RATIO_ACIER_DALLES_RETENU_KG_M3 = 90.0
+RATIO_ACIER_CHAINAGES_KG_M3 = 80.0          # chaînage bas, chaînage haut / linteaux
 
 # Densité de l'acier (pour convertir une section théorique en poids réel)
 DENSITE_ACIER_KG_M3 = 7850.0

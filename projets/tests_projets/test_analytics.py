@@ -34,12 +34,12 @@ class AnalyticsTestCase(APITestCase):
         projet = self._projet_valide()
         r = self.client.get(f"/api/projets/{projet.id}/generer-dqe/")
         total = r.data["total_general"]
-        # 0,12 m³ x 100 000 + 2,4 m² x 12 000 + 15 kg x 800 = 52 800 FCFA
-        self.assertEqual(total, 52800)
+        # 0,12 m³ x 100 000 + 2,4 m² x 12 000 + 12 kg x 800 = 50 400 FCFA (acier 100 kg/m³, B4)
+        self.assertEqual(total, 50400)
 
         d = self.client.get("/api/analytics/cabinet/").data
         self.assertEqual(d["projets"]["par_statut"]["dqe_genere"], 1)
-        self.assertEqual(d["dqe"]["valeur_totale"], 52800)
+        self.assertEqual(d["dqe"]["valeur_totale"], 50400)
         self.assertEqual(d["dqe"]["repartition_par_categorie"]["beton"], 12000)
         self.assertEqual(d["elements"]["valides"], 1)
         types = [e["type"] for e in d["activite_recente"]]
@@ -48,17 +48,17 @@ class AnalyticsTestCase(APITestCase):
 
         p = self.client.get(f"/api/analytics/projets/{projet.id}/").data
         self.assertEqual(p["statut"], "dqe_genere")
-        self.assertEqual(p["cout"]["total"], 52800)
+        self.assertEqual(p["cout"]["total"], 50400)
         self.assertFalse(p["cout"]["partiel"])
         ratio = p["cout"]["ratios_acier"][0]
-        self.assertEqual(ratio["ratio_kg_m3"], 125.0)
+        self.assertEqual(ratio["ratio_kg_m3"], 100.0)  # ratio retenu B4 (21/10/2026)
         self.assertTrue(ratio["acier_estime"])  # ratio de référence : comparaison non probante
 
     def test_regeneration_ne_double_pas_la_valeur(self):
         projet = self._projet_valide()
         self.client.get(f"/api/projets/{projet.id}/generer-dqe/")
         self.client.get(f"/api/projets/{projet.id}/generer-dqe/")
-        self.assertEqual(self.client.get("/api/analytics/cabinet/").data["dqe"]["valeur_totale"], 52800)
+        self.assertEqual(self.client.get("/api/analytics/cabinet/").data["dqe"]["valeur_totale"], 50400)
         # Réaffichage sans aucun changement : pas un nouveau DQE.
         self.assertEqual(EvenementProduit.objects.filter(type="dqe_genere").count(), 1)
 

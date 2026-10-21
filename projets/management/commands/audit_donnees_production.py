@@ -98,8 +98,6 @@ class Command(BaseCommand):
             {"id": p.id, "nom": p.nom, "valide_ou_dqe": p.elements.filter(statut=ElementStructurel.Statut.VALIDE).exists()}
             for p in Projet.objects.filter(inclure_poids_propre_ossature=False).order_by("id")
         ]
-        rapport["projets_degression_non_validee"] = list(
-            Projet.objects.filter(nb_niveaux__gte=6).order_by("id").values("id", "nom", "nb_niveaux"))
 
         if opts["json"]:
             self.stdout.write(json.dumps(rapport, ensure_ascii=False, indent=2, default=str))
@@ -120,5 +118,3 @@ class Command(BaseCommand):
         self.stdout.write(f"9. Projets sans poids propre de l'ossature : {len(rapport['projets_sans_poids_propre'])} "
                           f"(dont {sum(1 for p in rapport['projets_sans_poids_propre'] if p['valide_ou_dqe'])} "
                           f"avec éléments validés)")
-        self.stdout.write(f"10. Projets de 6 niveaux ou plus (dégression non validée) : "
-                          f"{len(rapport['projets_degression_non_validee'])}")
