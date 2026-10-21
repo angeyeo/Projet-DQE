@@ -270,21 +270,12 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
         "coefficient_degression": coef,
         "degression_appliquee": q_deg["degression_appliquee"],
         "surface_influence_m2": round(surface, 4),
-        "hypotheses": hyp.messages() + _messages_degression(q_deg, nb_niveaux),
+        "hypotheses": hyp.messages(),
     }
 
 
 def _virgule(v):
     return f"{v:g}".replace(".", ",")
-
-
-def _messages_degression(q_deg, nb_niveaux):
-    if q_deg.get("au_dela_regle_validee"):
-        return [
-            f"HYPOTHÈSE : dégression au-delà du 4e étage ({nb_niveaux} niveaux) -- coefficients 0,6 puis 0,5 "
-            f"(loi classique) non validés par le technicien BTP, qui a fixé 1 ; 0,9 ; 0,8 ; 0,7. À confirmer."
-        ]
-    return []
 
 
 def generer_poteau_sur_grille(

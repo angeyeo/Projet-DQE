@@ -121,18 +121,18 @@ DELAI_APPLICATION_CHARGES_SUPPOSE = "superieur_90_jours"
 #
 #   Q_cumulé sous l'étage n = Q0 + 1,0 Q1 + 0,9 Q2 + 0,8 Q3 + 0,7 Q4 + ...
 #
-# Au-delà du 4e étage, le technicien n'a pas donné de valeur : on
-# poursuit la loi classique (0,6 puis 0,5 minimum) -- À CONFIRMER, et
-# signalé dans les hypothèses de tout projet concerné (R+5 et plus).
+# Au-delà du 4e étage : 0,6 puis 0,5 minimum -- CONFIRMÉ PAR LE
+# TECHNICIEN BTP (règle B9, issue #64, 21/10/2026), qui précise aussi que
+# la dégression ne commence qu'à partir de 2 étages : un R+1 n'en a pas
+# (le premier étage sous la toiture garde le coefficient 1).
 #
 # Pour des étages identiques, cette règle donne EXACTEMENT les mêmes
 # cumuls que la forme NF P06-001 « Q0 + c(n) × (Q1 + ... + Qn) » avec
 # c(n) = 1 ; 0,95 ; 0,90 ; 0,85 puis (3 + n)/(2n) : les deux
 # écritures sont équivalentes (vérifié dans les tests).
-COEFFICIENTS_DEGRESSION_PAR_ETAGE = (1.0, 0.9, 0.8, 0.7)   # validés technicien
-COEFFICIENTS_DEGRESSION_AU_DELA = (0.6,)                   # non validés -- à confirmer
-COEFFICIENT_DEGRESSION_MINIMUM = 0.5                       # non validé -- à confirmer
-NB_ETAGES_DEGRESSION_VALIDES = len(COEFFICIENTS_DEGRESSION_PAR_ETAGE)
+COEFFICIENTS_DEGRESSION_PAR_ETAGE = (1.0, 0.9, 0.8, 0.7)   # validés technicien (07/10/2026)
+COEFFICIENTS_DEGRESSION_AU_DELA = (0.6,)                   # validé technicien (B9, 21/10/2026)
+COEFFICIENT_DEGRESSION_MINIMUM = 0.5                       # validé technicien (B9, 21/10/2026)
 
 # Forme « coefficient appliqué à la somme » (équivalente, conservée pour
 # compatibilité de coefficient_degression()) : c(n) = Σ k_i / n.
