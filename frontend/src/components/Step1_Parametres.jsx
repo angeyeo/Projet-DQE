@@ -82,6 +82,10 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
     if (!files || !files[0]) return;
 
     const file = files[0];
+    // Remise à zéro du champ fichier : sans elle, le navigateur ne
+    // redéclenche pas onChange si l'on choisit à nouveau le même fichier
+    // (par exemple corrigé après une erreur) -- issue #88.
+    if (e.target?.type === 'file') e.target.value = '';
     const ext = file.name.split('.').pop().toLowerCase();
     const isImage = ['jpg', 'jpeg', 'png'].includes(ext);
     const isPlan = ['ifc', 'dxf'].includes(ext);
@@ -125,6 +129,9 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         setAnalysisSuccess(true);
       } catch (err) {
         setAnalysisError(`Erreur d'import du plan : ${err.message || "Impossible d'extraire le plan"}`);
+        // Le fichier refusé n'est pas « chargé » : la zone revient à son
+        // état initial, avec le bouton pour choisir un autre fichier.
+        updateProjectData({ planFileName: null, planFileSize: null });
       } finally {
         setAnalyzing(false);
       }
@@ -143,6 +150,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         setAnalysisSuccess(true);
       } catch (err) {
         setAnalysisError(`Erreur d'analyse IA : ${err.message || "Impossible d'extraire le plan"}`);
+        updateProjectData({ planFileName: null, planFileSize: null });
       } finally {
         setAnalyzing(false);
       }
@@ -226,6 +234,16 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
   const visionSource = vision?.source;
   const visionMessage = vision?.message;
 
+  // Bouton de sélection, présent dans tous les états de la zone (avant
+  // import, après un import réussi, après une erreur). Champ caché en
+  // sr-only (et non display:none) pour rester accessible au clavier.
+  const boutonFichier = (libelle) => (
+    <label className="btn btn-secondary">
+      {libelle}
+      <input type="file" accept="image/png,image/jpeg,.ifc,.dxf" onChange={handleFileUpload} className="sr-only" />
+    </label>
+  );
+
   return (
     <div className="glass-panel">
       <div style={{ marginBottom: '2rem' }}>
@@ -269,9 +287,10 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
                 <CheckCircle2 size={16} /> Plan lu automatiquement : vérifiez les valeurs pré-remplies avant le calcul.
               </p>
             )}
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
-              Glissez un nouveau fichier pour remplacer ce plan.
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.75rem', marginBottom: '0.75rem' }}>
+              Glissez un nouveau fichier ou choisissez-en un autre pour remplacer ce plan.
             </p>
+            {boutonFichier('Choisir un autre fichier')}
           </div>
         ) : (
           <div>
@@ -281,10 +300,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
               IFC et DXF (AutoCAD, ArchiCAD) : poteaux et murs lus. Fichier ArchiCAD .pln : exportez-le en IFC.
             </p>
-            <label className="btn btn-secondary">
-              Parcourir les fichiers
-              <input type="file" accept="image/png,image/jpeg,.ifc,.dxf" onChange={handleFileUpload} style={{ display: 'none' }} />
-            </label>
+            {boutonFichier('Parcourir les fichiers')}
           </div>
         )}
       </div>
