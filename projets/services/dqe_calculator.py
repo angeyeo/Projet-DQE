@@ -269,7 +269,13 @@ def _geometrie_element(element: ElementStructurel, res: dict):
             return None, None, None, manquants
         b, h = _cm_vers_m(b), _cm_vers_m(h)
         volume = res.get("volume_beton_m3") or b * h * longueur
-        return volume, 2 * h * longueur, res.get("poids_acier_total_kg"), []
+        # Le chaînage n'a pas de calcul de ferraillage : le poids que porte
+        # son résultat (dimensionner_chainage) est volume × ratio. Il ne
+        # doit donc jamais être présenté comme un calcul du moteur : on
+        # renvoie None pour que l'acier passe par le ratio retenu
+        # (RATIOS_ACIER_KG_M3["chainage"]), ligne « estimé » avec son
+        # hypothèse (audit A-02, issue #63).
+        return volume, 2 * h * longueur, None, []
 
     return None, None, None, [f"type d'élément non pris en charge par le DQE ({t})"]
 

@@ -239,8 +239,10 @@ def dimensionner_chainage(longueur_m, largeur_cm=None, hauteur_cm=None, ratio_ac
         cohérent avec SECTION_CHAINAGE_M2 = 0,03 m² déjà utilisé par le
         poste ratio).
     ratio_acier_kg_m3 : float, optionnel
-        Défaut : RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3 (90 kg/m³,
-        même source CIMBAT que le poste ratio -- provisoire).
+        Défaut : RATIO_ACIER_CHAINAGES_KG_M3 (80 kg/m³, valeur du
+        technicien BTP, règle B4 du 21/10/2026 -- même ratio que le
+        poste ratio « chaînage »). Ce poids est une ESTIMATION au ratio,
+        pas un calcul de ferraillage : le DQE l'étiquette « estimé ».
 
     Retour
     ------
@@ -264,7 +266,7 @@ def dimensionner_chainage(longueur_m, largeur_cm=None, hauteur_cm=None, ratio_ac
     hauteur_cm = hauteur_cm or HAUTEUR_CHAINAGE_CM_DEFAUT
 
     hypothese_ratio_acier = ratio_acier_kg_m3 is None
-    ratio_acier_kg_m3 = ratio_acier_kg_m3 or RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3
+    ratio_acier_kg_m3 = ratio_acier_kg_m3 or RATIO_ACIER_CHAINAGES_KG_M3
 
     volume_beton_m3 = (largeur_cm / 100) * (hauteur_cm / 100) * longueur_m
     poids_acier_total_kg = volume_beton_m3 * ratio_acier_kg_m3
