@@ -147,12 +147,11 @@ CHARGE_EXPLOITATION_TOITURE_KN_M2 = 1.5
 #   "dalle"     : toiture-terrasse en béton armé -> G = G des planchers ;
 #   "charpente" : charpente + couverture -> pas de plancher au dernier
 #                 niveau, G de toiture propre.
-# G charpente + couverture = 2,5 kN/m² : VALEUR DONNÉE PAR L'INGÉNIEUR BTP
-# (10/10/2026). Elle est plus forte que les valeurs usuelles d'une
-# charpente légère en tôle (environ 0,3 à 0,6 kN/m²) : elle va dans le sens
-# de la sécurité et reste à reconfirmer si la couverture est légère.
+# G charpente + couverture = 1,5 kN/m² : VALEUR CORRIGÉE PAR LE TECHNICIEN
+# BTP (règle B14, issue #64, 21/10/2026 ; 2,5 kN/m² auparavant). Elle reste
+# supérieure aux charpentes légères en tôle (environ 0,3 à 0,6 kN/m²).
 TYPES_TOITURE = ("dalle", "charpente")
-G_TOITURE_CHARPENTE_KN_M2 = 2.5
+G_TOITURE_CHARPENTE_KN_M2 = 1.5
 
 # La dégression suppose des occupations indépendantes d'un niveau à
 # l'autre. Elle ne s'applique PAS aux usages où tous les niveaux
@@ -214,6 +213,16 @@ RATIO_ACIER_SEMELLES_KG_M3 = (40, 60)
 RATIO_ACIER_POTEAUX_KG_M3 = (100, 150)
 RATIO_ACIER_POUTRES_KG_M3 = (120, 180)
 RATIO_ACIER_DALLES_KG_M3 = (70, 100)
+
+# Ratios RETENUS pour le DQE quand le moteur ne fournit pas le poids
+# d'acier réel (lignes marquées « estimé »). VALEURS DU TECHNICIEN BTP
+# (règle B4, issue #64, 21/10/2026) ; auparavant le milieu des fourchettes
+# ci-dessus (125 / 150 / 85 / 90). Les fourchettes restent la plage de
+# plausibilité utilisée par les contrôles et les tableaux de bord.
+RATIO_ACIER_POTEAUX_RETENU_KG_M3 = 100.0
+RATIO_ACIER_POUTRES_RETENU_KG_M3 = 130.0   # poutres ET longrines
+RATIO_ACIER_DALLES_RETENU_KG_M3 = 90.0
+RATIO_ACIER_CHAINAGES_KG_M3 = 80.0          # chaînage bas, chaînage haut / linteaux
 
 # Densité de l'acier (pour convertir une section théorique en poids réel)
 DENSITE_ACIER_KG_M3 = 7850.0

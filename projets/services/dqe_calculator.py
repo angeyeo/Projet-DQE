@@ -23,11 +23,11 @@ from collections import defaultdict
 from projets.models import Projet, ElementStructurel, PosteComplementaire
 
 from moteur_calcul.constantes import (
-    RATIO_ACIER_POTEAUX_KG_M3,
-    RATIO_ACIER_POUTRES_KG_M3,
+    RATIO_ACIER_POTEAUX_RETENU_KG_M3,
+    RATIO_ACIER_POUTRES_RETENU_KG_M3,
     RATIO_ACIER_SEMELLES_KG_M3,
-    RATIO_ACIER_DALLES_KG_M3,
-    RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3,
+    RATIO_ACIER_DALLES_RETENU_KG_M3,
+    RATIO_ACIER_CHAINAGES_KG_M3,
     DENSITE_ACIER_KG_M3,
 )
 from moteur_calcul.formules.postes_ratio import calculer_poste_ratio
@@ -71,17 +71,26 @@ LIBELLES_PRIX = {
 }
 
 # Ratios d'acier (kg/m³) utilisés quand le moteur ne fournit pas le poids
-# réel : milieu de chaque fourchette de moteur_calcul.constantes
-# (document technicien BTP, section 5.2). Valeurs documentées, signalées
-# comme hypothèse sur chaque ligne concernée.
+# réel. Poteaux, poutres, longrines, dalles et chaînages : valeurs du
+# technicien BTP (règle B4, issue #64, 21/10/2026). Semelles : milieu de
+# la fourchette (le poids réel des semelles est calculé par le moteur ;
+# ce ratio ne sert qu'en secours). Signalés comme hypothèse sur chaque ligne.
 RATIOS_ACIER_KG_M3 = {
-    "poteau": Decimal(str(sum(RATIO_ACIER_POTEAUX_KG_M3) / 2)),    # 125
-    "poutre": Decimal(str(sum(RATIO_ACIER_POUTRES_KG_M3) / 2)),    # 150
-    "longrine": Decimal(str(sum(RATIO_ACIER_POUTRES_KG_M3) / 2)),  # même physique que poutre
+    "poteau": Decimal(str(RATIO_ACIER_POTEAUX_RETENU_KG_M3)),      # 100
+    "poutre": Decimal(str(RATIO_ACIER_POUTRES_RETENU_KG_M3)),      # 130
+    "longrine": Decimal(str(RATIO_ACIER_POUTRES_RETENU_KG_M3)),    # 130, même physique que poutre
     "semelle": Decimal(str(sum(RATIO_ACIER_SEMELLES_KG_M3) / 2)),  # 50
     "semelle_filante": Decimal(str(sum(RATIO_ACIER_SEMELLES_KG_M3) / 2)),
-    "dalle": Decimal(str(sum(RATIO_ACIER_DALLES_KG_M3) / 2)),      # 85
-    "chainage": Decimal(str(RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3)),  # 90
+    "dalle": Decimal(str(RATIO_ACIER_DALLES_RETENU_KG_M3)),        # 90
+    "chainage": Decimal(str(RATIO_ACIER_CHAINAGES_KG_M3)),         # 80
+}
+
+
+# Origine affichée de chaque ratio (traçabilité de l'hypothèse).
+ORIGINE_RATIO_ACIER = {
+    **dict.fromkeys(("poteau", "poutre", "longrine", "dalle", "chainage"),
+                    "valeur du technicien BTP, règle B4 du 21/10/2026"),
+    **dict.fromkeys(("semelle", "semelle_filante"), "milieu de la fourchette de référence"),
 }
 
 
@@ -413,7 +422,7 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict, probl
         source_acier = "ratio_reference"
         hyp_acier = (
             f"{TYPES_PLURIEL.get(element.type_element, element.type_element)} : acier estimé à "
-            f"{_nombre_json(ratio)} kg par m³ de béton (milieu de la fourchette de référence), "
+            f"{_nombre_json(ratio)} kg par m³ de béton ({ORIGINE_RATIO_ACIER.get(element.type_element, 'ratio de référence')}), "
             f"le ferraillage détaillé n'étant pas calculé pour ces éléments."
         )
 

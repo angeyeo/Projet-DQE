@@ -18,6 +18,7 @@ from ..constantes import (
     EPAISSEUR_AGGLOS_15_M,
     EPAISSEUR_AGGLOS_10_M,
     COEFFICIENT_PLEIN_MACONNERIE_ELEVATION,
+    RATIO_ACIER_CHAINAGES_KG_M3,
     RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3,
     RATIO_ACIER_RAIDISSEUR_AMORCE_KG_M3,
     RATIO_COFFRAGE_ELEMENT_LINEAIRE_LEGER_M2_M3,
@@ -139,7 +140,7 @@ def _poste_chainage(geometrie):
     longueur = geometrie["longueur_chainage_m"]
     lignes = _lignes_element_lineaire(
         "chaînage bas", longueur, SECTION_CHAINAGE_M2,
-        RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3, RATIO_COFFRAGE_ELEMENT_LINEAIRE_LEGER_M2_M3,
+        RATIO_ACIER_CHAINAGES_KG_M3, RATIO_COFFRAGE_ELEMENT_LINEAIRE_LEGER_M2_M3,
     )
     # Chaînage haut / linteaux : même trame en général -- hypothèse
     # signalée sur les lignes quand la longueur n'est pas fournie.
@@ -150,7 +151,7 @@ def _poste_chainage(geometrie):
         hypothese = "Longueur du chaînage haut non fournie : prise égale au chaînage bas."
     lignes_haut = _lignes_element_lineaire(
         "chaînage haut / linteaux", longueur_haut, SECTION_CHAINAGE_M2,
-        RATIO_ACIER_ELEMENT_LINEAIRE_LEGER_KG_M3, RATIO_COFFRAGE_ELEMENT_LINEAIRE_LEGER_M2_M3,
+        RATIO_ACIER_CHAINAGES_KG_M3, RATIO_COFFRAGE_ELEMENT_LINEAIRE_LEGER_M2_M3,
     )
     if hypothese:
         for l in lignes_haut:

@@ -276,9 +276,9 @@ def _ratios_par_type(lignes):
             "ratio_kg_m3": ratio,
             "fourchette": [mini, maxi],
             "dans_fourchette": mini <= ratio <= maxi,
-            # Acier estimé AU ratio de référence : le ratio obtenu est par
-            # construction le milieu de la fourchette -- la comparaison ne
-            # prouve rien et l'interface doit le dire.
+            # Acier estimé AU ratio retenu : le ratio obtenu est par
+            # construction ce ratio -- la comparaison ne prouve rien et
+            # l'interface doit le dire.
             "acier_estime": estime[t],
         })
     return sorted(res, key=lambda r: r["type_element"])

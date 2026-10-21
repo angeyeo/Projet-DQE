@@ -63,7 +63,7 @@ class DQECalculatorTestCase(TestCase):
         # surf_coffrage = 4 * 0.20 * 3.0 = 2.4 m2
         self.assertEqual(coffrage["quantite"], 2.4)
         # poids_acier = 0.12 * 125 = 15.0 kg
-        self.assertEqual(acier["quantite"], 15.0)
+        self.assertEqual(acier["quantite"], 12.0)  # 0,12 m³ × 100 kg/m³ (B4, 21/10/2026)
 
     def test_calculer_element_poteau_poids_moteur(self):
         self.poteau.resultat_valide = {
@@ -90,7 +90,7 @@ class DQECalculatorTestCase(TestCase):
         self.assertEqual(beton["quantite"], 0.40)
         self.assertEqual(coffrage["quantite"], 5.0)
         # poids_acier = 0.40 * 150 = 60 kg
-        self.assertEqual(acier["quantite"], 60.0)
+        self.assertEqual(acier["quantite"], 52.0)  # 0,40 m³ × 130 kg/m³ (B4)
 
     def test_calculer_element_semelle(self):
         lignes = calculer_element_dqe(self.semelle, BAREME_TEST)
@@ -164,7 +164,7 @@ class DQECalculatorTestCase(TestCase):
 
         self.assertEqual(beton["quantite"], 7.5)
         self.assertEqual(coffrage["quantite"], 50.0)
-        self.assertEqual(acier["quantite"], 637.5)
+        self.assertEqual(acier["quantite"], 675.0)  # 7,5 m³ × 90 kg/m³ (B4)
 
     def test_calculer_element_semelle_filante_poids_moteur(self):
         sf = ElementStructurel.objects.create(
@@ -257,17 +257,19 @@ class DQECalculatorTestCase(TestCase):
         # Cost : 65.8 * 12 000 = 789 600 FCFA
         self.assertEqual(dqe_data["sous_totaux"]["coffrage"], 789600)
 
-        # Acier : 15.0 (poteau) + 60.0 (poutre) + 45.0 (semelle) + 637.5 (dalle) + 75.0 (semelle filante) = 832.5 kg
-        # Cost : 832.5 * 800 = 666 000 FCFA
-        self.assertEqual(dqe_data["sous_totaux"]["acier"], 666000)
+        # Acier (ratios B4 du 21/10/2026) : 12.0 (poteau, 100) + 52.0 (poutre, 130) + 45.0 (semelle)
+        # + 675.0 (dalle, 90) + 75.0 (semelle filante) = 859.0 kg
+        # Cost : 859.0 * 800 = 687 200 FCFA
+        self.assertEqual(dqe_data["sous_totaux"]["acier"], 687200)
 
-        # Total Général : 1 042 000 + 789 600 + 666 000 = 2 497 600 FCFA
-        self.assertEqual(dqe_data["total_general"], 2497600)
+        # Total Général : 1 042 000 + 789 600 + 687 200 = 2 518 800 FCFA
+        self.assertEqual(dqe_data["total_general"], 2518800)
 
     def test_acier_au_ratio_signale_comme_estimation(self):
         acier = next(l for l in calculer_element_dqe(self.poteau, BAREME_TEST) if l["categorie"] == "ACIER")
         self.assertEqual(acier["source_quantite"], "ratio_reference")
-        self.assertIn("125", acier["hypothese"])
+        self.assertIn("100", acier["hypothese"])
+        self.assertIn("technicien BTP, règle B4", acier["hypothese"])
 
     def test_prix_manquant_erreur_explicite_sans_valeur_par_defaut(self):
         bareme = {k: v for k, v in BAREME_TEST.items() if k != "acier_kg"}
@@ -352,10 +354,11 @@ class DQECalculatorTestCase(TestCase):
 
     def test_synthese_ratio_acier_beton(self):
         dqe = calculer_projet_dqe(self.projet, BAREME_TEST)
-        # béton 0,12 + 0,40 + 0,90 = 1,42 m³ ; acier 15 + 60 + 45 = 120 kg
+        # béton 0,12 + 0,40 + 0,90 = 1,42 m³ ; acier 12 + 52 + 45 = 109 kg (ratios B4)
+        # ratio = 109 / 1,42 = 76,76… → 76,8 kg/m³
         self.assertEqual(dqe["synthese"]["beton_m3"], 1.42)
-        self.assertEqual(dqe["synthese"]["acier_kg"], 120.0)
-        self.assertEqual(dqe["synthese"]["ratio_acier_kg_m3"], 84.5)
+        self.assertEqual(dqe["synthese"]["acier_kg"], 109.0)
+        self.assertEqual(dqe["synthese"]["ratio_acier_kg_m3"], 76.8)
 
 
 class DQEExportersTestCase(TestCase):

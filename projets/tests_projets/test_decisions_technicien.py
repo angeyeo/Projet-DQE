@@ -156,14 +156,14 @@ class Decision4MetreDallePoutre(TestCase):
     def test_deduction_appliquee(self):
         """Panneau 4 × 5 m entre axes, poutres b = 20 cm, e = 15 cm :
         béton = (4 − 0,2) × (5 − 0,2) × 0,15 = 3,8 × 4,8 × 0,15 = 2,736 m³ (au lieu de 3,000) ;
-        acier (ratio 85 kg/m³) = 232,56 kg ; coffrage de sous-face inchangé = 20 m²."""
+        acier (ratio 90 kg/m³, B4) = 2,736 × 90 = 246,24 kg ; coffrage de sous-face inchangé = 20 m²."""
         self.poutre("PX1", 20)
         self.dalle()
         l, d = self.lignes_dalle()
         self.assertEqual(l["BETON"]["quantite"], 2.736)
         self.assertEqual(l["BETON"]["formule_quantite"], "(Lx − b) × (Ly − b) × e = (4 − 0,2) × (5 − 0,2) × 0,15")
         self.assertIn("règle de métré validée", l["BETON"]["hypothese"])
-        self.assertEqual(l["ACIER"]["quantite"], 232.56)
+        self.assertEqual(l["ACIER"]["quantite"], 246.24)
         self.assertEqual(l["COFFRAGE"]["quantite"], 20.0)
         self.assertIn(l["BETON"]["hypothese"], d["hypotheses"])
 
@@ -264,7 +264,7 @@ class ToitureCharpenteAPI(TestCase):
                                   nb_travees_x=2, nb_travees_y=2, portee_x=4.0, portee_y=3.5, contrainte_sol_kn_m2=150,
                                   type_toiture="charpente")
         hyp = parametres_structure(p, avec_grille=True)["hyp"]
-        self.assertEqual((hyp.type_toiture, hyp.g_toiture_kn_m2), ("charpente", 2.5))
+        self.assertEqual((hyp.type_toiture, hyp.g_toiture_kn_m2), ("charpente", 1.5))  # B14, 21/10/2026
         self.assertEqual(Projet._meta.get_field("type_toiture").default, "dalle")
         self.assertEqual(_nettoyer({"type_toiture": "dalle"}), {"type_toiture": "dalle"})
         with self.assertRaises(VarianteInvalide):
