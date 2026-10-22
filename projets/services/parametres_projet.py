@@ -20,8 +20,22 @@ class ParametresIncomplets(Exception):
         )
 
 
-# Message affiché partout où la structure saisie intervient (résultats, DQE).
+# Messages affichés partout où une structure saisie intervient (résultats, DQE).
 AVERTISSEMENT_STRUCTURE_SAISIE = "Structure placée par l'utilisateur, non lue dans le plan."
+AVERTISSEMENT_STRUCTURE_MIXTE = ("Structure modifiée par l'utilisateur : {n} poteau(x) ajouté(s) ou déplacé(s) à la "
+                                 "main (origine « saisi ») ; les autres viennent du plan ou de la trame.")
+# Débuts de ces messages (pour les remplacer après un changement de source).
+MESSAGES_SOURCE_STRUCTURE = ("Structure placée par l'utilisateur", "Structure modifiée par l'utilisateur")
+
+
+def messages_source_structure(projet):
+    """Rappel permanent de l'origine de la structure (issues #93 et #94)."""
+    if projet.source_structure == "saisie":
+        return [AVERTISSEMENT_STRUCTURE_SAISIE]
+    if projet.source_structure == "mixte":
+        n = sum(1 for p in projet.poteaux_saisis or [] if p.get("origine") == "saisi")
+        return [AVERTISSEMENT_STRUCTURE_MIXTE.format(n=n)]
+    return []
 
 
 def resoudre_charge_exploitation(projet):
@@ -95,10 +109,9 @@ def parametres_structure(projet, avec_grille: bool):
         pourcentage_baies_murs=projet.pourcentage_baies_murs or 0.0,
     )
     hypotheses = hyp.messages()
-    if projet.source_structure == "saisie":
-        # Rappel permanent (issue #93) : positions des poteaux placées par
-        # l'utilisateur sur un plan d'architecte, pas lues dans le fichier.
-        hypotheses = [AVERTISSEMENT_STRUCTURE_SAISIE] + hypotheses
+    # Rappel permanent (issues #93, #94) : positions des poteaux placées ou
+    # modifiées par l'utilisateur, pas (toutes) lues dans le fichier.
+    hypotheses = messages_source_structure(projet) + hypotheses
 
     params = {
         "usage_batiment": projet.usage_batiment,

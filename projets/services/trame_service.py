@@ -110,7 +110,8 @@ def creer_elements_depuis_positions(projet, empreinte, prm, origine):
     pas créé : il est signalé dans les avertissements, jamais inventé.
     À appeler DANS une transaction (tout ou rien).
 
-    empreinte : liste de dicts {"x", "y", "guid", ...}.
+    empreinte : liste de dicts {"x", "y", "guid", ...} ; une clé "origine"
+    facultative fixe l'origine de CE poteau (sinon `origine`).
     Renvoie (elements_crees, hypotheses, avertissements, troncons_non_calcules).
     """
     q = prm["charge_exploitation"]
@@ -141,7 +142,7 @@ def creer_elements_depuis_positions(projet, empreinte, prm, origine):
             position_x=d["x"], position_y=d["y"],
             hauteur_poteau=prm["hauteur_etage"], charge_calculee=d["charge_elu_kn"],
             charge_service=d["charge_els_kn"],
-            resultat_calcul=d["resultat_poteau"], origine_geometrie=origine,
+            resultat_calcul=d["resultat_poteau"], origine_geometrie=p.get("origine", origine),
         )
         poteau_par_guid[p.get("guid")] = poteau
         semelle = ElementStructurel.objects.create(
@@ -151,7 +152,7 @@ def creer_elements_depuis_positions(projet, empreinte, prm, origine):
             position_x=d["x"], position_y=d["y"], poteau_associe=poteau,
             charge_calculee=d["charge_elu_semelle_kn"], charge_service=d["charge_els_semelle_kn"],
             taux_travail_sol=prm["contrainte_sol_kn_m2"],
-            resultat_calcul=d["resultat_semelle"], origine_geometrie=origine,
+            resultat_calcul=d["resultat_semelle"], origine_geometrie=p.get("origine", origine),
         )
         elements_crees += [poteau, semelle]
 
@@ -182,7 +183,11 @@ def creer_elements_depuis_positions(projet, empreinte, prm, origine):
             position_y=(debut.position_y + fin.position_y) / 2,
             portee=pd["portee_m"], charge_lineaire=pd["charge_lineaire_kn_m"],
             resultat_calcul=pd["resultat_poutre"],
-            poteau_origine=debut, poteau_destination=fin, origine_geometrie=origine,
+            poteau_origine=debut, poteau_destination=fin,
+            # Une poutre suit ses deux poteaux : même origine s'ils
+            # concordent, sinon « saisi » (elle dépend d'un choix manuel).
+            origine_geometrie=(debut.origine_geometrie if debut.origine_geometrie == fin.origine_geometrie
+                               else ElementStructurel.OrigineGeometrie.SAISI),
         ))
     return elements_crees, hypotheses, avertissements, troncons_non_calcules
 

@@ -153,6 +153,7 @@ class Projet(models.Model):
         TRAME = "trame", "Trame régulière"
         PLAN = "plan", "Lue dans le plan importé"
         SAISIE = "saisie", "Placée par l'utilisateur sur un plan d'architecte"
+        MIXTE = "mixte", "Plan ou trame modifiés par l'utilisateur (étape 2)"
 
     source_structure = models.CharField(
         max_length=10, choices=SourceStructure.choices, blank=True, default="")

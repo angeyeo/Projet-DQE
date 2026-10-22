@@ -4,6 +4,7 @@ import { dqeService } from '../api/dqeService';
 import Alerte from './ui/Alerte';
 import PlanMurs from './murs/PlanMurs';
 import { MESSAGE_STRUCTURE_SAISIE } from './import/messages';
+import ModifierStructure from './structure/ModifierStructure';
 
 const ND = <span className="texte-discret" title="Aucun résultat de calcul pour cet élément">ND</span>;
 
@@ -64,7 +65,7 @@ function Tableau({ titre, elements, entetes, cellules, explications, onExpliquer
   );
 }
 
-export default function Step2_Calculs({ sections, projet, hypotheses = [], avertissements = [], alertes = [], onEnregistrerMurs, onBack, onNext }) {
+export default function Step2_Calculs({ sections, projet, hypotheses = [], avertissements = [], alertes = [], onEnregistrerMurs, onModifierPoteaux, onRetablirStructure, onBack, onNext }) {
   const { poteaux = [], poutres = [], semelles = [], autres = [] } = sections || {};
   const total = poteaux.length + poutres.length + semelles.length + autres.length;
   const sansResultat = [...poteaux, ...poutres, ...semelles, ...autres].filter((e) => e.calculIndisponible).length;
@@ -97,7 +98,13 @@ export default function Step2_Calculs({ sections, projet, hypotheses = [], avert
       {projet?.source_structure === 'saisie' && (
         <Alerte type="attention" titre={MESSAGE_STRUCTURE_SAISIE}>
           Les {projet.poteaux_saisis?.length ?? 0} poteaux ont été placés sur un plan d&apos;architecte : vérifiez leur position
-          avant de valider. Pour les déplacer, revenez à l&apos;étape 1, onglet « Plan d&apos;architecte ».
+          avant de valider. Vous pouvez les modifier ci-dessous (« Modifier les poteaux sur le plan »).
+        </Alerte>
+      )}
+      {projet?.source_structure === 'mixte' && (
+        <Alerte type="attention" titre="Structure modifiée par l'utilisateur">
+          {projet.poteaux_saisis?.filter((p) => p.origine === 'saisi').length ?? 0} poteau(x) ajouté(s) ou déplacé(s) à la main
+          (origine « saisi ») ; les autres viennent du plan ou de la trame.
         </Alerte>
       )}
       {hypotheses.length > 0 && <Alerte type="info" titre="Hypothèses retenues par le moteur" liste={hypotheses} />}
@@ -114,6 +121,10 @@ export default function Step2_Calculs({ sections, projet, hypotheses = [], avert
       )}
 
       {total === 0 && <p className="texte-discret etat-vide-compact">Aucun élément : enregistrez les paramètres à l'étape 1 pour générer la trame.</p>}
+
+      {total > 0 && onModifierPoteaux && (
+        <ModifierStructure projet={projet} onAppliquer={onModifierPoteaux} onRetablirOrigine={onRetablirStructure} />
+      )}
 
       {total > 0 && onEnregistrerMurs && (
         <PlanMurs projet={projet} poidsRenseigne={projet?.poids_murs_kn_m2 != null} onEnregistrer={onEnregistrerMurs} />

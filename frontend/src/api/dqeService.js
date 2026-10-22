@@ -274,6 +274,9 @@ export function projetVersFormulaire(p) {
     // la structure vient des poteaux placés par l'utilisateur.
     planArchitecte: p.parametres_import?.mode === 'architecte',
     poteauxSaisis: p.poteaux_saisis || [],
+    // Structure modifiée à l'étape 2 (issue #94) : le calcul repart des
+    // poteaux enregistrés, pas de la trame ni du plan.
+    structureModifiee: p.source_structure === 'mixte',
     ifcImporte: !!p.fichier_import_origine && p.parametres_import?.mode !== 'architecte',
   };
 }
@@ -308,6 +311,8 @@ export const dqeService = {
       if (formulaire.planArchitecte) {
         resultat = await postJSON(`${API_BASE_URL}/projets/${projet.id}/placer_poteaux/`,
           { poteaux: formulaire.poteauxSaisis || [] });
+      } else if (formulaire.structureModifiee) {
+        resultat = await postJSON(`${API_BASE_URL}/projets/${projet.id}/placer_poteaux/`, {});
       } else if (formulaire.ifcImporte) {
         resultat = await postJSON(`${API_BASE_URL}/projets/${projet.id}/importer_plan/`, { confirmer: true });
       } else {
@@ -346,6 +351,10 @@ export const dqeService = {
     }));
   },
   getFondPlan: async (projetId) => getJSON(`${API_BASE_URL}/projets/${projetId}/fond_plan/`),
+  // Étape 2 : liste complète des poteaux voulue ; le serveur fixe l'origine
+  // de chacun et recalcule poutres, charges et semelles.
+  modifierPoteaux: async (projetId, poteaux) =>
+    postJSON(`${API_BASE_URL}/projets/${projetId}/modifier_poteaux/`, { poteaux: poteaux.map(({ x, y }) => ({ x, y })) }),
 
   // DXF à plusieurs plans : choix du plan des fondations (même endpoint,
   // sans fichier ; le serveur relit le DXF déjà déposé).
