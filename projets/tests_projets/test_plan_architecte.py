@@ -140,7 +140,7 @@ class APIPlanArchitecte(APITestCase):
         self.assertIn("Structure placée par l'utilisateur, non lue dans le plan.", r.data["hypotheses"])
         self.projet.refresh_from_db()
         self.assertEqual(self.projet.source_structure, Projet.SourceStructure.SAISIE)
-        self.assertEqual(self.projet.poteaux_saisis, GRILLE_3X3)
+        self.assertEqual(self.projet.poteaux_saisis, [{**p, "origine": "saisi"} for p in GRILLE_3X3])
         # Avertissement permanent : repris dans les hypothèses du projet (résultats et DQE).
         r = self.client.get(f"/api/projets/{self.projet.id}/")
         self.assertIn("Structure placée par l'utilisateur, non lue dans le plan.",
@@ -191,7 +191,7 @@ class APIPlanArchitecte(APITestCase):
         self.assertIn("aucun poteau n'a pu être calculé", r.data["erreur"])
         self.assertEqual(self.projet.elements.filter(type_element=T.POTEAU).count(), 9)
         self.projet.refresh_from_db()
-        self.assertEqual(self.projet.poteaux_saisis, GRILLE_3X3)
+        self.assertEqual(self.projet.poteaux_saisis, [{**p, "origine": "saisi"} for p in GRILLE_3X3])
 
     def test_validations(self):
         cas = [

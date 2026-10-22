@@ -61,6 +61,7 @@ const FORMULAIRE_VIDE = {
   ifcImporte: false,
   planArchitecte: false,
   poteauxSaisis: [],
+  structureModifiee: false,
 };
 
 const lireVue = () => {
@@ -179,6 +180,21 @@ export default function App() {
   const enregistrerMurs = async (murs) => {
     const f = { ...formulaire, ...murs };
     const res = await dqeService.enregistrerEtGenerer(f);
+    await courant.ouvrir(res.projetId);
+    setCalcul({ enCours: false, erreur: null, champs: [], hypotheses: res.hypotheses, avertissements: res.avertissements });
+  };
+
+  // Étape 2 (issue #94) : poteaux ajoutés / déplacés / supprimés sur le plan.
+  const modifierPoteaux = async (poteaux) => {
+    const res = await dqeService.modifierPoteaux(courant.projetId, poteaux);
+    await courant.ouvrir(courant.projetId);
+    setCalcul({ enCours: false, erreur: null, champs: [], hypotheses: res.hypotheses || [], avertissements: res.avertissements || [] });
+    return res;
+  };
+  // Annulation d'une modification faite sur une trame ou un plan importé :
+  // on relance le calcul d'origine (sans la liste modifiée).
+  const retablirStructureOrigine = async () => {
+    const res = await dqeService.enregistrerEtGenerer({ ...formulaire, structureModifiee: false });
     await courant.ouvrir(res.projetId);
     setCalcul({ enCours: false, erreur: null, champs: [], hypotheses: res.hypotheses, avertissements: res.avertissements });
   };
@@ -349,6 +365,8 @@ export default function App() {
             alertes={courant.projet?.alertes_plausibilite || []}
             avertissements={calcul.avertissements}
             onEnregistrerMurs={enregistrerMurs}
+            onModifierPoteaux={modifierPoteaux}
+            onRetablirStructure={retablirStructureOrigine}
             onBack={() => naviguer('step1')}
             onNext={() => naviguer('stepDalles')}
           />

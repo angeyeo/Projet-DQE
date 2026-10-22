@@ -101,7 +101,9 @@ from .services.approvisionnement import (
 from .services.dqe_exporters import exporter_approvisionnement_excel, exporter_dqe_excel, exporter_dqe_pdf
 from .services.evenements import enregistrer_evenement
 from .services.trame_service import creer_elements_depuis_positions, creer_elements_trame, murs_orphelins
-from .services.parametres_projet import AVERTISSEMENT_STRUCTURE_SAISIE, ParametresIncomplets, parametres_structure
+from .services.parametres_projet import (
+    MESSAGES_SOURCE_STRUCTURE, ParametresIncomplets, messages_source_structure, parametres_structure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -497,6 +499,42 @@ DISTANCE_MIN_POTEAUX_M = 0.30
 COORDONNEE_MAX_M = 1000.0
 
 
+# Tolérance de reconnaissance d'un poteau inchangé (arrondis d'affichage).
+TOLERANCE_POTEAU_INCHANGE_M = 0.01
+ORIGINE_PAR_SOURCE = {"trame": "trame", "plan": "plan", "saisie": "saisi", "mixte": ""}
+
+
+def _references_poteaux(projet):
+    """Poteaux actuels du projet avec leur origine (pour reconnaître ceux
+    que l'ingénieur n'a pas bougés). Élément antérieur au champ d'origine :
+    origine déduite de la source du projet si elle est connue, sinon vide."""
+    defaut = ORIGINE_PAR_SOURCE.get(projet.source_structure, "")
+    return [{"x": e.position_x, "y": e.position_y, "origine": e.origine_geometrie or defaut}
+            for e in projet.elements.filter(type_element=ElementStructurel.TypeElement.POTEAU)
+            if e.position_x is not None and e.position_y is not None] + list(projet.poteaux_saisis or [])
+
+
+def resoudre_origines(poteaux, references):
+    """Origine de chaque poteau, décidée par le SERVEUR : celle du poteau de
+    référence à la même position (à 1 cm près), sinon « saisi » (ajouté ou
+    déplacé par l'utilisateur)."""
+    import math
+
+    resultat = []
+    for p in poteaux:
+        origine = ElementStructurel.OrigineGeometrie.SAISI
+        for r in references:
+            try:
+                rx, ry = float(r["x"]), float(r["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if math.hypot(p["x"] - rx, p["y"] - ry) <= TOLERANCE_POTEAU_INCHANGE_M:
+                origine = r.get("origine") or ElementStructurel.OrigineGeometrie.SAISI
+                break
+        resultat.append({"x": p["x"], "y": p["y"], "origine": origine})
+    return resultat
+
+
 def _avec_conversion(reponse, conversion):
     """Ajoute à une réponse réussie la mention d'un DWG converti (traçabilité)."""
     if conversion and reponse.status_code == 200:
@@ -630,13 +668,16 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             with transaction.atomic():
                 elements_crees, hypotheses = creer_elements_trame(projet, prm)
                 projet.source_structure = Projet.SourceStructure.TRAME
-                projet.save(update_fields=["source_structure"])
+                projet.poteaux_saisis = []
+                projet.save(update_fields=["source_structure", "poteaux_saisis"])
         except (ValueError, EntreeInvalide) as exc:
             return Response(
                 {"erreur": f"Le moteur de calcul a refusé la trame : {exc}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Rappel d'une ancienne source (saisie, mixte) calculé avant le changement : retiré.
+        hypotheses = [m for m in hypotheses if not m.startswith(MESSAGES_SOURCE_STRUCTURE)]
         enregistrer_evenement(TypeEv.TRAME_GENEREE, utilisateur=request.user, projet=projet,
                               nb_elements=len(elements_crees))
         serializer = ElementStructurelSerializer(elements_crees, many=True)
@@ -810,9 +851,12 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             )
         avertissements += avert_creation
         projet.source_structure = Projet.SourceStructure.PLAN
-        projet.save(update_fields=["source_structure"])
+        projet.poteaux_saisis = []
+        projet.save(update_fields=["source_structure", "poteaux_saisis"])
 
         hypotheses.extend(murs_orphelins(prm["hyp"], elements_crees, troncons_non_calcules))
+        # Rappel d'une ancienne source (saisie, mixte) calculé avant le changement : retiré.
+        hypotheses = [m for m in hypotheses if not m.startswith(MESSAGES_SOURCE_STRUCTURE)]
         enregistrer_evenement(TypeEv.IMPORT_IFC, utilisateur=request.user, projet=projet,
                               nb_elements=len(elements_crees))
         serializer = ElementStructurelSerializer(elements_crees, many=True)
@@ -844,30 +888,29 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                             status=status.HTTP_404_NOT_FOUND)
         return self._reponse_fond_plan(projet)
 
-    @action(detail=True, methods=["post"])
-    def placer_poteaux(self, request, pk=None):
-        """Crée la structure à partir de poteaux PLACÉS PAR L'UTILISATEUR
-        (mode plan d'architecte, issue #93) : mêmes calculs que pour un plan
-        importé, éléments d'origine « saisi ». Sans liste dans la requête,
-        reprend les poteaux déjà enregistrés (régénération après une
-        modification des paramètres ou des murs).
-
-        Tout ou rien : en cas de refus du moteur, rien n'est modifié.
-        """
-        projet = self.get_object()
-        brut = request.data.get("poteaux", None) if isinstance(request.data, dict) else None
-        if brut is None:
-            brut = projet.poteaux_saisis
+    def _structure_depuis_positions(self, projet, brut, references):
+        """Valide les positions, fixe l'origine de chacune (voir
+        resoudre_origines), recalcule poteaux, semelles, poutres et charges
+        avec le moteur, puis enregistre la liste. Tout ou rien."""
         try:
-            poteaux = valider_poteaux_saisis(brut)
+            poteaux = resoudre_origines(valider_poteaux_saisis(brut), references)
         except ValueError as exc:
             return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         try:
             prm = parametres_structure(projet, avec_grille=False)
         except ParametresIncomplets as exc:
             return _reponse_parametres_incomplets(exc)
-        empreinte = [{"x": p["x"], "y": p["y"], "guid": f"saisi-{i}", "nom": f"poteau placé n° {i}"}
-                     for i, p in enumerate(poteaux, start=1)]
+        empreinte = [{**p, "guid": f"poteau-{i}", "nom": f"poteau n° {i}"} for i, p in enumerate(poteaux, start=1)]
+        origines = {p["origine"] for p in poteaux}
+        # Source du projet : tout saisi -> « saisie » ; tout revenu à la
+        # trame ou au plan d'origine (modification annulée) -> cette source,
+        # sans liste à conserver ; sinon « mixte ».
+        if origines == {ElementStructurel.OrigineGeometrie.SAISI}:
+            source, liste = Projet.SourceStructure.SAISIE, poteaux
+        elif origines in ({"trame"}, {"plan"}):
+            source, liste = origines.pop(), []
+        else:
+            source, liste = Projet.SourceStructure.MIXTE, poteaux
         try:
             with transaction.atomic():
                 elements_crees, hypotheses, avertissements, troncons_non_calcules = creer_elements_depuis_positions(
@@ -876,19 +919,53 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                     raise ValueError(
                         "aucun poteau n'a pu être calculé. Chaque poteau doit avoir au moins un voisin aligné "
                         "en X et un en Y (trame en deux directions) : " + " ; ".join(avertissements[:3]))
-                projet.poteaux_saisis = poteaux
-                projet.source_structure = Projet.SourceStructure.SAISIE
+                projet.poteaux_saisis = liste
+                projet.source_structure = source
                 projet.save(update_fields=["poteaux_saisis", "source_structure"])
         except (ValueError, EntreeInvalide) as exc:
             return Response({"erreur": f"Structure non créée : {exc}"}, status=status.HTTP_400_BAD_REQUEST)
-        hypotheses.append(AVERTISSEMENT_STRUCTURE_SAISIE)
+        hypotheses = [m for m in hypotheses if not m.startswith(MESSAGES_SOURCE_STRUCTURE)]
+        hypotheses.extend(messages_source_structure(projet))
         hypotheses.extend(murs_orphelins(prm["hyp"], elements_crees, troncons_non_calcules))
         serializer = ElementStructurelSerializer(elements_crees, many=True)
+        nb_saisis = sum(1 for p in poteaux if p["origine"] == ElementStructurel.OrigineGeometrie.SAISI)
         return Response(
             {"elements": serializer.data, "avertissements": avertissements,
-             "hypotheses": sorted(set(hypotheses))},
+             "hypotheses": sorted(set(hypotheses)),
+             "poteaux": {"total": len(poteaux), "saisis": nb_saisis, "conserves": len(poteaux) - nb_saisis}},
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=True, methods=["post"])
+    def placer_poteaux(self, request, pk=None):
+        """Crée la structure à partir de poteaux PLACÉS PAR L'UTILISATEUR
+        (mode plan d'architecte, issue #93) : mêmes calculs que pour un plan
+        importé, éléments d'origine « saisi ». Sans liste dans la requête,
+        reprend les poteaux déjà enregistrés, avec leur origine (régénération
+        après une modification des paramètres ou des murs).
+        """
+        projet = self.get_object()
+        brut = request.data.get("poteaux", None) if isinstance(request.data, dict) else None
+        if brut is None:
+            brut = projet.poteaux_saisis
+        return self._structure_depuis_positions(projet, brut, references=projet.poteaux_saisis or [])
+
+    @action(detail=True, methods=["post"])
+    def modifier_poteaux(self, request, pk=None):
+        """Étape 2 (issue #94) : remplace la liste des poteaux par celle
+        dessinée par l'ingénieur (ajouts, déplacements, suppressions), puis
+        recalcule poutres, charges et semelles avec le moteur.
+
+        Un poteau resté exactement à sa place garde son origine (trame ou
+        plan) ; un poteau ajouté ou déplacé devient « saisi ». L'origine est
+        fixée ici, jamais par le client.
+        """
+        projet = self.get_object()
+        brut = request.data.get("poteaux", None) if isinstance(request.data, dict) else None
+        if brut is None:
+            return Response({"erreur": "Envoyez la liste complète des poteaux (champ « poteaux »)."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return self._structure_depuis_positions(projet, brut, references=_references_poteaux(projet))
 
     @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser])
     def analyser_plan_image(self, request, pk=None):

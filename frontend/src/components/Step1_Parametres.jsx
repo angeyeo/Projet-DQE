@@ -279,6 +279,14 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         </button>
       </div>
 
+      {projectData.structureModifiee && !projectData.planArchitecte && (
+        <Alerte type="attention" titre="Structure modifiée à l'étape 2"
+          action={{ libelle: 'Revenir à la structure d’origine', onClick: () => updateProjectData({ structureModifiee: false }) }}>
+          Le prochain calcul repart des poteaux modifiés à la main, pas de la trame ni du plan importé. Pour abandonner ces
+          modifications, revenez à la structure d&apos;origine puis relancez le calcul.
+        </Alerte>
+      )}
+
       <div id="panneau-plan" role="tabpanel"
         aria-labelledby={projectData.planArchitecte ? 'onglet-plan-architecte' : 'onglet-plan-structure'}>
       {projectData.planArchitecte ? (
