@@ -32,8 +32,8 @@ export default function PlanArchitecte({ projectData, updateProjectData, assurer
     const file = e.target.files?.[0];
     e.target.value = ''; // permet de redéposer le même fichier (issue #88)
     if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.dxf')) {
-      setEtat({ chargement: false, erreur: 'Le mode « Plan d’architecte » accepte les fichiers DXF : exportez le plan en DXF depuis votre logiciel.' });
+    if (!/\.(dxf|dwg)$/i.test(file.name)) {
+      setEtat({ chargement: false, erreur: 'Le mode « Plan d’architecte » accepte les fichiers DXF ou DWG : exportez le plan en DXF depuis votre logiciel (voir l’aide ci-dessous).' });
       return;
     }
     setEtat({ chargement: true, erreur: null });
@@ -66,8 +66,8 @@ export default function PlanArchitecte({ projectData, updateProjectData, assurer
       <div className="plan-architecte-depot">
         <label className="btn btn-secondary">
           {etat.chargement ? <Loader2 size={16} className="spin" /> : <UploadCloud size={16} />}
-          <span>{fond ? 'Remplacer le plan d’architecte (DXF)' : 'Déposer le plan d’architecte (DXF)'}</span>
-          <input type="file" accept=".dxf" className="sr-only" onChange={deposer} disabled={etat.chargement} />
+          <span>{fond ? 'Remplacer le plan d’architecte (DXF ou DWG)' : 'Déposer le plan d’architecte (DXF ou DWG)'}</span>
+          <input type="file" accept=".dxf,.dwg" className="sr-only" onChange={deposer} disabled={etat.chargement} />
         </label>
         {fond && (
           <span className="texte-discret">
@@ -92,7 +92,7 @@ export default function PlanArchitecte({ projectData, updateProjectData, assurer
       ) : (
         !etat.chargement && (
           <p className="texte-discret etat-vide-compact">
-            Déposez le DXF de l&apos;architecte (en mètres, centimètres ou millimètres) pour l&apos;afficher en fond et y placer les poteaux.
+            Déposez le DXF (ou DWG) de l&apos;architecte (en mètres, centimètres ou millimètres) pour l&apos;afficher en fond et y placer les poteaux.
           </p>
         )
       )}

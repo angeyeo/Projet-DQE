@@ -1464,3 +1464,13 @@ button.account-card { width: 100%; border: none; background: transparent; color:
   .editeur-curseur { margin-left: 0; width: 100%; }
   .editeur-champs .form-control { width: 6rem; }
 }
+
+/* ---- Aide « comment exporter » (issue #95) ---- */
+.aide-export { margin: 0 0 1.75rem; border: 1px solid var(--core-border); border-radius: var(--radius-md); background: var(--core-surface); }
+.aide-export summary { display: flex; align-items: center; gap: 0.5rem; padding: 0.75rem 1rem; cursor: pointer; font-weight: 600; color: var(--ink-700); }
+.aide-export summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.aide-export[open] summary { border-bottom: 1px solid var(--core-border-subtle); }
+.aide-export-colonnes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 1.25rem; padding: 1rem; }
+.aide-export h4 { margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--ink-900); }
+.aide-export ol { margin: 0 0 0.5rem; padding-left: 1.25rem; font-size: 0.88rem; color: var(--ink-700); display: flex; flex-direction: column; gap: 0.35rem; }
+.aide-export kbd { font-family: var(--font-mono); font-size: 0.8rem; padding: 0 0.3rem; border: 1px solid var(--core-border); border-radius: 4px; background: var(--core-bg); }

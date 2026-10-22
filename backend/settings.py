@@ -89,6 +89,10 @@ SIMPLE_JWT = {
 
 # Limite d'upload pour les images de plans (Phase A Vision)
 PLAN_IMAGE_MAX_BYTES = int(os.getenv("PLAN_IMAGE_MAX_BYTES", str(5 * 1024 * 1024))) # 5 Mo par défaut
+# Convertisseur DWG -> DXF (GNU LibreDWG, outil dwg2dxf) : chemin explicite,
+# sinon recherché dans le PATH. Absent : les DWG sont refusés avec un
+# message d'export (issue #95). Aucune valeur secrète.
+DWG2DXF_PATH = os.getenv("DWG2DXF_PATH", "")
 
 # --- Envoi d'email (invitations, réinitialisation de mot de passe) ---
 # Sans EMAIL_HOST défini (dev/tests), on retombe sur le backend "console" :
