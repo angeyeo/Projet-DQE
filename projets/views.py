@@ -100,8 +100,8 @@ from .services.approvisionnement import (
 )
 from .services.dqe_exporters import exporter_approvisionnement_excel, exporter_dqe_excel, exporter_dqe_pdf
 from .services.evenements import enregistrer_evenement
-from .services.trame_service import TYPES_TRAME, creer_elements_trame, murs_orphelins
-from .services.parametres_projet import ParametresIncomplets, parametres_structure
+from .services.trame_service import creer_elements_depuis_positions, creer_elements_trame, murs_orphelins
+from .services.parametres_projet import AVERTISSEMENT_STRUCTURE_SAISIE, ParametresIncomplets, parametres_structure
 
 logger = logging.getLogger(__name__)
 
@@ -488,8 +488,43 @@ def _message_format_refuse(extension):
     return conseils.get(extension, f"Format « {extension or 'inconnu'} » non pris en charge : plans IFC ou DXF uniquement.")
 
 
-def _virgule_m(v):
-    return f"{round(v, 2):g} m".replace(".", ",")
+MODE_ARCHITECTE = "architecte"
+NB_POTEAUX_SAISIS_MAX = 500
+DISTANCE_MIN_POTEAUX_M = 0.30
+COORDONNEE_MAX_M = 1000.0
+
+
+def _est_mode_architecte(projet):
+    return bool(projet.fichier_import_origine) and (projet.parametres_import or {}).get("mode") == MODE_ARCHITECTE
+
+
+def valider_poteaux_saisis(brut):
+    """Liste [{"x", "y"}] en mètres, validée côté serveur (le frontend
+    n'est pas une frontière de sécurité). Lève ValueError avec un message
+    compréhensible ; ne corrige ni n'arrondit rien en silence."""
+    import math
+
+    if not isinstance(brut, list) or not brut:
+        raise ValueError("Placez au moins un poteau sur le plan avant de lancer le calcul.")
+    if len(brut) > NB_POTEAUX_SAISIS_MAX:
+        raise ValueError(f"{len(brut)} poteaux placés : {NB_POTEAUX_SAISIS_MAX} au maximum.")
+    poteaux = []
+    for i, p in enumerate(brut, start=1):
+        try:
+            x, y = float(p["x"]), float(p["y"])
+        except (TypeError, KeyError, ValueError):
+            raise ValueError(f"Poteau n° {i} : coordonnées x et y manquantes ou non numériques.") from None
+        if not (math.isfinite(x) and math.isfinite(y)) or not (-COORDONNEE_MAX_M <= x <= COORDONNEE_MAX_M
+                                                                 and -COORDONNEE_MAX_M <= y <= COORDONNEE_MAX_M):
+            raise ValueError(f"Poteau n° {i} : coordonnées hors limites (± {COORDONNEE_MAX_M:g} m).")
+        for j, q in enumerate(poteaux, start=1):
+            d = math.hypot(x - q["x"], y - q["y"])
+            if d < DISTANCE_MIN_POTEAUX_M:
+                raise ValueError(
+                    f"Poteaux n° {j} et n° {i} distants de {d * 100:.0f} cm : deux poteaux doivent être à au moins "
+                    f"{DISTANCE_MIN_POTEAUX_M * 100:.0f} cm l'un de l'autre (doublon probable).")
+        poteaux.append({"x": x, "y": y})
+    return poteaux
 
 
 class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
@@ -583,6 +618,8 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         try:
             with transaction.atomic():
                 elements_crees, hypotheses = creer_elements_trame(projet, prm)
+                projet.source_structure = Projet.SourceStructure.TRAME
+                projet.save(update_fields=["source_structure"])
         except (ValueError, EntreeInvalide) as exc:
             return Response(
                 {"erreur": f"Le moteur de calcul a refusé la trame : {exc}"},
@@ -631,6 +668,7 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         )
 
         plan_choisi = request.data.get("plan")
+        mode_architecte = str(request.data.get("mode", "")).strip().lower() == MODE_ARCHITECTE
         if fichier is None and not confirmer and not plan_choisi:
             return Response(
                 {"erreur": "Fournissez un plan IFC ou DXF (champ \"fichier\") pour un aperçu, ou "
@@ -642,9 +680,6 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             from moteur_calcul.import_dxf.lecture_dxf import AucunPoteauDXF, FichierDXFInvalide
             from moteur_calcul.import_ifc.lecture_ifc import (
                 AucunPoteauDetecte, FichierIFCInvalide, analyser_fichier_ifc,
-            )
-            from moteur_calcul.formules.trame import (
-                detecter_poutres_adjacentes, generer_poteau_depuis_position_reelle,
             )
         except ImportError as exc:
             return Response(
@@ -662,6 +697,16 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                     {"erreur": f"Plan trop volumineux ({fichier.size / 1048576:.1f} Mo) : "
                                f"{TAILLE_MAX_PLAN_OCTETS // 1048576} Mo au maximum."},
                     status=status.HTTP_400_BAD_REQUEST)
+            if mode_architecte:
+                if extension != ".dxf":
+                    return Response(
+                        {"erreur": "Le mode « Plan d'architecte » accepte les fichiers DXF : exportez le plan en "
+                                   "DXF (en mètres, centimètres ou millimètres) depuis votre logiciel."},
+                        status=status.HTTP_400_BAD_REQUEST)
+                projet.fichier_import_origine = fichier
+                projet.parametres_import = {"format": "dxf", "mode": MODE_ARCHITECTE}
+                projet.save(update_fields=["fichier_import_origine", "parametres_import"])
+                return self._reponse_fond_plan(projet)
             projet.fichier_import_origine = fichier
             projet.parametres_import = {"format": extension.lstrip(".")}
             projet.save(update_fields=["fichier_import_origine", "parametres_import"])
@@ -679,6 +724,11 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                 {"erreur": "Aucun plan importé au préalable pour ce projet : envoyez d'abord un fichier IFC ou DXF."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if _est_mode_architecte(projet):
+            return Response(
+                {"erreur": "Ce projet utilise un plan d'architecte : la structure n'est pas lue dans le fichier. "
+                           "Placez les poteaux sur le plan (placer_poteaux)."},
+                status=status.HTTP_400_BAD_REQUEST)
         format_plan = _extension_plan(projet.fichier_import_origine.name)
         if plan_choisi and not confirmer:
             # Choix du plan des fondations dans un DXF à plusieurs plans.
@@ -717,88 +767,91 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        q = prm["charge_exploitation"]
         avertissements = list(resultat.get("avertissements", []))
-        hypotheses = list(prm["hypotheses"])
-        elements_crees = []
         try:
             with transaction.atomic():
-                projet.elements.filter(type_element__in=TYPES_TRAME).delete()
-                poteau_par_guid = {}
-                compteur = 0
-                for p in empreinte:
-                    try:
-                        d = generer_poteau_depuis_position_reelle(
-                            p, empreinte, q, prm["hauteur_etage"],
-                            nb_niveaux=prm["nb_niveaux"], usage_batiment=prm["usage_batiment"],
-                            taux_travail_sol=prm["contrainte_sol_kn_m2"], hyp=prm["hyp"],
-                        )
-                    except ValueError as exc:
-                        # Poteau sans trame 2D exploitable : signalé, jamais inventé.
-                        avertissements.append(str(exc))
-                        continue
-                    hypotheses.extend(d.get("hypotheses", []))
-                    compteur += 1
-                    poteau = ElementStructurel.objects.create(
-                        projet=projet, identifiant=f"P{compteur}",
-                        type_element=ElementStructurel.TypeElement.POTEAU,
-                        nombre_identiques=prm["nb_niveaux"],
-                        position=ElementStructurel.Position.SUPERSTRUCTURE,
-                        position_x=d["x"], position_y=d["y"],
-                        hauteur_poteau=prm["hauteur_etage"], charge_calculee=d["charge_elu_kn"],
-                        charge_service=d["charge_els_kn"],
-                        resultat_calcul=d["resultat_poteau"],
-                    )
-                    poteau_par_guid[p.get("guid")] = poteau
-                    semelle = ElementStructurel.objects.create(
-                        projet=projet, identifiant=f"S{compteur}",
-                        type_element=ElementStructurel.TypeElement.SEMELLE,
-                        position=ElementStructurel.Position.INFRASTRUCTURE,
-                        position_x=d["x"], position_y=d["y"], poteau_associe=poteau,
-                        charge_calculee=d["charge_elu_semelle_kn"], charge_service=d["charge_els_semelle_kn"],
-                        taux_travail_sol=prm["contrainte_sol_kn_m2"],
-                        resultat_calcul=d["resultat_semelle"],
-                    )
-                    elements_crees += [poteau, semelle]
-
-                compteur_poutre = 0
-                segments_ignores, troncons_non_calcules = [], []
-                poutres_detectees = detecter_poutres_adjacentes(
-                    empreinte, q, hyp=prm["hyp"], nb_niveaux=prm["nb_niveaux"],
-                    hauteur_etage=prm["hauteur_etage"], segments_ignores=segments_ignores)
-                avertissements.extend(segments_ignores)
-                for pd in poutres_detectees:
-                    hypotheses.extend(m for m in pd["hypotheses"] if m.startswith("ALERTE : poutre"))
-                    origine = poteau_par_guid.get(pd["poteau_origine_guid"])
-                    destination = poteau_par_guid.get(pd["poteau_destination_guid"])
-                    if origine is None or destination is None:
-                        troncons_non_calcules.append(pd["resultat_poutre"].get("cle_segment"))
-                        avertissements.append(
-                            f"Poutre de {_virgule_m(pd['portee_m'])} (axe {pd['axe']}) non créée : un de ses deux "
-                            "poteaux n'a pas pu être calculé (voir l'avertissement du poteau).")
-                        continue
-                    compteur_poutre += 1
-                    elements_crees.append(ElementStructurel.objects.create(
-                        projet=projet,
-                        identifiant=f"{'PX' if pd['axe'] == 'x' else 'PY'}{compteur_poutre}",
-                        type_element=ElementStructurel.TypeElement.POUTRE,
-                        nombre_identiques=prm["nb_niveaux"],
-                        position=ElementStructurel.Position.SUPERSTRUCTURE,
-                        position_x=(origine.position_x + destination.position_x) / 2,
-                        position_y=(origine.position_y + destination.position_y) / 2,
-                        portee=pd["portee_m"], charge_lineaire=pd["charge_lineaire_kn_m"],
-                        resultat_calcul=pd["resultat_poutre"],
-                        poteau_origine=origine, poteau_destination=destination,
-                    ))
+                elements_crees, hypotheses, avert_creation, troncons_non_calcules = creer_elements_depuis_positions(
+                    projet, empreinte, prm, origine=ElementStructurel.OrigineGeometrie.PLAN)
         except (ValueError, EntreeInvalide) as exc:
             return Response(
                 {"erreur": f"Le moteur de calcul a refusé le plan importé : {exc}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        avertissements += avert_creation
+        projet.source_structure = Projet.SourceStructure.PLAN
+        projet.save(update_fields=["source_structure"])
 
         hypotheses.extend(murs_orphelins(prm["hyp"], elements_crees, troncons_non_calcules))
         enregistrer_evenement(TypeEv.IMPORT_IFC, utilisateur=request.user, projet=projet,
                               nb_elements=len(elements_crees))
+        serializer = ElementStructurelSerializer(elements_crees, many=True)
+        return Response(
+            {"elements": serializer.data, "avertissements": avertissements,
+             "hypotheses": sorted(set(hypotheses))},
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _reponse_fond_plan(self, projet):
+        from moteur_calcul.import_dxf.fond_plan import FondPlanVide, lire_fond_plan
+        from moteur_calcul.import_dxf.lecture_dxf import FichierDXFInvalide
+
+        try:
+            fond = lire_fond_plan(projet.fichier_import_origine.path)
+        except (FichierDXFInvalide, FondPlanVide) as exc:
+            return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except FileNotFoundError:
+            return Response({"erreur": "Le fichier du plan d'architecte n'est plus disponible sur le serveur : "
+                                       "déposez-le à nouveau."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"mode": MODE_ARCHITECTE, **fond}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def fond_plan(self, request, pk=None):
+        """Fond de plan d'architecte déjà déposé (affichage seulement)."""
+        projet = self.get_object()
+        if not _est_mode_architecte(projet):
+            return Response({"erreur": "Aucun plan d'architecte n'a été déposé pour ce projet."},
+                            status=status.HTTP_404_NOT_FOUND)
+        return self._reponse_fond_plan(projet)
+
+    @action(detail=True, methods=["post"])
+    def placer_poteaux(self, request, pk=None):
+        """Crée la structure à partir de poteaux PLACÉS PAR L'UTILISATEUR
+        (mode plan d'architecte, issue #93) : mêmes calculs que pour un plan
+        importé, éléments d'origine « saisi ». Sans liste dans la requête,
+        reprend les poteaux déjà enregistrés (régénération après une
+        modification des paramètres ou des murs).
+
+        Tout ou rien : en cas de refus du moteur, rien n'est modifié.
+        """
+        projet = self.get_object()
+        brut = request.data.get("poteaux", None) if isinstance(request.data, dict) else None
+        if brut is None:
+            brut = projet.poteaux_saisis
+        try:
+            poteaux = valider_poteaux_saisis(brut)
+        except ValueError as exc:
+            return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            prm = parametres_structure(projet, avec_grille=False)
+        except ParametresIncomplets as exc:
+            return _reponse_parametres_incomplets(exc)
+        empreinte = [{"x": p["x"], "y": p["y"], "guid": f"saisi-{i}", "nom": f"poteau placé n° {i}"}
+                     for i, p in enumerate(poteaux, start=1)]
+        try:
+            with transaction.atomic():
+                elements_crees, hypotheses, avertissements, troncons_non_calcules = creer_elements_depuis_positions(
+                    projet, empreinte, prm, origine=ElementStructurel.OrigineGeometrie.SAISI)
+                if not any(e.type_element == ElementStructurel.TypeElement.POTEAU for e in elements_crees):
+                    raise ValueError(
+                        "aucun poteau n'a pu être calculé. Chaque poteau doit avoir au moins un voisin aligné "
+                        "en X et un en Y (trame en deux directions) : " + " ; ".join(avertissements[:3]))
+                projet.poteaux_saisis = poteaux
+                projet.source_structure = Projet.SourceStructure.SAISIE
+                projet.save(update_fields=["poteaux_saisis", "source_structure"])
+        except (ValueError, EntreeInvalide) as exc:
+            return Response({"erreur": f"Structure non créée : {exc}"}, status=status.HTTP_400_BAD_REQUEST)
+        hypotheses.append(AVERTISSEMENT_STRUCTURE_SAISIE)
+        hypotheses.extend(murs_orphelins(prm["hyp"], elements_crees, troncons_non_calcules))
         serializer = ElementStructurelSerializer(elements_crees, many=True)
         return Response(
             {"elements": serializer.data, "avertissements": avertissements,

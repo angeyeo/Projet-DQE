@@ -147,6 +147,21 @@ class Projet(models.Model):
     # confirmation et à chaque recalcul.
     parametres_import = models.JSONField(default=dict, blank=True)
 
+    # D'où viennent les positions des poteaux (issue #93). Vide pour un
+    # projet antérieur à ce champ : on ne le devine pas après coup.
+    class SourceStructure(models.TextChoices):
+        TRAME = "trame", "Trame régulière"
+        PLAN = "plan", "Lue dans le plan importé"
+        SAISIE = "saisie", "Placée par l'utilisateur sur un plan d'architecte"
+
+    source_structure = models.CharField(
+        max_length=10, choices=SourceStructure.choices, blank=True, default="")
+    # Positions des poteaux placés par l'utilisateur (mode plan
+    # d'architecte) : [{"x": m, "y": m}, ...] dans le repère du fond de plan
+    # (origine = coin inférieur gauche du dessin). Relues à chaque
+    # régénération ; jamais déduites des murs ou des pièces.
+    poteaux_saisis = models.JSONField(default=list, blank=True)
+
     date_creation = models.DateTimeField(auto_now_add=True)
     date_modification = models.DateTimeField(auto_now=True)
 
@@ -200,6 +215,14 @@ class ElementStructurel(models.Model):
         INFRASTRUCTURE = "infrastructure", "Infrastructure"
         SUPERSTRUCTURE = "superstructure", "Superstructure"
 
+    # Origine de la GÉOMÉTRIE (position) de l'élément, pas de son calcul :
+    # le dimensionnement est toujours fait par le moteur. Vide pour un
+    # élément antérieur à ce champ (non renseigné, jamais deviné).
+    class OrigineGeometrie(models.TextChoices):
+        TRAME = "trame", "Trame régulière"
+        PLAN = "plan", "Lue dans le plan"
+        SAISI = "saisi", "Saisie par l'utilisateur"
+
     projet = models.ForeignKey(
         Projet, on_delete=models.CASCADE, related_name="elements"
     )
@@ -213,6 +236,8 @@ class ElementStructurel(models.Model):
     position = models.CharField(
         max_length=20, choices=Position.choices, null=True, blank=True
     )
+    origine_geometrie = models.CharField(
+        max_length=10, choices=OrigineGeometrie.choices, blank=True, default="")
     position_x = models.FloatField(
         null=True, blank=True, help_text="mètres, origine (0,0) = coin de la trame"
     )
