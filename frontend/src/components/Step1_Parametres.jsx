@@ -5,6 +5,7 @@ import useReferentiel from '../hooks/useReferentiel';
 import Alerte from './ui/Alerte';
 import HypothesesCharges from './parametres/HypothesesCharges';
 import ApercuDXF from './import/ApercuDXF';
+import PlanArchitecte from './import/PlanArchitecte';
 
 const TYPE_LABELS = {
   semelle: 'Semelles',
@@ -255,6 +256,26 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         </p>
       </div>
 
+      {/* Source de la structure (issue #93) : plan avec poteaux lus, ou plan
+          d'architecte servant de fond aux poteaux placés par l'utilisateur. */}
+      <div className="onglets" role="tablist" aria-label="Source de la structure">
+        <button type="button" role="tab" id="onglet-plan-structure" aria-controls="panneau-plan"
+          aria-selected={!projectData.planArchitecte} className={projectData.planArchitecte ? 'onglet' : 'onglet actif'}
+          onClick={() => updateProjectData({ planArchitecte: false })}>
+          Plan avec structure
+        </button>
+        <button type="button" role="tab" id="onglet-plan-architecte" aria-controls="panneau-plan"
+          aria-selected={!!projectData.planArchitecte} className={projectData.planArchitecte ? 'onglet actif' : 'onglet'}
+          onClick={() => updateProjectData({ planArchitecte: true })}>
+          Plan d&apos;architecte
+        </button>
+      </div>
+
+      <div id="panneau-plan" role="tabpanel"
+        aria-labelledby={projectData.planArchitecte ? 'onglet-plan-architecte' : 'onglet-plan-structure'}>
+      {projectData.planArchitecte ? (
+        <PlanArchitecte projectData={projectData} updateProjectData={updateProjectData} assurerProjet={assurerProjet} />
+      ) : (<>
       {/* Upload Zone */}
       <div
         className="dropzone"
@@ -439,6 +460,8 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
           {visionMessage}
         </div>
       )}
+      </>)}
+      </div>
 
       {/* Section : Description du projet en langage naturel (Assistant IA) */}
       <div style={{ padding: '1.25rem', borderRadius: '12px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)', marginBottom: '2rem' }}>
@@ -657,22 +680,22 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         </div>
 
         <div className="form-group">
-          <label className="form-label" htmlFor="champ-s1-7">Travées en X {projectData.ifcImporte ? '' : '*'}</label>
+          <label className="form-label" htmlFor="champ-s1-7">Travées en X {projectData.ifcImporte || projectData.planArchitecte ? '' : '*'}</label>
           <input id="champ-s1-7" type="number" min="1" step="1" className="form-control" value={projectData.nbTraveesX ?? ''}
             onChange={(e) => updateProjectData({ nbTraveesX: e.target.value })} />
         </div>
         <div className="form-group">
-          <label className="form-label" htmlFor="champ-s1-8">Portée en X (m) {projectData.ifcImporte ? '' : '*'}</label>
+          <label className="form-label" htmlFor="champ-s1-8">Portée en X (m) {projectData.ifcImporte || projectData.planArchitecte ? '' : '*'}</label>
           <input id="champ-s1-8" type="number" min="0" step="0.01" className="form-control" value={projectData.porteeX ?? ''}
             onChange={(e) => updateProjectData({ porteeX: e.target.value })} />
         </div>
         <div className="form-group">
-          <label className="form-label" htmlFor="champ-s1-9">Travées en Y {projectData.ifcImporte ? '' : '*'}</label>
+          <label className="form-label" htmlFor="champ-s1-9">Travées en Y {projectData.ifcImporte || projectData.planArchitecte ? '' : '*'}</label>
           <input id="champ-s1-9" type="number" min="1" step="1" className="form-control" value={projectData.nbTraveesY ?? ''}
             onChange={(e) => updateProjectData({ nbTraveesY: e.target.value })} />
         </div>
         <div className="form-group">
-          <label className="form-label" htmlFor="champ-s1-10">Portée en Y (m) {projectData.ifcImporte ? '' : '*'}</label>
+          <label className="form-label" htmlFor="champ-s1-10">Portée en Y (m) {projectData.ifcImporte || projectData.planArchitecte ? '' : '*'}</label>
           <input id="champ-s1-10" type="number" min="0" step="0.01" className="form-control" value={projectData.porteeY ?? ''}
             onChange={(e) => updateProjectData({ porteeY: e.target.value })} />
         </div>
@@ -701,7 +724,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         </Alerte>
       )}
 
-      {grille && (
+      {grille && !projectData.planArchitecte && (
         <p className="texte-discret">Trame saisie : {grille.x} × {grille.y} travées, soit {(grille.x + 1) * (grille.y + 1)} poteaux par niveau.</p>
       )}
 

@@ -20,6 +20,10 @@ class ParametresIncomplets(Exception):
         )
 
 
+# Message affiché partout où la structure saisie intervient (résultats, DQE).
+AVERTISSEMENT_STRUCTURE_SAISIE = "Structure placée par l'utilisateur, non lue dans le plan."
+
+
 def resoudre_charge_exploitation(projet):
     """(valeur kN/m², origine) -- origine = "saisie" ou "usage:<clé>".
 
@@ -91,6 +95,10 @@ def parametres_structure(projet, avec_grille: bool):
         pourcentage_baies_murs=projet.pourcentage_baies_murs or 0.0,
     )
     hypotheses = hyp.messages()
+    if projet.source_structure == "saisie":
+        # Rappel permanent (issue #93) : positions des poteaux placées par
+        # l'utilisateur sur un plan d'architecte, pas lues dans le fichier.
+        hypotheses = [AVERTISSEMENT_STRUCTURE_SAISIE] + hypotheses
 
     params = {
         "usage_batiment": projet.usage_batiment,

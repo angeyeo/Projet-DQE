@@ -67,7 +67,8 @@ class ElementStructurelSerializer(serializers.ModelSerializer):
     class Meta:
         model = ElementStructurel
         fields = "__all__"
-        read_only_fields = ("statut", "resultat_calcul", "resultat_valide")
+        # origine_geometrie : fixée par le serveur (trame, plan lu, saisie).
+        read_only_fields = ("statut", "resultat_calcul", "resultat_valide", "origine_geometrie")
 
     def validate_projet(self, projet):
         return _verifier_projet_du_cabinet(self, projet)
@@ -261,7 +262,7 @@ class ProjetSerializer(serializers.ModelSerializer):
         # l'utilisateur connecté : jamais modifiables par le client (avant,
         # un utilisateur pouvait déplacer un projet dans un autre cabinet).
         read_only_fields = ("entreprise", "cree_par", "plan_fondation_valide", "fichier_import_origine",
-                            "parametres_import")
+                            "parametres_import", "source_structure", "poteaux_saisis")
 
     def validate_usage_batiment(self, usage):
         if usage and usage not in CHARGES_EXPLOITATION:

@@ -3,6 +3,7 @@ import { AlertCircle, ArrowLeft, ArrowRight, Loader2, Sparkles } from 'lucide-re
 import { dqeService } from '../api/dqeService';
 import Alerte from './ui/Alerte';
 import PlanMurs from './murs/PlanMurs';
+import { MESSAGE_STRUCTURE_SAISIE } from './import/messages';
 
 const ND = <span className="texte-discret" title="Aucun résultat de calcul pour cet élément">ND</span>;
 
@@ -93,6 +94,12 @@ export default function Step2_Calculs({ sections, projet, hypotheses = [], avert
         </div>
       </header>
 
+      {projet?.source_structure === 'saisie' && (
+        <Alerte type="attention" titre={MESSAGE_STRUCTURE_SAISIE}>
+          Les {projet.poteaux_saisis?.length ?? 0} poteaux ont été placés sur un plan d&apos;architecte : vérifiez leur position
+          avant de valider. Pour les déplacer, revenez à l&apos;étape 1, onglet « Plan d&apos;architecte ».
+        </Alerte>
+      )}
       {hypotheses.length > 0 && <Alerte type="info" titre="Hypothèses retenues par le moteur" liste={hypotheses} />}
       {avertissements.length > 0 && <Alerte type="attention" titre="Avertissements" liste={avertissements} />}
       {alertes.length > 0 && (
