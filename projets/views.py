@@ -471,7 +471,7 @@ class FiltreCabinetMixin:
 
 # Plans importables. ArchiCAD (.pln) et PDF ne sont pas lus : le message
 # dit comment exporter, au lieu d'un dépôt qui ne fait rien.
-FORMATS_PLAN = (".ifc", ".dxf")
+FORMATS_PLAN = (".ifc", ".dxf", ".dwg")
 TAILLE_MAX_PLAN_OCTETS = 50 * 1024 * 1024
 
 
@@ -481,9 +481,12 @@ def _extension_plan(nom):
 
 def _message_format_refuse(extension):
     conseils = {
-        ".pln": "Les fichiers ArchiCAD (.pln) ne sont pas lus : exportez le plan en IFC (recommandé) ou en DXF.",
+        # .pln : format fermé de Graphisoft, sans lecteur public (étude #95).
+        ".pln": "Les projets ArchiCAD (.pln) ne peuvent pas être lus : c'est un format fermé. Dans ArchiCAD : "
+                "Fichier > Enregistrer sous, type « IFC » (recommandé : poteaux, poutres et niveaux sont conservés) "
+                "ou « DXF », puis déposez ce fichier.",
+        ".pla": "Les archives ArchiCAD (.pla) ne peuvent pas être lues : exportez le projet en IFC depuis ArchiCAD.",
         ".pdf": "Les PDF ne sont pas lus : exportez le plan en IFC ou en DXF depuis votre logiciel de dessin.",
-        ".dwg": "Les fichiers DWG ne sont pas lus : enregistrez le plan au format DXF.",
     }
     return conseils.get(extension, f"Format « {extension or 'inconnu'} » non pris en charge : plans IFC ou DXF uniquement.")
 
@@ -492,6 +495,14 @@ MODE_ARCHITECTE = "architecte"
 NB_POTEAUX_SAISIS_MAX = 500
 DISTANCE_MIN_POTEAUX_M = 0.30
 COORDONNEE_MAX_M = 1000.0
+
+
+def _avec_conversion(reponse, conversion):
+    """Ajoute à une réponse réussie la mention d'un DWG converti (traçabilité)."""
+    if conversion and reponse.status_code == 200:
+        reponse.data["converti_depuis"] = "dwg"
+        reponse.data["avertissements"] = [conversion] + list(reponse.data.get("avertissements", []))
+    return reponse
 
 
 def _est_mode_architecte(projet):
@@ -644,7 +655,8 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         from moteur_calcul.import_ifc.lecture_ifc import detecter_parametres_trame
 
         resultat = analyser_fichier_dxf(projet.fichier_import_origine.path, plan=plan)
-        projet.parametres_import = {"format": "dxf", "plan": resultat["plan_retenu"]}
+        conserve = {k: v for k, v in (projet.parametres_import or {}).items() if k == "converti_depuis"}
+        projet.parametres_import = {"format": "dxf", "plan": resultat["plan_retenu"], **conserve}
         projet.save(update_fields=["parametres_import"])
         reponse = {k: resultat[k] for k in ("format", "unite", "plans", "plan_retenu", "nb_poteaux_detectes")}
         avertissements = list(resultat["avertissements"])
@@ -697,22 +709,41 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                     {"erreur": f"Plan trop volumineux ({fichier.size / 1048576:.1f} Mo) : "
                                f"{TAILLE_MAX_PLAN_OCTETS // 1048576} Mo au maximum."},
                     status=status.HTTP_400_BAD_REQUEST)
+            conversion = None
+            if extension == ".dwg":
+                # DWG (AutoCAD) : converti en DXF par LibreDWG si le serveur
+                # l'a ; ensuite, même lecture que pour un DXF déposé.
+                from django.core.files.base import ContentFile
+
+                from moteur_calcul.import_dxf.conversion_dwg import ConversionDWGImpossible, convertir_dwg_en_dxf
+
+                try:
+                    contenu_dxf = convertir_dwg_en_dxf(fichier.read())
+                except ConversionDWGImpossible as exc:
+                    return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+                fichier = ContentFile(contenu_dxf, name=os.path.splitext(fichier.name)[0] + ".dxf")
+                extension = ".dxf"
+                conversion = ("Plan DWG converti en DXF sur le serveur (GNU LibreDWG) : vérifiez l'aperçu avant "
+                              "le calcul. En cas de doute, enregistrez le DXF depuis AutoCAD.")
             if mode_architecte:
                 if extension != ".dxf":
                     return Response(
-                        {"erreur": "Le mode « Plan d'architecte » accepte les fichiers DXF : exportez le plan en "
-                                   "DXF (en mètres, centimètres ou millimètres) depuis votre logiciel."},
+                        {"erreur": "Le mode « Plan d'architecte » accepte les fichiers DXF ou DWG : exportez le plan "
+                                   "en DXF (en mètres, centimètres ou millimètres) depuis votre logiciel."},
                         status=status.HTTP_400_BAD_REQUEST)
                 projet.fichier_import_origine = fichier
-                projet.parametres_import = {"format": "dxf", "mode": MODE_ARCHITECTE}
+                projet.parametres_import = {"format": "dxf", "mode": MODE_ARCHITECTE,
+                                            **({"converti_depuis": "dwg"} if conversion else {})}
                 projet.save(update_fields=["fichier_import_origine", "parametres_import"])
-                return self._reponse_fond_plan(projet)
+                return _avec_conversion(self._reponse_fond_plan(projet), conversion)
             projet.fichier_import_origine = fichier
-            projet.parametres_import = {"format": extension.lstrip(".")}
+            projet.parametres_import = {"format": extension.lstrip("."),
+                                        **({"converti_depuis": "dwg"} if conversion else {})}
             projet.save(update_fields=["fichier_import_origine", "parametres_import"])
             try:
                 if extension == ".dxf":
-                    return Response(self._apercu_dxf(projet, plan=None), status=status.HTTP_200_OK)
+                    return _avec_conversion(
+                        Response(self._apercu_dxf(projet, plan=None), status=status.HTTP_200_OK), conversion)
                 parametres = analyser_fichier_ifc(projet.fichier_import_origine.path)
             except erreurs_lecture as exc:
                 return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)

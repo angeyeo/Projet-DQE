@@ -6,6 +6,7 @@ import Alerte from './ui/Alerte';
 import HypothesesCharges from './parametres/HypothesesCharges';
 import ApercuDXF from './import/ApercuDXF';
 import PlanArchitecte from './import/PlanArchitecte';
+import AideExport from './import/AideExport';
 
 const TYPE_LABELS = {
   semelle: 'Semelles',
@@ -89,13 +90,15 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
     if (e.target?.type === 'file') e.target.value = '';
     const ext = file.name.split('.').pop().toLowerCase();
     const isImage = ['jpg', 'jpeg', 'png'].includes(ext);
-    const isPlan = ['ifc', 'dxf'].includes(ext);
+    const isPlan = ['ifc', 'dxf', 'dwg'].includes(ext);
 
     if (!isImage && !isPlan) {
       setAnalysisError(
-        ['pln', 'pdf', 'dwg'].includes(ext)
-          ? `Les fichiers .${ext} ne sont pas lus : exportez le plan en IFC (recommandé pour ArchiCAD) ou en DXF.`
-          : 'Format non pris en charge : déposez un plan IFC ou DXF, ou une image (.png, .jpg).',
+        ['pln', 'pla'].includes(ext)
+          ? "Les projets ArchiCAD (.pln) ne peuvent pas être lus : c'est un format fermé. Dans ArchiCAD, Fichier > Enregistrer sous, type « IFC » (recommandé) ou « DXF », puis déposez ce fichier."
+          : ext === 'pdf'
+            ? 'Les PDF ne sont pas lus : exportez le plan en IFC ou en DXF depuis votre logiciel de dessin.'
+            : 'Format non pris en charge : déposez un plan IFC, DXF ou DWG, ou une image (.png, .jpg).',
       );
       return;
     }
@@ -103,10 +106,13 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
     setAnalysisError(null);
     setAnalysisSuccess(false);
     setAnalysisWarnings([]);
-    updateProjectData({
+    // Nom du fichier enregistré seulement APRÈS réussite : à la création du
+    // projet (assurerProjet), le formulaire est relu depuis le serveur et
+    // un nom posé avant aurait été effacé.
+    const fichierCharge = {
       planFileName: file.name,
       planFileSize: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
-    });
+    };
 
     // Import IFC ou DXF : aperçu -- détection de la trame, pré-remplissage
     // du formulaire (aucun ElementStructurel créé ici).
@@ -120,6 +126,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         const params = await dqeService.importerPlanIFC(projetId, file);
         if (params.format === 'dxf') setDxf(params);
         appliquerApercu(params);
+        updateProjectData(fichierCharge);
         // Le backend (detecter_parametres_trame) calcule des avertissements
         // explicites quand la grille détectée est irrégulière (nb de poteaux
         // incohérent avec une grille parfaite, portées ou hauteurs d'étage trop
@@ -148,6 +155,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
 
         const result = await dqeService.analyserPlanImage(projetId, file);
         setVisionResult(result);
+        updateProjectData(fichierCharge);
         setAnalysisSuccess(true);
       } catch (err) {
         setAnalysisError(`Erreur d'analyse IA : ${err.message || "Impossible d'extraire le plan"}`);
@@ -241,7 +249,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
   const boutonFichier = (libelle) => (
     <label className="btn btn-secondary">
       {libelle}
-      <input type="file" accept="image/png,image/jpeg,.ifc,.dxf" onChange={handleFileUpload} className="sr-only" />
+      <input type="file" accept="image/png,image/jpeg,.ifc,.dxf,.dwg" onChange={handleFileUpload} className="sr-only" />
     </label>
   );
 
@@ -252,7 +260,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
           Étape 1 : Chargement des plans & Saisie des paramètres
         </h2>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Importez votre plan (IFC ou DXF, ou une image) pour pré-remplir les paramètres, ou saisissez-les manuellement.
+          Importez votre plan (IFC, DXF ou DWG, ou une image) pour pré-remplir les paramètres, ou saisissez-les manuellement.
         </p>
       </div>
 
@@ -316,10 +324,10 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         ) : (
           <div>
             <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-              Déposez votre plan ici (IFC, DXF ou image)
+              Déposez votre plan ici (IFC, DXF, DWG ou image)
             </h3>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
-              IFC et DXF (AutoCAD, ArchiCAD) : poteaux et murs lus. Fichier ArchiCAD .pln : exportez-le en IFC.
+              IFC, DXF ou DWG (AutoCAD) : poteaux et murs lus. Projet ArchiCAD (.pln) : exportez-le en IFC.
             </p>
             {boutonFichier('Parcourir les fichiers')}
           </div>
@@ -461,6 +469,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         </div>
       )}
       </>)}
+      <AideExport />
       </div>
 
       {/* Section : Description du projet en langage naturel (Assistant IA) */}
