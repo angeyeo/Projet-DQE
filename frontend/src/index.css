@@ -1430,3 +1430,37 @@ button.account-card { width: 100%; border: none; background: transparent; color:
   .pied-import .btn { width: 100%; justify-content: center; }
   .section-a-classer .form-select { max-width: none; }
 }
+
+/* ---- Plan d'architecte : fond de plan + poteaux placés (issue #93) ---- */
+.plan-architecte { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 2rem; }
+.plan-architecte-depot { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.plan-architecte-depot .btn { display: inline-flex; align-items: center; gap: 0.45rem; }
+.btn-icone { display: inline-flex; align-items: center; justify-content: center; padding: 0.4rem; min-width: 2.1rem; }
+.editeur-poteaux { display: flex; flex-direction: column; gap: 0.75rem; }
+.editeur-barre { display: flex; align-items: center; gap: 0.75rem 1.25rem; flex-wrap: wrap; font-size: 0.88rem; color: var(--ink-700); }
+.editeur-option { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+.editeur-zoom { display: inline-flex; align-items: center; gap: 0.4rem; font-variant-numeric: tabular-nums; }
+.editeur-curseur { margin-left: auto; font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink-500); }
+.editeur-cadre { border: 1px solid var(--core-border); border-radius: var(--radius-md); background: var(--core-surface); overflow: auto; max-height: 70vh; }
+.editeur-svg { display: block; min-width: 100%; height: auto; cursor: crosshair; touch-action: manipulation; }
+.editeur-svg.desactive { cursor: not-allowed; opacity: 0.6; }
+.editeur-fond { fill: none; stroke: var(--ink-300); stroke-width: 1; }
+.editeur-echelle line { stroke: var(--ink-700); stroke-width: 2; }
+.editeur-echelle text { fill: var(--ink-700); font-family: var(--font-sans); }
+.editeur-poteau { cursor: pointer; }
+.editeur-poteau rect { fill: var(--accent); stroke: var(--core-surface); stroke-width: 0.02; }
+.editeur-poteau text { fill: var(--ink-900); font-family: var(--font-sans); font-weight: 700; }
+.editeur-poteau.selection rect { fill: var(--ink-900); stroke: var(--accent); stroke-width: 0.06; }
+.editeur-message { margin: 0; color: var(--status-critical); font-size: 0.88rem; }
+.editeur-panneaux { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 1rem; }
+.editeur-saisie, .editeur-selection { border: 1px solid var(--core-border-subtle); border-radius: var(--radius-md); padding: 0.75rem 0.9rem; background: var(--core-bg); }
+.editeur-champs { display: flex; align-items: flex-end; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.4rem; }
+.editeur-champs label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: var(--ink-500); }
+.editeur-champs .form-control { width: 7.5rem; }
+.editeur-champs .btn { display: inline-flex; align-items: center; gap: 0.35rem; }
+.editeur-liste summary { cursor: pointer; font-weight: 600; color: var(--ink-700); }
+.editeur-liste ol { columns: 3 14rem; margin: 0.75rem 0; padding-left: 1.5rem; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .editeur-curseur { margin-left: 0; width: 100%; }
+  .editeur-champs .form-control { width: 6rem; }
+}

@@ -59,6 +59,8 @@ const FORMULAIRE_VIDE = {
   mursRdc: [],
   mursEtages: [],
   ifcImporte: false,
+  planArchitecte: false,
+  poteauxSaisis: [],
 };
 
 const lireVue = () => {

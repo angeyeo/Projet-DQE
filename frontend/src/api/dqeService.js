@@ -270,7 +270,11 @@ export function projetVersFormulaire(p) {
     baiesMurs: p.pourcentage_baies_murs ? versTexte(p.pourcentage_baies_murs) : '',
     mursRdc: p.murs_rdc || [],
     mursEtages: p.murs_etages || [],
-    ifcImporte: !!p.fichier_import_origine,
+    // Plan d'architecte (issue #93) : le fichier déposé n'est qu'un fond,
+    // la structure vient des poteaux placés par l'utilisateur.
+    planArchitecte: p.parametres_import?.mode === 'architecte',
+    poteauxSaisis: p.poteaux_saisis || [],
+    ifcImporte: !!p.fichier_import_origine && p.parametres_import?.mode !== 'architecte',
   };
 }
 
@@ -291,8 +295,9 @@ export const dqeService = {
     lireReponse(await apiFetch(`${API_BASE_URL}/projets/${projetId}/`, { method: 'DELETE' })),
 
   // Enregistre le formulaire (création ou mise à jour) puis génère les
-  // éléments : import IFC confirmé si un plan a été déposé, sinon trame
-  // régulière. Renvoie {projetId, hypotheses, avertissements}.
+  // éléments : poteaux placés sur un plan d'architecte, import IFC/DXF
+  // confirmé si un plan de structure a été déposé, sinon trame régulière.
+  // Renvoie {projetId, hypotheses, avertissements}.
   enregistrerEtGenerer: async (formulaire) => {
     const champs = formulaireVersProjet(formulaire);
     const projet = formulaire.id
@@ -300,9 +305,14 @@ export const dqeService = {
       : await postJSON(`${API_BASE_URL}/projets/`, champs);
     let resultat;
     try {
-      resultat = formulaire.ifcImporte
-        ? await postJSON(`${API_BASE_URL}/projets/${projet.id}/importer_plan/`, { confirmer: true })
-        : await postJSON(`${API_BASE_URL}/projets/${projet.id}/generer_trame/`, undefined);
+      if (formulaire.planArchitecte) {
+        resultat = await postJSON(`${API_BASE_URL}/projets/${projet.id}/placer_poteaux/`,
+          { poteaux: formulaire.poteauxSaisis || [] });
+      } else if (formulaire.ifcImporte) {
+        resultat = await postJSON(`${API_BASE_URL}/projets/${projet.id}/importer_plan/`, { confirmer: true });
+      } else {
+        resultat = await postJSON(`${API_BASE_URL}/projets/${projet.id}/generer_trame/`, undefined);
+      }
     } catch (err) {
       // Le projet EST enregistré même si la génération échoue : l'appelant
       // doit le rouvrir, sinon un nouvel essai créerait un doublon.
@@ -324,6 +334,18 @@ export const dqeService = {
       body: formData,
     }));
   },
+
+  // Plan d'architecte : le DXF sert de fond, aucun élément n'est créé.
+  importerPlanArchitecte: async (projetId, file) => {
+    const formData = new FormData();
+    formData.append('fichier', file);
+    formData.append('mode', 'architecte');
+    return lireReponse(await apiFetch(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, {
+      method: 'POST',
+      body: formData,
+    }));
+  },
+  getFondPlan: async (projetId) => getJSON(`${API_BASE_URL}/projets/${projetId}/fond_plan/`),
 
   // DXF à plusieurs plans : choix du plan des fondations (même endpoint,
   // sans fichier ; le serveur relit le DXF déjà déposé).
