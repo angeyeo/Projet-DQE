@@ -249,6 +249,8 @@ export function formulaireVersProjet(f) {
     pourcentage_baies_murs: nombreOuNull(f.baiesMurs) ?? 0,
     murs_rdc: f.mursRdc || [],
     murs_etages: f.mursEtages || [],
+    // Plans propres aux étages R+2 et plus (issue #81) ; absent = plan du R+1.
+    murs_par_etage: f.mursParEtage || {},
   };
 }
 
@@ -283,6 +285,7 @@ export function projetVersFormulaire(p) {
     baiesMurs: p.pourcentage_baies_murs ? versTexte(p.pourcentage_baies_murs) : '',
     mursRdc: p.murs_rdc || [],
     mursEtages: p.murs_etages || [],
+    mursParEtage: p.murs_par_etage || {},
     // Plan d'architecte (issue #93) : le fichier déposé n'est qu'un fond,
     // la structure vient des poteaux placés par l'utilisateur.
     planArchitecte: p.parametres_import?.mode === 'architecte',

@@ -119,6 +119,11 @@ class Projet(models.Model):
                                 help_text="Tronçons portant un mur au RDC (sur longrines)")
     murs_etages = models.JSONField(default=list, blank=True,
                                    help_text="Tronçons portant un mur aux étages (sur les poutres du plancher)")
+    # Issue #81 (règle B15 : les étages diffèrent) : plans propres aux étages
+    # R+2 et plus, {"2": [tronçons], "3": [...]} ; un étage absent reprend
+    # murs_etages, qui est le plan du R+1 (et de tous les étages avant #81).
+    murs_par_etage = models.JSONField(default=dict, blank=True,
+                                      help_text="Plans des murs propres aux étages R+2 et plus ({'2': [tronçons]})")
     # Issue #73 : maçonnerie (agglos 15) et enduit métrés à partir du plan des
     # murs dans le DQE. Désactivé par défaut : les DQE existants ne changent pas.
     metrer_murs_depuis_plan = models.BooleanField(

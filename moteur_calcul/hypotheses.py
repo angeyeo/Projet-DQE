@@ -90,6 +90,9 @@ class HypothesesCalcul:
     # les poutres du plancher situé dessous (même plan à chaque étage).
     murs_rdc: frozenset = frozenset()
     murs_etages: frozenset = frozenset()
+    # Issue #81 : plans propres aux étages R+2 et plus, ((2, frozenset), ...).
+    # Un étage absent reprend murs_etages (plan du R+1).
+    murs_etages_specifiques: tuple = ()
     # Part des baies (portes, fenêtres) déduite de la surface des murs, en %.
     # 0 = aucune baie déduite (prudent).
     pourcentage_baies_murs: float = 0.0
@@ -147,13 +150,27 @@ class HypothesesCalcul:
 
     @property
     def murs_comptes(self):
-        return self.poids_murs_kn_m2 is not None and bool(self.murs_rdc or self.murs_etages)
+        return self.poids_murs_kn_m2 is not None and bool(self.murs_rdc or self.tous_murs_etages)
+
+    def murs_etage(self, k):
+        """Tronçons portant un mur à l'étage R+k (k ≥ 1)."""
+        return dict(self.murs_etages_specifiques).get(k, self.murs_etages)
+
+    @property
+    def tous_murs_etages(self):
+        """Tronçons portant un mur à AU MOINS un étage."""
+        return self.murs_etages.union(*(m for _, m in self.murs_etages_specifiques))
 
     def mur_sur(self, cle, niveau):
-        """True si un mur est placé sur ce tronçon ("rdc" ou "etages") et compté."""
+        """True si un mur est placé sur ce tronçon et compté. niveau : "rdc",
+        "etages" (à au moins un étage) ou k (entier, étage R+k)."""
         if self.poids_murs_kn_m2 is None or cle is None:
             return False
-        return cle in (self.murs_rdc if niveau == "rdc" else self.murs_etages)
+        if niveau == "rdc":
+            return cle in self.murs_rdc
+        if niveau == "etages":
+            return cle in self.tous_murs_etages
+        return cle in self.murs_etage(niveau)
 
     @property
     def contrainte_sol_effective(self):
@@ -199,7 +216,7 @@ class HypothesesCalcul:
                 "ALERTE : le forfait G des planchers ne couvre PAS le poids propre des poutres et poteaux "
                 "(règle validée par le technicien BTP) -- activez son ajout, sinon les efforts sont sous-estimés."
             )
-        places = len(self.murs_rdc) + len(self.murs_etages)
+        places = len(self.murs_rdc) + len(self.tous_murs_etages)
         if self.poids_murs_kn_m2 is None:
             m.append(
                 "ALERTE : poids des murs non renseigné -- la charge des murs en maçonnerie n'est PAS comptée : "
@@ -216,8 +233,11 @@ class HypothesesCalcul:
         else:
             m.append(
                 f"Murs en maçonnerie : {n(self.poids_murs_kn_m2)} kN/m² de mur (enduits compris), comptés "
-                f"seulement là où ils existent : {len(self.murs_etages)} tronçon(s) aux étages, "
-                f"{len(self.murs_rdc)} au rez-de-chaussée (plan des murs). Hauteur du mur = hauteur d'étage − "
+                f"seulement là où ils existent : {len(self.murs_etages)} tronçon(s) aux étages"
+                + (" (plan du R+1 ; plans propres : " + ", ".join(
+                    f"R+{k} {len(t)} tronçon(s)" for k, t in self.murs_etages_specifiques) + ")"
+                   if self.murs_etages_specifiques else "")
+                + f", {len(self.murs_rdc)} au rez-de-chaussée (plan des murs). Hauteur du mur = hauteur d'étage − "
                 f"hauteur de la poutre. Les cloisons légères restent comprises dans G des planchers."
             )
             m.append(
@@ -252,6 +272,7 @@ class HypothesesCalcul:
         # nombre de tronçons l'est (le détail vit sur le projet).
         d["murs_rdc"] = len(self.murs_rdc)
         d["murs_etages"] = len(self.murs_etages)
+        d["murs_etages_specifiques"] = {str(k): len(m) for k, m in self.murs_etages_specifiques}
         d["contrainte_sol_effective_kn_m2"] = self.contrainte_sol_effective
         return d
 

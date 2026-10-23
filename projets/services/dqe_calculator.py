@@ -850,7 +850,8 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict) -> dict:
             "nb_niveaux": projet.nb_niveaux,
             "numero_devis": projet.numero_devis,
             "metrer_murs_depuis_plan": bool(getattr(projet, "metrer_murs_depuis_plan", False)),
-            "murs_places": len(projet.murs_rdc or []) + len(projet.murs_etages or []),
+            "murs_places": len(projet.murs_rdc or []) + len(projet.murs_etages or [])
+            + sum(len(v or []) for v in (projet.murs_par_etage or {}).values()),
         },
         "lignes": toutes_lignes,
         "lots": [

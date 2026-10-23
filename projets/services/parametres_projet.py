@@ -56,6 +56,25 @@ def _manquant(champ, libelle):
     return {"champ": champ, "libelle": libelle}
 
 
+def murs_etages_specifiques(projet):
+    """Plans des murs propres aux étages R+2 à R+(n − 1) (issue #81), en
+    ((k, frozenset), ...) trié. Les plans d'étages qui n'existent plus
+    (nombre de niveaux réduit) sont ignorés ici et signalés par
+    plans_murs_hors_niveaux()."""
+    dernier = (projet.nb_niveaux or 1) - 1
+    return tuple(sorted((int(k), frozenset(v or ())) for k, v in (projet.murs_par_etage or {}).items()
+                        if 2 <= int(k) <= dernier))
+
+
+def plans_murs_hors_niveaux(projet):
+    dernier = (projet.nb_niveaux or 1) - 1
+    hors = sorted(int(k) for k in (projet.murs_par_etage or {}) if int(k) > dernier)
+    if not hors:
+        return []
+    return [f"ALERTE : plan(s) des murs du {', '.join(f'R+{k}' for k in hors)} ignoré(s) : le projet n'a que "
+            f"{projet.nb_niveaux} niveau(x). Réduisez le plan ou augmentez le nombre de niveaux."]
+
+
 def parametres_structure(projet, avec_grille: bool):
     """Paramètres communs à generer_trame (avec_grille=True) et
     importer_plan (avec_grille=False, la géométrie vient de l'IFC).
@@ -106,12 +125,13 @@ def parametres_structure(projet, avec_grille: bool):
         murs_rdc_sur_semelles=projet.murs_rdc_sur_semelles,
         murs_rdc=frozenset(projet.murs_rdc or ()),
         murs_etages=frozenset(projet.murs_etages or ()),
+        murs_etages_specifiques=murs_etages_specifiques(projet),
         pourcentage_baies_murs=projet.pourcentage_baies_murs or 0.0,
     )
     hypotheses = hyp.messages()
     # Rappel permanent (issues #93, #94) : positions des poteaux placées ou
     # modifiées par l'utilisateur, pas (toutes) lues dans le fichier.
-    hypotheses = messages_source_structure(projet) + hypotheses
+    hypotheses = messages_source_structure(projet) + hypotheses + plans_murs_hors_niveaux(projet)
 
     params = {
         "usage_batiment": projet.usage_batiment,

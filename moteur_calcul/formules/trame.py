@@ -156,12 +156,21 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
     # seulement là où un mur est placé. Les murs d'un étage reposent sur
     # les poutres du plancher situé dessous : le poteau du RDC porte les
     # murs des n − 1 étages ; ceux du RDC reposent sur les longrines.
+    # Issue #81 : chaque étage R+k a son plan (celui du R+1 par défaut).
     nb_murs_poteau = nb_niveaux - 1
-    g_murs, detail_etages = (_somme_murs(hyp, portees, segments, "etages", hauteur_etage)
-                             if nb_murs_poteau else (0.0, []))
+    murs_etages = [_somme_murs(hyp, portees, segments, k, hauteur_etage) for k in range(1, nb_niveaux)]
+    plans_identiques = not hyp.murs_etages_specifiques
+    g_murs, detail_etages = murs_etages[0] if murs_etages else (0.0, [])
     g_murs_rdc_total, detail_rdc = _somme_murs(hyp, portees, segments, "rdc", hauteur_etage)
-    if detail_etages:
-        trace.append(_etape_murs("Murs d'étage / niveau", hyp, g_murs, detail_etages))
+    if plans_identiques:
+        g_murs_etages = nb_murs_poteau * g_murs
+        if detail_etages:
+            trace.append(_etape_murs("Murs d'étage / niveau", hyp, g_murs, detail_etages))
+    else:
+        g_murs_etages = sum(g for g, _ in murs_etages)
+        for k, (g_k, detail_k) in enumerate(murs_etages, start=1):
+            if detail_k:
+                trace.append(_etape_murs(f"Murs du R+{k}", hyp, g_k, detail_k))
 
     q_deg = cumuler_charges_exploitation_degressives(
         charge_toiture_kn=q_toiture, charges_etages_kn=[q_niveau] * (nb_niveaux - 1), usage_batiment=usage_batiment,
@@ -176,7 +185,7 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
         # Dalle : le dernier niveau est un plancher comme les autres.
         # Charpente : le dernier niveau ne porte que la toiture (G0).
         g_cumul = ((nb_niveaux - 1) * g_plancher + g_toiture + nb_niveaux * (pp_poutres + pp_poteau)
-                   + nb_murs_poteau * g_murs)
+                   + g_murs_etages)
         nu = hyp.elu(g_cumul, q_cumul)
         resultat_poteau = dimensionner_poteau(charge_calculee=nu, hauteur_poteau=hauteur_etage)
         if not hyp.inclure_poids_propre_ossature or resultat_poteau["cote_cm"] == cote_cm:
@@ -188,8 +197,12 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
         trace.append(_etape("Poids propre poteau / niveau", "a² × h_étage × γ",
                             f"{cm_vers_m(cote_cm)}² × {hauteur_etage} × {hyp.poids_volumique_beton_kn_m3}",
                             round(pp_poteau, 2), "kN"))
-    formule_murs = " + (n − 1) × G murs" if g_murs else ""
-    calcul_murs = f" + {nb_murs_poteau} × {round(g_murs, 2)}" if g_murs else ""
+    if plans_identiques:
+        formule_murs = " + (n − 1) × G murs" if g_murs else ""
+        calcul_murs = f" + {nb_murs_poteau} × {round(g_murs, 2)}" if g_murs else ""
+    else:
+        formule_murs = " + Σ G murs des étages" if g_murs_etages else ""
+        calcul_murs = (" + (" + " + ".join(str(round(g, 2)) for g, _ in murs_etages) + ")") if g_murs_etages else ""
     if charpente:
         trace.append(_etape("G cumulée", "G = (n − 1) × G plancher + G toiture + n × poids propres" + formule_murs,
                             f"{nb_niveaux - 1} × {round(g_plancher, 2)} + {round(g_toiture, 2)} + {nb_niveaux} × "
@@ -253,7 +266,8 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
         "charge_els_kn": ns,
         "charge_elu_semelle_kn": nu_semelle,
         "charge_els_semelle_kn": ns_semelle,
-        "charge_murs_niveau_kn": round(g_murs, 2),
+        "charge_murs_niveau_kn": round(g_murs, 2),  # R+1
+        "charge_murs_etages_kn": round(g_murs_etages, 2),  # tous les étages
         "charge_murs_rdc_kn": round(g_murs_rdc, 2),
         "resultat_poteau": resultat_poteau,
         "resultat_semelle": resultat_semelle,

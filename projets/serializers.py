@@ -266,6 +266,7 @@ class OuvrageTypeSerializer(serializers.ModelSerializer):
 # Clé d'un tronçon (moteur_calcul.formules.trame.cle_segment) : "x;y|x;y" au cm.
 MOTIF_CLE_SEGMENT = re.compile(r"^-?\d+\.\d{2};-?\d+\.\d{2}\|-?\d+\.\d{2};-?\d+\.\d{2}$")
 MAX_TRONCONS_MURS = 2000
+MAX_ETAGES_MURS = 60  # étages R+2 et plus ayant un plan des murs propre
 
 
 class ProjetSerializer(serializers.ModelSerializer):
@@ -318,6 +319,19 @@ class ProjetSerializer(serializers.ModelSerializer):
 
     def validate_murs_etages(self, valeur):
         return self._valider_murs(valeur)
+
+    def validate_murs_par_etage(self, valeur):
+        """{"2": [...], "3": [...]} : étages R+2 et plus (le R+1 est murs_etages)."""
+        if not isinstance(valeur, dict) or len(valeur) > MAX_ETAGES_MURS:
+            raise serializers.ValidationError("Plans des murs par étage attendus sous la forme {étage: [tronçons]}.")
+        propre = {}
+        for etage, troncons in valeur.items():
+            if not str(etage).isdigit() or int(etage) < 2:
+                raise serializers.ValidationError(
+                    f"Étage « {etage} » invalide : les plans propres concernent le R+2 et au-delà "
+                    "(le plan du R+1 est le plan des étages).")
+            propre[str(int(etage))] = self._valider_murs(troncons)
+        return propre
 
     def validate_pourcentage_baies_murs(self, valeur):
         if valeur is None or not (0 <= valeur <= POURCENTAGE_BAIES_MAX):

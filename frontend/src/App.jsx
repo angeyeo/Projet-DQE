@@ -58,6 +58,7 @@ const FORMULAIRE_VIDE = {
   baiesMurs: '',
   mursRdc: [],
   mursEtages: [],
+  mursParEtage: {},
   ifcImporte: false,
   planArchitecte: false,
   poteauxSaisis: [],
