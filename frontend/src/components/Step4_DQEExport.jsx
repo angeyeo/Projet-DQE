@@ -6,6 +6,7 @@ import Alerte from './ui/Alerte';
 import FicheApprovisionnement from './approvisionnement/FicheApprovisionnement';
 import { nf } from './charts/palette';
 import BoutonNoteCalcul from './structure/BoutonNoteCalcul';
+import HistoriqueDQE from './historique/HistoriqueDQE';
 
 // Conseil d'action par code de problème renvoyé par le moteur DQE.
 const CONSEILS = {
@@ -90,6 +91,12 @@ const SousTotalParts = ({ d }) => (
     {d.non_decompose > 0 && <> · non décomposé {formatFCFA(d.non_decompose)}</>}</span>
 );
 
+const TITRES = {
+  dqe: { titre: 'Devis quantitatif estimatif', sous_titre: 'généré à partir des seuls éléments validés et du barème du cabinet.' },
+  appro: { titre: "Fiche d'approvisionnement", sous_titre: 'matériaux à acheter, calculés à partir des quantités du DQE.' },
+  historique: { titre: 'Historique du DQE', sous_titre: 'versions figées et comparaison poste par poste.' },
+};
+
 export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorriger, onAnalyse, onParametres }) {
   const [onglet, setOnglet] = useState('dqe');
   const { data: dqe, erreur, detail, chargement, recharger } = useRessource(() => dqeService.genererDQE(projetId), [projetId]);
@@ -112,8 +119,8 @@ export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorrige
       <header className="etape-entete">
         <div>
           <p className="surtitre">Étape 4</p>
-          <h2>{onglet === 'dqe' ? 'Devis quantitatif estimatif' : "Fiche d'approvisionnement"}</h2>
-          <p className="texte-discret">{nomProjet} — {onglet === 'dqe' ? 'généré à partir des seuls éléments validés et du barème du cabinet.' : 'matériaux à acheter, calculés à partir des quantités du DQE.'}</p>
+          <h2>{TITRES[onglet].titre}{onglet === 'dqe' && dqe?.version ? <span className="badge-version">v{dqe.version.numero}</span> : null}</h2>
+          <p className="texte-discret">{nomProjet} — {TITRES[onglet].sous_titre}</p>
         </div>
         {onglet === 'dqe' && <div className="actions-ligne">
           <BoutonNoteCalcul projetId={projetId} />
@@ -135,9 +142,12 @@ export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorrige
         <button type="button" role="tab" aria-selected={onglet === 'appro'} className={onglet === 'appro' ? 'onglet actif' : 'onglet'}
           onClick={() => setOnglet('appro')} disabled={!dqe}
           title={!dqe ? "Disponible quand le DQE est calculé" : undefined}>Fiche d'approvisionnement</button>
+        <button type="button" role="tab" aria-selected={onglet === 'historique'} className={onglet === 'historique' ? 'onglet actif' : 'onglet'}
+          onClick={() => setOnglet('historique')}>Historique</button>
       </div>
 
       {onglet === 'appro' && dqe && <FicheApprovisionnement projetId={projetId} onParametres={onParametres} />}
+      {onglet === 'historique' && <HistoriqueDQE key={dqe?.version?.numero ?? 'aucune'} projetId={projetId} />}
 
       {onglet === 'dqe' && <>
       {exportEtat.erreur && <Alerte type="erreur">{exportEtat.erreur}</Alerte>}

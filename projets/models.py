@@ -707,3 +707,40 @@ class EvenementProduit(models.Model):
 
     def __str__(self):
         return f"{self.get_type_display()} -- {self.date:%Y-%m-%d %H:%M}"
+
+
+class VersionDQE(models.Model):
+    """Version figée d'un DQE (issue #82).
+
+    Créée quand un DQE généré DIFFÈRE de la dernière version du projet
+    (empreinte des lignes, totaux et hypothèses). Le contenu complet est
+    conservé tel qu'il a été calculé : une version n'est JAMAIS modifiée
+    après coup (save() refuse toute mise à jour). Elle disparaît seulement
+    avec son projet."""
+
+    projet = models.ForeignKey(Projet, on_delete=models.CASCADE, related_name="versions_dqe")
+    numero = models.PositiveIntegerField()
+    date = models.DateTimeField(auto_now_add=True)
+    auteur = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+                               related_name="versions_dqe")
+    # Nom figé : reste lisible si le compte est supprimé ensuite.
+    auteur_nom = models.CharField(max_length=150, blank=True)
+    total_general = models.BigIntegerField()
+    nb_lignes = models.PositiveIntegerField()
+    version_moteur = models.CharField(max_length=40, blank=True)
+    empreinte = models.CharField(max_length=64)
+    donnees = models.JSONField()
+
+    class Meta:
+        ordering = ["-numero"]
+        constraints = [models.UniqueConstraint(fields=["projet", "numero"], name="version_dqe_unique_par_projet")]
+        verbose_name = "Version de DQE"
+        verbose_name_plural = "Versions de DQE"
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValueError("Une version de DQE est figée : elle ne peut pas être modifiée.")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"DQE v{self.numero} — {self.projet}"

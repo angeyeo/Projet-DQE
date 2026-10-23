@@ -1530,3 +1530,69 @@ button.account-card { width: 100%; border: none; background: transparent; color:
   .groupe-prix .signe { display: none; }
 }
 @media (min-width: 1101px) { .grille-ouvrage .groupe-prix { grid-column: span 4; } }
+
+/* Historique et comparaison des versions du DQE (issue #82) */
+.badge-version { margin-left: 0.6rem; font-size: 0.8rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-soft-border); vertical-align: middle; }
+.historique-dqe { display: grid; gap: 1.5rem; }
+.frise-versions { list-style: none; margin: 0; padding: 0 0 0 1.1rem; border-left: 2px solid var(--core-border); display: grid; gap: 0.6rem; }
+.frise-versions li { position: relative; display: grid; grid-template-columns: auto 1fr auto; gap: 0.9rem; align-items: center;
+  padding: 0.65rem 0.9rem; background: var(--core-surface); border: 1px solid var(--core-border-subtle); border-radius: var(--radius-md); }
+.frise-versions li::before { content: ''; position: absolute; left: calc(-1.1rem - 6px); top: 50%; width: 10px; height: 10px;
+  border-radius: 50%; background: var(--core-surface); border: 2px solid var(--ink-300); transform: translateY(-50%); }
+.frise-versions li:first-child::before { background: var(--accent); border-color: var(--accent); }
+.numero-version { font-family: var(--font-mono); font-weight: 700; color: var(--ink-700); }
+.corps-version { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: baseline; }
+.actions-version { display: flex; gap: 0.4rem; }
+.delta, .hausse, .baisse { font-weight: 600; }
+.hausse { color: var(--status-warn); }
+.baisse { color: var(--status-ok); }
+.bloc-comparaison { display: grid; gap: 1rem; }
+.choix-comparaison { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+.choix-comparaison h3 { display: inline-flex; gap: 0.4rem; align-items: center; margin: 0 0.5rem 0 0; font-size: 1.05rem; }
+.choix-comparaison .form-select { width: auto; min-width: 12rem; }
+.ecart-total { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem;
+  padding: 1.1rem 1.3rem; border-radius: var(--radius-lg); background: var(--side-bg); color: var(--side-text-active); }
+.ecart-total .surtitre { color: var(--side-text); }
+.ecart-total-montants { display: flex; align-items: center; gap: 0.5rem; font-size: 1.05rem; margin: 0; }
+.ecart-total-valeur { font-family: var(--font-heading); font-size: 1.7rem; font-weight: 700; margin: 0; }
+.ecart-total.hausse .ecart-total-valeur { color: #f2c46d; }
+.ecart-total.baisse .ecart-total-valeur { color: #8fd1aa; }
+.comparaison-grille { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; }
+.origine-ecart, .ecart-lots { padding: 1rem 1.1rem; border: 1px solid var(--core-border); border-radius: var(--radius-md); background: var(--core-surface); }
+.origine-ecart h4, .ecart-lots h4, .entete-postes h4 { margin: 0 0 0.6rem; font-size: 0.95rem; }
+.origine-ecart dl { margin: 0; display: grid; gap: 0.5rem; }
+.ligne-ecart { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 0.75rem; align-items: center; }
+.ligne-ecart dt { font-size: 0.86rem; }
+.ligne-ecart dd { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; align-items: center; }
+.barre-ecart { height: 8px; border-radius: 999px; background: var(--core-border-subtle); overflow: hidden; }
+.barre-ecart > span { display: block; height: 100%; border-radius: 999px; background: var(--ink-300); }
+.ligne-ecart.hausse .barre-ecart > span { background: var(--status-warn); }
+.ligne-ecart.baisse .barre-ecart > span { background: var(--status-ok); }
+.ligne-ecart.nul dd .tabular { color: var(--ink-300); }
+.ecart-lots ul { list-style: none; margin: 0 0 0.6rem; padding: 0; display: grid; gap: 0.35rem; }
+.ecart-lots li { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.88rem; }
+.entete-postes { margin-top: 0.5rem; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.case-a-cocher { display: inline-flex; gap: 0.4rem; align-items: center; font-size: 0.86rem; }
+.pastille-statut { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.pastille-statut.ajoute { color: var(--status-ok); }
+.pastille-statut.supprime { color: var(--status-critical); }
+.pastille-statut.modifie { color: var(--status-warn); }
+.pastille-statut.identique { color: var(--ink-300); }
+.table-comparaison tr.statut-supprime td:first-child strong { text-decoration: line-through; text-decoration-color: var(--ink-300); }
+.detail-effets { font-size: 0.74rem; white-space: nowrap; }
+@media (max-width: 760px) {
+  .comparaison-grille { grid-template-columns: 1fr; }
+  .frise-versions li { grid-template-columns: auto 1fr; }
+  .actions-version { grid-column: 1 / -1; }
+  .ligne-ecart { grid-template-columns: 1fr; gap: 0.25rem; }
+}
+.historique-dqe, .bloc-comparaison, .comparaison-dqe { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.comparaison-dqe { display: grid; gap: 1rem; }
+.historique-dqe > *, .bloc-comparaison > *, .comparaison-dqe > * { min-width: 0; }
+.corps-version > * { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .choix-comparaison .form-select { min-width: 0; flex: 1 1 10rem; }
+  .ecart-total-valeur { font-size: 1.35rem; }
+  .ecart-total-montants { flex-wrap: wrap; font-size: 0.95rem; }
+}
