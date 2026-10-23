@@ -19,6 +19,12 @@ cas, comme le reste du moteur) :
   premier/dernier poteau).
 - Toutes les travées ont la même largeur/hauteur de section (poutre à
   inertie constante) -- hypothèse implicite de la formule à 8,5.
+
+DÉCISION (issue #68, 23/10/2026) : ce module n'est PAS raccordé au calcul
+des projets. Le technicien BTP a confirmé le calcul isostatique (règle B3,
+21/10/2026) ; l'hypothèse est écrite dans les résultats, la note de calcul
+et le DQE (hypotheses.HYPOTHESE_POUTRES_ISOSTATIQUES). Le raccorder
+changerait les résultats : nouvelle validation métier nécessaire.
 """
 
 from ..constantes import COEFFICIENT_CAQUOT, COEFFICIENT_REDUCTION_CAQUOT_MINORE
