@@ -60,6 +60,18 @@ METHODE_SEMELLES_PAR_DEFAUT = "ELU"
 POIDS_PROPRE_OSSATURE_PAR_DEFAUT = True
 
 
+# Méthode de calcul des poutres (audit A-05, issue #68). Règle B3 confirmée
+# par le technicien BTP le 21/10/2026 : on garde le calcul isostatique.
+# La méthode de Caquot (formules/methode_caquot.py) reste codée et testée,
+# mais n'est PAS raccordée au calcul.
+HYPOTHESE_POUTRES_ISOSTATIQUES = (
+    "Poutres calculées travée par travée, sur deux appuis simples (isostatiques) : "
+    "Mu = pu × L² / 8, sans continuité entre travées (méthode de Caquot non appliquée). Hypothèse "
+    "confirmée par le technicien BTP le 21/10/2026 (règle B3). Les moments sur appuis des poutres "
+    "continues ne sont pas calculés : chapeaux d'appui à définir par l'ingénieur."
+)
+
+
 @dataclass(frozen=True)
 class HypothesesCalcul:
     g_plancher_kn_m2: float
@@ -238,6 +250,7 @@ class HypothesesCalcul:
                if self.methode_semelles == "ELU"
                else "ELS : surface ≥ effort de service Ns / contrainte admissible du sol (usage courant).")
         )
+        m.append(HYPOTHESE_POUTRES_ISOSTATIQUES)
         if self.contrainte_sol_kn_m2 is None:
             m.append(
                 f"HYPOTHÈSE : contrainte admissible du sol {CONTRAINTE_SOL_DEFAUT:.0f} kN/m² "

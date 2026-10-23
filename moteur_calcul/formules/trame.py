@@ -548,7 +548,7 @@ def generer_poutre_sur_grille(portee, largeur_influence, charge_exploitation, hy
         _etape("Charge ELS", "pser = g + q", f"{round(g_lin, 2)} + {round(q_lin, 2)}", round(pser, 2), "kN/m"),
         _etape("Hauteur", "h = max(L / 8 ; 25 cm) (isostatique, prudent ; 25 cm : section minimale)",
                f"max({portee} / 8 ; 0,25)", resultat_poutre["hauteur_cm"], "cm"),
-        _etape("Moment ELU", "Mu = pu L² / 8", f"{round(pu, 2)} × {portee}² / 8",
+        _etape("Moment ELU", "Mu = pu L² / 8 (travée isostatique, règle B3)", f"{round(pu, 2)} × {portee}² / 8",
                resultat_poutre["moment_flechissant_knm"], "kN·m"),
         _etape("Moment réduit", "µ = Mu / (b d² fbu), d = 0,9 h, fbu = 0,85 fc28 / γb",
                f"{_v(resultat_poutre['moment_flechissant_knm'] / 1000, 5)} MN·m / "
