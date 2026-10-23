@@ -86,6 +86,39 @@ function RepartitionPrix({ d, total }) {
   );
 }
 
+// Option du projet (issue #73) : maçonnerie et enduit métrés à partir du
+// plan des murs. Enregistrée côté serveur, puis le DQE est recalculé.
+function OptionMursPlan({ projetId, projet, onChange }) {
+  const [etat, setEtat] = useState({ enCours: false, erreur: null, cible: null });
+  if (!projet?.murs_places && !projet?.metrer_murs_depuis_plan) return null;
+  const basculer = async (e) => {
+    const actif = e.target.checked;
+    setEtat({ enCours: true, erreur: null, cible: actif });
+    try {
+      await dqeService.patchProjet(projetId, { metrer_murs_depuis_plan: actif });
+      await onChange(); // DQE recalculé par le serveur
+      setEtat({ enCours: false, erreur: null, cible: null });
+    } catch (err) {
+      setEtat({ enCours: false, erreur: `Option non enregistrée : ${err.message}`, cible: null });
+    }
+  };
+  return (
+    <section className="option-murs" aria-label="Maçonnerie et enduit du plan des murs">
+      <label className="case-a-cocher">
+        <input type="checkbox" checked={etat.enCours ? etat.cible : !!projet.metrer_murs_depuis_plan}
+          disabled={etat.enCours} onChange={basculer} />
+        <span>
+          <strong>Métrer la maçonnerie et l&apos;enduit à partir du plan des murs</strong>
+          <span className="texte-discret"> — {projet.murs_places} tronçon(s) de mur placé(s). Agglos de 15 et enduit 2 faces ;
+            soubassement, enduit sous plafond et cloisons restent à saisir en postes.</span>
+        </span>
+        {etat.enCours && <Loader2 size={14} className="spin" aria-hidden="true" />}
+      </label>
+      {etat.erreur && <p className="texte-erreur" role="alert">{etat.erreur}</p>}
+    </section>
+  );
+}
+
 const SousTotalParts = ({ d }) => (
   <span className="parts-prix">mat. {formatFCFA(d.materiaux)} · MO {formatFCFA(d.main_oeuvre)}
     {d.non_decompose > 0 && <> · non décomposé {formatFCFA(d.non_decompose)}</>}</span>
@@ -101,6 +134,7 @@ export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorrige
   const [onglet, setOnglet] = useState('dqe');
   const { data: dqe, erreur, detail, chargement, recharger } = useRessource(() => dqeService.genererDQE(projetId), [projetId]);
   const [exportEtat, setExportEtat] = useState({ enCours: null, erreur: null });
+  const [erreurOption, setErreurOption] = useState(null);
   // Colonnes matériaux / main-d'œuvre dès qu'au moins une ligne est décomposée.
   const avecParts = !!dqe?.lignes?.some((l) => l.decomposition === 'decompose');
 
@@ -163,6 +197,22 @@ export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorrige
               {detail.elements_en_attente.join(', ')}
             </Alerte>
           )}
+          {detail?.problemes?.some((p) => p.message?.includes('plan des murs')) && (
+            <Alerte type="info" titre="Le métré du plan des murs demande ces prix"
+              action={{ libelle: 'Désactiver ce métré', onClick: async () => {
+                try {
+                  await dqeService.patchProjet(projetId, { metrer_murs_depuis_plan: false });
+                  setErreurOption(null);
+                  recharger();
+                } catch (err) {
+                  setErreurOption(`Option non désactivée : ${err.message}`);
+                }
+              } }}>
+              Renseignez le prix manquant dans le barème, ou désactivez le métré de la maçonnerie et de l&apos;enduit
+              à partir du plan des murs.
+              {erreurOption && <p className="texte-erreur" role="alert">{erreurOption}</p>}
+            </Alerte>
+          )}
           {detail?.problemes?.length > 0 && (
             <ul className="liste-problemes">
               {detail.problemes.map((p, i) => (
@@ -199,6 +249,8 @@ export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorrige
           {avecParts && <RepartitionPrix d={dqe.decomposition} total={dqe.total_general} />}
 
           {dqe.finances && <RecapFinances f={dqe.finances} />}
+
+          <OptionMursPlan projetId={projetId} projet={dqe.projet} onChange={recharger} />
 
           {dqe.hypotheses_projet?.length > 0 && (
             <Alerte type="info" titre="Hypothèses de calcul du projet" liste={dqe.hypotheses_projet} />

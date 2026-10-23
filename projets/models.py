@@ -119,6 +119,12 @@ class Projet(models.Model):
                                 help_text="Tronçons portant un mur au RDC (sur longrines)")
     murs_etages = models.JSONField(default=list, blank=True,
                                    help_text="Tronçons portant un mur aux étages (sur les poutres du plancher)")
+    # Issue #73 : maçonnerie (agglos 15) et enduit métrés à partir du plan des
+    # murs dans le DQE. Désactivé par défaut : les DQE existants ne changent pas.
+    metrer_murs_depuis_plan = models.BooleanField(
+        default=False,
+        help_text="Ajouter au DQE la maçonnerie et l'enduit métrés à partir du plan des murs",
+    )
     pourcentage_baies_murs = models.FloatField(
         default=0.0,
         help_text="Part des baies déduite de la surface des murs (%) -- 0 = aucune déduction (prudent)",
