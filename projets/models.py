@@ -431,6 +431,10 @@ class PosteComplementaire(models.Model):
     unite = models.CharField(max_length=20, blank=True)
     quantite = models.FloatField(null=True, blank=True)
     prix_unitaire = models.FloatField(null=True, blank=True)
+    # Décomposition du prix (issue #92) : les deux parts ou aucune ;
+    # prix_unitaire = matériaux + main-d'œuvre (services/decomposition_prix).
+    prix_materiaux = models.FloatField(null=True, blank=True)
+    prix_main_oeuvre = models.FloatField(null=True, blank=True)
     type_poste = models.CharField(
         max_length=30, choices=TypePoste.choices, blank=True
     )
@@ -466,6 +470,10 @@ class OuvrageType(models.Model):
     unite = models.CharField(max_length=20)
     # Vide = ouvrage sans prix : le prix sera demandé à l'ajout au projet.
     prix_unitaire = models.FloatField(null=True, blank=True)
+    # Décomposition du prix (issue #92) : les deux parts ou aucune ;
+    # prix_unitaire = matériaux + main-d'œuvre. Vide = « non décomposé ».
+    prix_materiaux = models.FloatField(null=True, blank=True)
+    prix_main_oeuvre = models.FloatField(null=True, blank=True)
     source_prix = models.CharField(max_length=200, blank=True,
                                    help_text="Origine du prix : DQE de l'ingénieur, devis fournisseur...")
     date_prix = models.DateField(null=True, blank=True)
@@ -524,6 +532,12 @@ class EntrepriseParametres(models.Model):
             "DQE et absente ici bloque la génération avec un message explicite."
         ),
     )
+
+    # Décomposition des prix du barème (issue #92) :
+    # {clé: {"materiaux": FCFA, "main_oeuvre": FCFA}}, avec
+    # prix_unitaires[clé] = materiaux + main_oeuvre. Clé absente = prix
+    # « non décomposé » (aucune répartition supposée).
+    prix_decomposition = models.JSONField(default=dict, blank=True)
 
     # Traçabilité des prix : {clé: {"date", "auteur", "source"}} mise à jour
     # par le serveur à chaque changement de valeur (jamais par le client).

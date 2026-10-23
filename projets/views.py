@@ -1461,7 +1461,8 @@ class OuvrageTypeViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                 if not isinstance(l, dict):
                     erreurs[str(i + 1)] = "Ligne invalide."
                     continue
-                donnees = {k: l.get(k) for k in ("lot", "designation", "unite", "prix_unitaire")} | commun
+                donnees = {k: l.get(k) for k in ("lot", "designation", "unite", "prix_unitaire",
+                                                 "prix_materiaux", "prix_main_oeuvre")} | commun
                 instance = None
                 if l.get("action") == "mettre_a_jour":
                     instance = self.get_queryset().filter(
@@ -1472,7 +1473,7 @@ class OuvrageTypeViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                         continue
                     # Mise à jour : seul le prix (et son origine) change ; la
                     # désignation de la bibliothèque garde son écriture.
-                    donnees = {"prix_unitaire": donnees["prix_unitaire"]} | commun
+                    donnees = {k: donnees[k] for k in ("prix_unitaire", "prix_materiaux", "prix_main_oeuvre")} | commun
                 s = OuvrageTypeSerializer(instance, data=donnees, partial=instance is not None,
                                           context={"request": request})
                 if not s.is_valid():

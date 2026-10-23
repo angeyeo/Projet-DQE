@@ -52,10 +52,50 @@ function RecapFinances({ f }) {
   );
 }
 
+// Répartition matériaux / main-d'œuvre du total (issue #92). La part
+// « non décomposé » reste visible : elle n'est jamais répartie.
+function RepartitionPrix({ d, total }) {
+  if (!total) return null;
+  const parts = [
+    { cle: 'materiaux', libelle: 'Matériaux', v: d.materiaux },
+    { cle: 'main_oeuvre', libelle: "Main-d'œuvre", v: d.main_oeuvre },
+    { cle: 'non_decompose', libelle: 'Non décomposé', v: d.non_decompose },
+  ].filter((x) => x.v > 0);
+  const pct = (v) => `${nf((v / total) * 100, 1)} %`;
+  return (
+    <section className="repartition-prix" aria-label="Répartition matériaux et main-d'œuvre">
+      <div className="repartition-barre" aria-hidden="true">
+        {parts.map((x) => <span key={x.cle} className={`seg seg-${x.cle}`} style={{ flexGrow: x.v }} />)}
+      </div>
+      <dl className="repartition-legende">
+        {parts.map((x) => (
+          <div key={x.cle}>
+            <dt><span className={`pastille seg-${x.cle}`} aria-hidden="true" />{x.libelle}</dt>
+            <dd className="tabular">{formatFCFA(x.v)} <span className="texte-discret">{pct(x.v)}</span></dd>
+          </div>
+        ))}
+      </dl>
+      {d.lignes_non_decomposees > 0 && (
+        <p className="texte-discret">
+          {d.lignes_non_decomposees} ligne(s) au prix non décomposé : renseignez leurs parts dans la bibliothèque, le barème
+          ou le poste pour les répartir. Aucune répartition n'est estimée.
+        </p>
+      )}
+    </section>
+  );
+}
+
+const SousTotalParts = ({ d }) => (
+  <span className="parts-prix">mat. {formatFCFA(d.materiaux)} · MO {formatFCFA(d.main_oeuvre)}
+    {d.non_decompose > 0 && <> · non décomposé {formatFCFA(d.non_decompose)}</>}</span>
+);
+
 export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorriger, onAnalyse, onParametres }) {
   const [onglet, setOnglet] = useState('dqe');
   const { data: dqe, erreur, detail, chargement, recharger } = useRessource(() => dqeService.genererDQE(projetId), [projetId]);
   const [exportEtat, setExportEtat] = useState({ enCours: null, erreur: null });
+  // Colonnes matériaux / main-d'œuvre dès qu'au moins une ligne est décomposée.
+  const avecParts = !!dqe?.lignes?.some((l) => l.decomposition === 'decompose');
 
   const exporter = async (format) => {
     setExportEtat({ enCours: format, erreur: null });
@@ -146,6 +186,8 @@ export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorrige
             <button type="button" className="btn btn-secondary" onClick={onAnalyse}><BarChart3 size={16} /> <span>Analyse</span></button>
           </section>
 
+          {avecParts && <RepartitionPrix d={dqe.decomposition} total={dqe.total_general} />}
+
           {dqe.finances && <RecapFinances f={dqe.finances} />}
 
           {dqe.hypotheses_projet?.length > 0 && (
@@ -163,17 +205,22 @@ export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorrige
             <section key={lot.lot} className="lot-dqe">
               <div className="lot-dqe-entete">
                 <h3>{lot.libelle}</h3>
-                <span className="tabular">{formatFCFA(lot.sous_total)}</span>
+                <span className="tabular">
+                  {formatFCFA(lot.sous_total)}
+                  {avecParts && lot.decomposition && <SousTotalParts d={lot.decomposition} />}
+                </span>
               </div>
               {(lot.sous_lots || [{ libelle: null, lignes: lot.lignes }]).map((sl) => (
                 <div key={sl.libelle || 'tout'} className="sous-lot-dqe">
                   {sl.libelle && (
-                    <div className="sous-lot-entete"><h4>{sl.libelle}</h4><span className="tabular">{formatFCFA(sl.sous_total)}</span></div>
+                    <div className="sous-lot-entete"><h4>{sl.libelle}</h4><span className="tabular">{formatFCFA(sl.sous_total)}
+                      {avecParts && sl.decomposition && <SousTotalParts d={sl.decomposition} />}</span></div>
                   )}
                   <div className="table-scroll">
                     <table className="custom-table table-dqe">
                       <thead>
-                        <tr><th>Repère</th><th>Désignation</th><th>U</th><th>Quantité</th><th>PU</th><th>Montant</th></tr>
+                        <tr><th>Repère</th><th>Désignation</th><th>U</th><th>Quantité</th><th>PU</th>
+                          {avecParts && <><th>dont matériaux</th><th>dont main-d'œuvre</th></>}<th>Montant</th></tr>
                       </thead>
                       <tbody>
                         {sl.lignes.map((l, i) => {
@@ -196,6 +243,11 @@ export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorrige
                                 {nf(l.prix_unitaire, 2)}
                                 {l.prix_source && <div className="texte-discret prix-source">{l.prix_date || 'date non tracée'}</div>}
                               </td>
+                              {avecParts && (l.decomposition === 'decompose' ? (
+                                <><td className="tabular">{nf(l.montant_materiaux)}</td><td className="tabular">{nf(l.montant_main_oeuvre)}</td></>
+                              ) : (
+                                <td colSpan={2} className="cellule-non-decompose">non décomposé</td>
+                              ))}
                               <td className="tabular"><strong>{nf(l.montant)}</strong></td>
                             </tr>
                           );
@@ -209,7 +261,8 @@ export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorrige
           ))}
           <p className="texte-discret">
             Montant de ligne = quantité (arrondie au millième) × prix unitaire du barème, arrondi au FCFA.
-            Les prix du barème sont « fourni-posé » : matériaux, main-d'œuvre et matériel n'y sont pas séparables.
+            Parts : matériaux = quantité × prix matériaux, arrondi au FCFA ; main-d'œuvre = montant − matériaux.
+            Un prix sans parts saisies reste « non décomposé » (fourni-posé) : aucune répartition n'est estimée.
           </p>
         </>
       )}

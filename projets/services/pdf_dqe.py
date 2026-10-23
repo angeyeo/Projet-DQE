@@ -325,17 +325,35 @@ def infos_projet(dqe_data, lots, entreprise):
 
 COLS = [16 * mm, None, 12 * mm, 20 * mm, 24 * mm, 28 * mm]
 COLS[1] = LARGEUR_UTILE - sum(c for c in COLS if c)
+# Avec la décomposition matériaux / main-d'œuvre (issue #92) : deux colonnes
+# de plus, insérées avant le montant ; les autres sont resserrées.
+COLS_PARTS = [16 * mm, None, 10 * mm, 15 * mm, 18 * mm, 19 * mm, 19 * mm, 22 * mm]
+COLS_PARTS[1] = LARGEUR_UTILE - sum(c for c in COLS_PARTS if c)
 
 
-def _entete_tableau():
-    return [
+def _entete_tableau(avec_parts=False):
+    tete = [
         Paragraph("N°", S["entete_tab_c"]), Paragraph("DÉSIGNATION", S["entete_tab"]),
-        Paragraph("UNITÉ", S["entete_tab_c"]), Paragraph("QUANTITÉ", S["entete_tab_d"]),
-        Paragraph("P.U. HT", S["entete_tab_d"]), Paragraph("MONTANT HT", S["entete_tab_d"]),
+        Paragraph("U" if avec_parts else "UNITÉ", S["entete_tab_c"]),
+        Paragraph("QTÉ" if avec_parts else "QUANTITÉ", S["entete_tab_d"]),
+        Paragraph("P.U. HT", S["entete_tab_d"]),
     ]
+    if avec_parts:
+        tete += [Paragraph("DONT MAT.", S["entete_tab_d"]), Paragraph("DONT M.-O.", S["entete_tab_d"])]
+    return tete + [Paragraph("MONTANT HT", S["entete_tab_d"])]
 
 
-def tableau_lot(lot):
+def _cellules_parts(ligne):
+    """Parts d'une ligne ; « non décomposé » si le prix n'a pas de parts
+    (aucune répartition n'est jamais inventée)."""
+    if ligne.get("decomposition") == "decompose":
+        return [Paragraph(nombre(ligne["montant_materiaux"]), S["droite"]),
+                Paragraph(nombre(ligne["montant_main_oeuvre"]), S["droite"])], False
+    return [Paragraph("non décomposé", _style("nd", fontSize=Tailles.PETIT - 0.4, alignment=TA_CENTER,
+                                               textColor=Couleurs.GRIS)), ""], True
+
+
+def tableau_lot(lot, avec_parts=False):
     """Titre du lot + tableau numéroté (lot.sous-lot.ligne) + sous-totaux.
     L'en-tête du tableau est répété à chaque page ; aucune ligne n'est coupée."""
     titre_lot = Table([[Paragraph(_txt(lot["label"]), S["section"]),
@@ -348,7 +366,8 @@ def tableau_lot(lot):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
 
-    data = [_entete_tableau()]
+    data = [_entete_tableau(avec_parts)]
+    vides = [""] * (len(data[0]) - 2)  # cellules sous un titre de sous-lot
     st = [
         ("BACKGROUND", (0, 0), (-1, 0), Couleurs.NUIT),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -363,7 +382,7 @@ def tableau_lot(lot):
         data.append([Paragraph(num_sl, _style("nsl", fontName=POLICE_GRAS, fontSize=Tailles.CORPS, alignment=TA_CENTER,
                                               textColor=Couleurs.BLEU)),
                      Paragraph(_txt(titre_sl).upper(), _style("tsl", fontName=POLICE_GRAS, fontSize=Tailles.PETIT + 0.4,
-                                                              textColor=Couleurs.BLEU)), "", "", "", ""])
+                                                              textColor=Couleurs.BLEU)), *vides])
         r = len(data) - 1
         st += [("SPAN", (1, r), (-1, r)), ("BACKGROUND", (0, r), (-1, r), Couleurs.FOND),
                ("LINEABOVE", (0, r), (-1, r), 0.6, Couleurs.FILET)]
@@ -372,52 +391,88 @@ def tableau_lot(lot):
             designation = _txt(l["designation"]) + (
                 f"<br/><font size='{Tailles.PETIT - 0.6}' color='#{Couleurs.GRIS.hexval()[2:]}'>{detail}</font>"
                 if detail else "")
-            data.append([
+            rangee = [
                 Paragraph(f"{num_sl}.{i_l:02d}", _style("nl", fontSize=Tailles.PETIT, alignment=TA_CENTER,
                                                         textColor=Couleurs.GRIS)),
                 Paragraph(designation, S["corps"]),
                 Paragraph(_txt(l["unite"]), S["centre"]),
                 Paragraph(nombre(l["quantite"]), S["droite"]),
                 Paragraph(nombre(l["prix_unitaire"]), S["droite"]),
-                Paragraph(nombre(l["montant"]), S["droite_gras"]),
-            ])
+            ]
+            fusion = False
+            if avec_parts:
+                parts, fusion = _cellules_parts(l)
+                rangee += parts
+            data.append(rangee + [Paragraph(nombre(l["montant"]), S["droite_gras"])])
             r = len(data) - 1
+            if fusion:
+                st.append(("SPAN", (5, r), (6, r)))
             st.append(("LINEBELOW", (0, r), (-1, r), 0.35, Couleurs.FILET))
             if i_l % 2 == 0:
                 st.append(("BACKGROUND", (0, r), (-1, r), Couleurs.FOND_LEGER))
         if len(lot["sous_lots"]) == 1:
             continue  # sous-total identique à celui du lot : non répété
+        style_sst = _style("sst", fontName=POLICE_GRAS, fontSize=Tailles.CORPS, alignment=TA_RIGHT,
+                           textColor=Couleurs.BLEU)
+        parts = ([Paragraph(nombre(sl["decomposition"]["materiaux"]), style_sst),
+                  Paragraph(nombre(sl["decomposition"]["main_oeuvre"]), style_sst)] if avec_parts else [])
         data.append(["", Paragraph(f"Sous-total {num_sl} — {_txt(sl['libelle'] or '')}", S["petit_droite"]), "", "", "",
-                     Paragraph(nombre(sl["sous_total"]), _style("sst", fontName=POLICE_GRAS, fontSize=Tailles.CORPS,
-                                                                alignment=TA_RIGHT, textColor=Couleurs.BLEU))])
+                     *parts, Paragraph(nombre(sl["sous_total"]), style_sst)])
         r = len(data) - 1
-        st += [("SPAN", (1, r), (4, r)), ("LINEABOVE", (4, r), (-1, r), 0.8, Couleurs.BLEU)]
+        st += [("SPAN", (1, r), (4, r)), ("LINEABOVE", (5 if avec_parts else 4, r), (-1, r), 0.8, Couleurs.BLEU)]
 
-    data.append(["", Paragraph(f"Sous-total Lot {lot['numero']} — {_txt(lot['nom'].capitalize())}",
-                               _style("stl", fontName=POLICE_GRAS, alignment=TA_RIGHT, textColor=Couleurs.NUIT)),
-                 "", "", Paragraph(fcfa(lot["sous_total"]), _style("stv", fontName=POLICE_GRAS, alignment=TA_RIGHT,
-                                                                  textColor=Couleurs.NUIT)), ""])
-    r = len(data) - 1
-    st += [("SPAN", (1, r), (3, r)), ("SPAN", (4, r), (5, r)), ("LINEABOVE", (0, r), (-1, r), 1, Couleurs.NUIT),
+    libelle_lot = Paragraph(f"Sous-total Lot {lot['numero']} — {_txt(lot['nom'].capitalize())}",
+                            _style("stl", fontName=POLICE_GRAS, alignment=TA_RIGHT, textColor=Couleurs.NUIT))
+    style_stv = _style("stv", fontName=POLICE_GRAS, alignment=TA_RIGHT, textColor=Couleurs.NUIT)
+    if avec_parts:
+        d = lot["decomposition"]
+        data.append(["", libelle_lot, "", "", "", Paragraph(nombre(d["materiaux"]), style_stv),
+                     Paragraph(nombre(d["main_oeuvre"]), style_stv), Paragraph(nombre(lot["sous_total"]), style_stv)])
+        r = len(data) - 1
+        st.append(("SPAN", (1, r), (4, r)))
+    else:
+        data.append(["", libelle_lot, "", "", Paragraph(fcfa(lot["sous_total"]), style_stv), ""])
+        r = len(data) - 1
+        st += [("SPAN", (1, r), (3, r)), ("SPAN", (4, r), (5, r))]
+    st += [("LINEABOVE", (0, r), (-1, r), 1, Couleurs.NUIT),
            ("BACKGROUND", (0, r), (-1, r), Couleurs.FOND), ("TOPPADDING", (0, r), (-1, r), 6),
            ("BOTTOMPADDING", (0, r), (-1, r), 6)]
+    if avec_parts and lot["decomposition"]["non_decompose"]:
+        data.append(["", Paragraph("dont prix non décomposés (sans parts matériaux / main-d'œuvre)",
+                                   S["petit_droite"]), "", "", "", "", "",
+                     Paragraph(nombre(lot["decomposition"]["non_decompose"]), S["petit_droite"])])
+        r = len(data) - 1
+        st += [("SPAN", (1, r), (6, r)), ("BACKGROUND", (0, r), (-1, r), Couleurs.FOND)]
 
-    t = Table(data, colWidths=COLS, repeatRows=1, splitByRow=True)
+    t = Table(data, colWidths=COLS_PARTS if avec_parts else COLS, repeatRows=1, splitByRow=True)
     t.setStyle(TableStyle(st))
     # Le titre du lot ne reste jamais seul en bas de page : il voyage avec
     # l'en-tête et les premières lignes du tableau.
     return [CondPageBreak(45 * mm), titre_lot, Spacer(1, 4), t, Spacer(1, 6 * mm)]
 
 
-def recap_lots(dqe_data, lots):
+def recap_lots(dqe_data, lots, avec_parts=False):
     total = dqe_data["total_general"]
-    data = [[Paragraph("LOT", S["entete_tab"]), Paragraph("DÉSIGNATION", S["entete_tab"]),
-             Paragraph("PART", S["entete_tab_d"]), Paragraph("MONTANT HT", S["entete_tab_d"])]]
+    tete = [Paragraph("LOT", S["entete_tab"]), Paragraph("DÉSIGNATION", S["entete_tab"]),
+            Paragraph("PART", S["entete_tab_d"])]
+    if avec_parts:
+        tete += [Paragraph("DONT MAT.", S["entete_tab_d"]), Paragraph("DONT M.-O.", S["entete_tab_d"]),
+                 Paragraph("NON DÉCOMPOSÉ", S["entete_tab_d"])]
+    data = [tete + [Paragraph("MONTANT HT", S["entete_tab_d"])]]
     for l in lots:
         part = f"{round(l['sous_total'] / total * 100, 1):g} %".replace(".", ",") if total else "—"
-        data.append([Paragraph(l["numero"], S["corps_gras"]), Paragraph(_txt(l["nom"].capitalize()), S["corps"]),
-                     Paragraph(part, S["droite"]), Paragraph(fcfa(l["sous_total"]), S["droite_gras"])])
-    t = Table(data, colWidths=[16 * mm, LARGEUR_UTILE - 16 * mm - 22 * mm - 40 * mm, 22 * mm, 40 * mm])
+        rangee = [Paragraph(l["numero"], S["corps_gras"]), Paragraph(_txt(l["nom"].capitalize()), S["corps"]),
+                  Paragraph(part, S["droite"])]
+        if avec_parts:
+            d = l["decomposition"]
+            rangee += [Paragraph(nombre(d[k]), S["droite"]) for k in ("materiaux", "main_oeuvre", "non_decompose")]
+        data.append(rangee + [Paragraph(fcfa(l["sous_total"]), S["droite_gras"])])
+    if avec_parts:
+        largeurs = [12 * mm, None, 15 * mm, 25 * mm, 25 * mm, 25 * mm, 32 * mm]
+    else:
+        largeurs = [16 * mm, None, 22 * mm, 40 * mm]
+    largeurs[1] = LARGEUR_UTILE - sum(c for c in largeurs if c)
+    t = Table(data, colWidths=largeurs)
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), Couleurs.NUIT),
         ("LINEBELOW", (0, 1), (-1, -1), 0.35, Couleurs.FILET),
@@ -607,10 +662,11 @@ class CanevasNumerote(pdfcanvas.Canvas):
 # ---------------------------------------------------------------------------
 
 def generer_pdf(dqe_data, entreprise=None, lots=None) -> BytesIO:
-    from .dqe_exporters import regrouper_par_lot
+    from .dqe_exporters import decomposition_active, regrouper_par_lot
 
     lots = lots if lots is not None else regrouper_par_lot(dqe_data)
     lots = [l for l in lots if l["lignes"]]
+    avec_parts = decomposition_active(dqe_data)
     projet = dqe_data.get("projet", {})
     contact, _ = coordonnees_cabinet(entreprise)
     ref = reference_devis(projet)
@@ -634,10 +690,16 @@ def generer_pdf(dqe_data, entreprise=None, lots=None) -> BytesIO:
     story += entete(dqe_data, entreprise)
     story += titre(dqe_data, lots)
     story += infos_projet(dqe_data, lots, entreprise)
+    if avec_parts:
+        story += [Paragraph(
+            "DONT MAT. / DONT M.-O. : parts matériaux et main-d'œuvre du montant de la ligne "
+            "(matériaux = quantité × prix matériaux, arrondi au FCFA ; main-d'œuvre = montant − matériaux). "
+            "« non décomposé » : prix saisi sans ses parts, jamais réparti par le logiciel.", S["petit"]),
+            Spacer(1, 3 * mm)]
     for lot in lots:
-        story += tableau_lot(lot)
-    if len(lots) > 1:
-        story.append(recap_lots(dqe_data, lots))
+        story += tableau_lot(lot, avec_parts)
+    if len(lots) > 1 or avec_parts:
+        story.append(recap_lots(dqe_data, lots, avec_parts))
     story.append(bloc_financier(dqe_data))
     story += infos_techniques(dqe_data)
     story.append(cartouche(dqe_data, lots))

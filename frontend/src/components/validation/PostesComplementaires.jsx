@@ -3,9 +3,10 @@ import { BookOpen, HardHat, Loader2, Plus, Sparkles, Trash2 } from 'lucide-react
 import { dqeService, formatFCFA } from '../../api/dqeService';
 import useReferentiel from '../../hooks/useReferentiel';
 import Alerte from '../ui/Alerte';
+import { ChampsPrix, partsIncompletes } from '../bibliotheque/BibliothequeOuvrages';
 
 const UNITES = ['forfait', 'ens.', 'u', 'm²', 'm³', 'ml', 'kg', 'jour'];
-const VIDE = { lot: '', mode: 'simple', designation: '', unite: '', quantite: '', prixUnitaire: '', typePoste: '', geometrie: {}, ouvrage: '' };
+const VIDE = { lot: '', mode: 'simple', designation: '', unite: '', quantite: '', prixUnitaire: '', prixMateriaux: '', prixMainOeuvre: '', typePoste: '', geometrie: {}, ouvrage: '' };
 
 // Postes hors structure (installation de chantier, maçonnerie, enduits…).
 // Mode simple : quantité et prix SAISIS. Mode ratio : géométrie saisie,
@@ -40,7 +41,10 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
     if (!p.designation.trim()) manquants.push('désignation');
     if (!p.unite) manquants.push('unité');
     if (!(Number(p.quantite) > 0)) manquants.push('quantité > 0');
-    if (p.prixUnitaire === '' || Number(p.prixUnitaire) < 0) manquants.push('prix unitaire');
+    if (partsIncompletes(p)) manquants.push('les deux parts du prix (ou aucune)');
+    else if ((p.prixMateriaux === '' || p.prixMainOeuvre === '') && (p.prixUnitaire === '' || Number(p.prixUnitaire) < 0)) {
+      manquants.push('prix unitaire');
+    }
   } else {
     if (!p.typePoste) manquants.push('type de poste');
     typeRatio?.geometrie.filter((g) => g.requis).forEach((g) => {
@@ -62,7 +66,7 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
       // action, dont l'échec (doublon, droits) est dit sans annuler le poste.
       try {
         await dqeService.creerOuvrage({ lot: p.lot, designation: p.designation, unite: p.unite, prixUnitaire: p.prixUnitaire,
-          sourcePrix: 'saisi dans un projet', datePrix: new Date().toISOString().slice(0, 10) });
+          prixMateriaux: p.prixMateriaux, prixMainOeuvre: p.prixMainOeuvre, sourcePrix: 'saisi dans un projet', datePrix: new Date().toISOString().slice(0, 10) });
         setInfoBiblio(`« ${p.designation.trim()} » enregistré dans la bibliothèque du cabinet.`);
         setOuvrages(null);
       } catch (err) {
@@ -119,7 +123,12 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
                       ? Object.entries(x.geometrie || {}).map(([k, v]) => `${k} = ${v}`).join(' · ')
                       : `${x.quantite} ${x.unite}`}
                   </td>
-                  <td className="tabular">{x.mode === 'ratio' ? 'barème' : formatFCFA(x.prix_unitaire)}</td>
+                  <td className="tabular">
+                    {x.mode === 'ratio' ? 'barème' : formatFCFA(x.prix_unitaire)}
+                    {x.mode !== 'ratio' && (x.prix_materiaux != null
+                      ? <span className="parts-prix">mat. {formatFCFA(x.prix_materiaux)} · MO {formatFCFA(x.prix_main_oeuvre)}</span>
+                      : <span className="parts-prix non-decompose">non décomposé</span>)}
+                  </td>
                   <td className="tabular">{x.montant != null ? formatFCFA(x.montant) : <span className="texte-discret">au DQE</span>}</td>
                   <td>
                     <button type="button" className="btn btn-secondary btn-compact" onClick={() => onSupprimer(x.id)} aria-label="Supprimer ce poste">
@@ -218,10 +227,7 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
               <label className="form-label" htmlFor="poste-qte">Quantité</label>
               <input id="poste-qte" type="number" min="0" step="0.01" className="form-control" value={p.quantite} onChange={(e) => setP({ ...p, quantite: e.target.value })} />
             </div>
-            <div className="form-group">
-              <label className="form-label" htmlFor="poste-pu">Prix unitaire (FCFA)</label>
-              <input id="poste-pu" type="number" min="0" step="1" className="form-control" value={p.prixUnitaire} onChange={(e) => setP({ ...p, prixUnitaire: e.target.value })} />
-            </div>
+            <ChampsPrix valeur={p} onChange={setP} prefixe="poste" libellePrix="Prix unitaire (FCFA)" placeholder="" />
           </div>
         ) : (
           <div className="grid-3">

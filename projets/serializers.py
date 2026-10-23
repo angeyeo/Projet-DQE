@@ -2,6 +2,8 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from rest_framework import serializers
 
+from .services.decomposition_prix import verifier_decomposition
+
 import re
 
 from moteur_calcul.constantes import CHARGES_EXPLOITATION, POIDS_MURS_MAX_KN_M2, POURCENTAGE_BAIES_MAX
@@ -159,6 +161,9 @@ class PosteComplementaireSerializer(serializers.ModelSerializer):
         attrs.setdefault("lot", ouvrage.lot)
         if attrs.get("prix_unitaire") is None and ouvrage.prix_unitaire is not None:
             attrs["prix_unitaire"] = ouvrage.prix_unitaire
+            # Parts matériaux / main-d'œuvre copiées avec le prix (issue #92).
+            attrs.setdefault("prix_materiaux", ouvrage.prix_materiaux)
+            attrs.setdefault("prix_main_oeuvre", ouvrage.prix_main_oeuvre)
             attrs["prix_source"] = "bibliothèque du cabinet" + (f" ({ouvrage.source_prix})" if ouvrage.source_prix else "")
             attrs["prix_date"] = ouvrage.date_prix
         elif "prix_unitaire" in attrs:
@@ -183,6 +188,13 @@ class PosteComplementaireSerializer(serializers.ModelSerializer):
             if q is None or q <= 0:
                 erreurs["quantite"] = "La quantité doit être renseignée et strictement positive."
             pu = val("prix_unitaire")
+            try:
+                pu, mat, mo = verifier_decomposition(pu, val("prix_materiaux"), val("prix_main_oeuvre"),
+                                                     "Prix du poste")
+                if mat is not None:
+                    attrs.update(prix_unitaire=pu, prix_materiaux=mat, prix_main_oeuvre=mo)
+            except ValueError as exc:
+                erreurs["prix_materiaux"] = str(exc)
             if pu is None or pu < 0:
                 erreurs["prix_unitaire"] = "Le prix unitaire doit être renseigné (≥ 0 FCFA)."
         else:
@@ -205,8 +217,8 @@ class OuvrageTypeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = OuvrageType
-        fields = ("id", "lot", "lot_libelle", "designation", "unite", "prix_unitaire", "source_prix", "date_prix",
-                  "nb_postes", "date_modification")
+        fields = ("id", "lot", "lot_libelle", "designation", "unite", "prix_unitaire", "prix_materiaux",
+                  "prix_main_oeuvre", "source_prix", "date_prix", "nb_postes", "date_modification")
         read_only_fields = ("date_modification",)
 
     def get_nb_postes(self, obj):
@@ -239,6 +251,15 @@ class OuvrageTypeSerializer(serializers.ModelSerializer):
         if doublons.exists():
             raise serializers.ValidationError(
                 f"« {cle['designation']} » ({cle['unite']}) existe déjà dans ce lot de la bibliothèque.")
+        # Décomposition (issue #92) : deux parts ou aucune ; total = somme.
+        val = lambda k: attrs.get(k, getattr(self.instance, k, None))  # noqa: E731
+        try:
+            pu, mat, mo = verifier_decomposition(val("prix_unitaire"), val("prix_materiaux"),
+                                                 val("prix_main_oeuvre"), f"« {cle['designation']} »")
+        except ValueError as exc:
+            raise serializers.ValidationError({"prix_materiaux": str(exc)})
+        if mat is not None:
+            attrs.update(prix_unitaire=pu, prix_materiaux=mat, prix_main_oeuvre=mo)
         return attrs
 
 
@@ -396,8 +417,10 @@ class EntrepriseParametresSerializer(serializers.ModelSerializer):
             meta = dict(instance.prix_unitaires_meta or {})
             request = self.context.get("request")
             auteur = getattr(getattr(request, "user", None), "username", None)
+            anciennes_parts = instance.prix_decomposition or {}
+            nouvelles_parts = validated_data.get("prix_decomposition", anciennes_parts)
             for cle, valeur in nouveaux.items():
-                if anciens.get(cle) != valeur:
+                if anciens.get(cle) != valeur or anciennes_parts.get(cle) != nouvelles_parts.get(cle):
                     meta[cle] = {
                         "date": timezone.localdate().isoformat(),
                         "auteur": auteur,
@@ -407,6 +430,43 @@ class EntrepriseParametresSerializer(serializers.ModelSerializer):
                 meta.pop(cle, None)
             validated_data["prix_unitaires_meta"] = meta
         return super().update(instance, validated_data)
+
+    def validate_prix_decomposition(self, valeur):
+        if not isinstance(valeur, dict):
+            raise serializers.ValidationError("La décomposition doit être un objet {clé: {materiaux, main_oeuvre}}.")
+        propres = {}
+        for cle, parts in valeur.items():
+            if parts in (None, "", {}):
+                continue  # décomposition retirée : prix « non décomposé »
+            if not isinstance(parts, dict):
+                raise serializers.ValidationError(f"Décomposition « {cle} » invalide.")
+            mat, mo = parts.get("materiaux"), parts.get("main_oeuvre")
+            if mat in (None, "") and mo in (None, ""):
+                continue
+            try:
+                _, mat, mo = verifier_decomposition(None, None if mat == "" else mat, None if mo == "" else mo,
+                                                    f"Prix « {cle} »")
+            except ValueError as exc:
+                raise serializers.ValidationError(str(exc))
+            propres[cle] = {"materiaux": mat, "main_oeuvre": mo}
+        return propres
+
+    def validate(self, attrs):
+        """Barème : chaque prix décomposé doit être égal à matériaux +
+        main-d'œuvre ; retirer un prix retire sa décomposition."""
+        attrs = super().validate(attrs)
+        if "prix_unitaires" not in attrs and "prix_decomposition" not in attrs:
+            return attrs
+        prix = attrs.get("prix_unitaires", getattr(self.instance, "prix_unitaires", None) or {})
+        decomposition = attrs.get("prix_decomposition", getattr(self.instance, "prix_decomposition", None) or {})
+        decomposition = {c: p for c, p in decomposition.items() if c in prix}
+        for cle, parts in decomposition.items():
+            try:
+                verifier_decomposition(prix[cle], parts["materiaux"], parts["main_oeuvre"], f"Prix « {cle} »")
+            except ValueError as exc:
+                raise serializers.ValidationError({"prix_decomposition": str(exc)})
+        attrs["prix_decomposition"] = decomposition
+        return attrs
 
     def validate_parametres_approvisionnement(self, params):
         from .services.approvisionnement import valider_parametres

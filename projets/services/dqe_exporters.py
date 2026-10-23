@@ -58,6 +58,7 @@ LOT_NOMS = {
 
 
 from .dqe_calculator import montant_en_toutes_lettres  # noqa: E402
+from .decomposition_prix import totaux as totaux_decomposition  # noqa: E402
 
 
 def lignes_recap_finances(dqe_data):
@@ -120,6 +121,12 @@ def _numero_lot(code_lot: str) -> str:
     return "99"
 
 
+def decomposition_active(dqe_data: dict) -> bool:
+    """Vrai si au moins une ligne a ses parts matériaux / main-d'œuvre
+    (issue #92) : les colonnes ne sont ajoutées qu'à ce moment-là."""
+    return any(l.get("decomposition") == "decompose" for l in dqe_data.get("lignes", []))
+
+
 def regrouper_par_lot(dqe_data: dict) -> list:
     """
     Fusionne dqe_data["lots"] par numéro de lot (deux sous-lots Gros
@@ -138,7 +145,8 @@ def regrouper_par_lot(dqe_data: dict) -> list:
         groupe["parties"].append(lot_entry.get("libelle") or lot_entry["lot"])
         for sl in lot_entry.get("sous_lots") or [{"libelle": lot_entry.get("libelle"), "lignes": lot_entry["lignes"],
                                                  "sous_total": lot_entry["sous_total"]}]:
-            groupe["sous_lots"].append(dict(sl, partie=lot_entry.get("libelle") or lot_entry["lot"]))
+            groupe["sous_lots"].append(dict(sl, partie=lot_entry.get("libelle") or lot_entry["lot"],
+                                            decomposition=sl.get("decomposition") or totaux_decomposition(sl["lignes"])))
 
     resultat = []
     for numero in sorted(groupes.keys()):
@@ -151,8 +159,20 @@ def regrouper_par_lot(dqe_data: dict) -> list:
             "sous_lots": groupes[numero]["sous_lots"],
             "plusieurs_parties": len(groupes[numero]["parties"]) > 1,
             "sous_total": groupes[numero]["sous_total"],
+            "decomposition": totaux_decomposition(groupes[numero]["lignes"]),
         })
     return resultat
+
+
+def _parts_excel(ws, row, d, font, fill=None):
+    """Sous-total matériaux / main-d'œuvre dans les colonnes F et G."""
+    for col, v in ((6, d["materiaux"]), (7, d["main_oeuvre"])):
+        c = ws.cell(row=row, column=col, value=v)
+        c.font = font
+        c.number_format = "#,##0"
+        c.alignment = Alignment(horizontal="right")
+        if fill is not None:
+            c.fill = fill
 
 
 def _entreprise_champ(entreprise: dict, cle: str) -> str:
@@ -255,7 +275,10 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
     ws.cell(row=row, column=1, value=titre_projet).font = font_bold
     row += 2
 
+    avec_parts = decomposition_active(dqe_data)
     headers = ["N°", "Désignation", f"Montant ({dqe_data.get('devise', 'FCFA')})"]
+    if avec_parts:
+        headers += ["dont matériaux", "dont main-d'œuvre", "dont non décomposé"]
     header_row = row
     for col_idx, header in enumerate(headers, 1):
         cell = ws.cell(row=header_row, column=col_idx, value=header)
@@ -273,8 +296,30 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
         m_cell.number_format = "#,##0"
         m_cell.alignment = Alignment(horizontal="right")
         m_cell.border = thin_border
+        if avec_parts:
+            d = lot["decomposition"]
+            for col, v in ((4, d["materiaux"]), (5, d["main_oeuvre"]), (6, d["non_decompose"])):
+                c = ws.cell(row=row, column=col, value=v)
+                c.number_format = "#,##0"
+                c.alignment = Alignment(horizontal="right")
+                c.border = thin_border
         row += 1
 
+    if avec_parts:
+        # Somme des lignes (avant marge / TVA), avec ses parts : la marge et
+        # la TVA ne sont jamais réparties entre matériaux et main-d'œuvre.
+        d = dqe_data["decomposition"]
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        lbl = ws.cell(row=row, column=1, value="TOTAL DES LIGNES (avant marge et TVA)")
+        lbl.font = font_bold
+        lbl.alignment = Alignment(horizontal="right")
+        for col, v in ((3, dqe_data["total_general"]), (4, d["materiaux"]), (5, d["main_oeuvre"]),
+                       (6, d["non_decompose"])):
+            c = ws.cell(row=row, column=col, value=v)
+            c.font = font_bold
+            c.number_format = "#,##0"
+            c.alignment = Alignment(horizontal="right")
+        row += 1
     recap_finances = lignes_recap_finances(dqe_data)
     for k, (libelle, valeur) in enumerate(recap_finances):
         dernier = k == len(recap_finances) - 1
@@ -311,6 +356,8 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
     ws.column_dimensions["A"].width = 8
     ws.column_dimensions["B"].width = 45
     ws.column_dimensions["C"].width = 20
+    for lettre in ("D", "E", "F"):
+        ws.column_dimensions[lettre].width = 18
 
     # ---- Une feuille de détail par lot ------------------------------------
     for lot in lots:
@@ -322,8 +369,11 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
         ws_lot.cell(row=1, column=1, value=lot["label"]).font = font_title
         ws_lot.row_dimensions[1].height = 22
 
-        headers = ["Désignation", "Unité", "Quantité", "Prix Unitaire (FCFA)", "Montant (FCFA)",
-                   "Formule de métré", "Nature quantité", "Source du prix", "Date du prix"]
+        headers = ["Désignation", "Unité", "Quantité", "Prix Unitaire (FCFA)", "Montant (FCFA)"]
+        if avec_parts:
+            headers += ["dont matériaux (FCFA)", "dont main-d'œuvre (FCFA)"]
+        headers += ["Formule de métré", "Nature quantité", "Source du prix", "Date du prix"]
+        nb_col = len(headers)
         start_row = 3
         for col_idx, header in enumerate(headers, 1):
             cell = ws_lot.cell(row=start_row, column=col_idx, value=header)
@@ -338,7 +388,7 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
             titre = sl["libelle"] or ""
             if lot["plusieurs_parties"]:
                 titre = f"{sl['partie']} — {titre}"
-            ws_lot.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=9)
+            ws_lot.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=nb_col)
             c = ws_lot.cell(row=current_row, column=1, value=titre)
             c.font = font_bold
             c.fill = fill_total
@@ -350,6 +400,14 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
                     (float(ligne["quantite"]), "#,##0.000", "right"),
                     (ligne["prix_unitaire"], "#,##0", "right"),
                     (int(ligne["montant"]), "#,##0", "right"),
+                ]
+                if avec_parts:
+                    if ligne.get("decomposition") == "decompose":
+                        valeurs += [(ligne["montant_materiaux"], "#,##0", "right"),
+                                    (ligne["montant_main_oeuvre"], "#,##0", "right")]
+                    else:
+                        valeurs += [("non décomposé", None, "center"), ("", None, "center")]
+                valeurs += [
                     (ligne.get("formule_quantite") or "", None, "left"),
                     (ligne.get("type_donnee") or "", None, "center"),
                     (ligne.get("prix_source") or "", None, "left"),
@@ -370,6 +428,8 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
             st = ws_lot.cell(row=current_row, column=5, value=sl["sous_total"])
             st.font = font_bold
             st.number_format = "#,##0"
+            if avec_parts:
+                _parts_excel(ws_lot, current_row, sl["decomposition"], font_bold)
             current_row += 1
 
         ws_lot.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=4)
@@ -383,16 +443,21 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
         val_cell.number_format = "#,##0"
         val_cell.alignment = Alignment(horizontal="right")
         val_cell.fill = fill_total
+        if avec_parts:
+            _parts_excel(ws_lot, current_row, lot["decomposition"], font_bold, fill_total)
+            if lot["decomposition"]["non_decompose"]:
+                current_row += 1
+                ws_lot.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=4)
+                n = ws_lot.cell(row=current_row, column=1, value="dont non décomposé (prix sans parts)")
+                n.font = font_small
+                n.alignment = Alignment(horizontal="right")
+                v = ws_lot.cell(row=current_row, column=5, value=lot["decomposition"]["non_decompose"])
+                v.font = font_small
+                v.number_format = "#,##0"
 
-        ws_lot.column_dimensions["A"].width = 45
-        ws_lot.column_dimensions["B"].width = 10
-        ws_lot.column_dimensions["C"].width = 15
-        ws_lot.column_dimensions["D"].width = 20
-        ws_lot.column_dimensions["E"].width = 20
-        ws_lot.column_dimensions["F"].width = 38
-        ws_lot.column_dimensions["G"].width = 14
-        ws_lot.column_dimensions["H"].width = 30
-        ws_lot.column_dimensions["I"].width = 13
+        largeurs = [45, 10, 15, 20, 20] + ([20, 20] if avec_parts else []) + [38, 14, 30, 13]
+        for i, largeur in enumerate(largeurs):
+            ws_lot.column_dimensions[chr(ord("A") + i)].width = largeur
 
     buffer = BytesIO()
     wb.save(buffer)
