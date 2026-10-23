@@ -168,6 +168,11 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
+            # Développement local : une transaction qui lit puis écrit (numéro
+            # de version du DQE, issue #82) prend le verrou d'écriture dès le
+            # début ; sinon deux générations simultanées échouent en
+            # « database is locked ». Sans effet en production (PostgreSQL).
+            "OPTIONS": {"transaction_mode": "IMMEDIATE", "timeout": 20},
         }
     }
 
