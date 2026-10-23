@@ -157,7 +157,7 @@ export default function ProjetDashboard({ projetId, onNaviguer }) {
         </section>
       )}
 
-      {progression.elements > 0 && <VariantesPanel projetId={projetId} />}
+      {progression.elements > 0 && <VariantesPanel projetId={projetId} grille={data.projet?.variantes_grille !== false} />}
 
       <section className="glass-panel carte">
         <h3>Dernières actions</h3>

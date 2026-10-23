@@ -9,9 +9,11 @@ résultats validés, puis on calcule le DQE avec le barème du cabinet.
 Aucune estimation locale : chaque variante passe par le chemin de calcul
 complet. Les éléments hors trame (dalles, postes) sont repris tels quels.
 
-Limite assumée : variantes disponibles pour les trames régulières
-uniquement (un plan IFC importé n'a pas de paramètres de grille à faire
-varier).
+Projets importés ou dessinés (plan IFC/DXF, poteaux placés ou modifiés,
+issue #80) : la structure est recalculée sur les MÊMES positions de poteaux
+(chaque poteau garde son origine), avec le même service que l'import. Seuls
+les paramètres de grille (travées, portées) n'ont pas de sens pour eux et
+sont refusés avec un message.
 """
 
 from django.db import transaction
@@ -22,7 +24,9 @@ from moteur_calcul.validators import EntreeInvalide
 from ..models import ElementStructurel, Projet
 from .dqe_calculator import DQEIncomplet, calculer_projet_dqe
 from .parametres_projet import ParametresIncomplets, parametres_structure
-from .trame_service import creer_elements_trame
+from .trame_service import creer_elements_depuis_positions, creer_elements_trame
+
+CHAMPS_GRILLE = ("portee_x", "portee_y", "nb_travees_x", "nb_travees_y")
 
 # Paramètres qu'une variante peut modifier, avec leur validation minimale.
 CHAMPS_VARIABLES = {
@@ -104,7 +108,22 @@ def _synthese(projet):
     return res
 
 
-def _evaluer(projet_id, modifications):
+def est_trame(projet):
+    # Source vide : projet antérieur au champ, calculé sur sa trame.
+    return (projet.source_structure in (Projet.SourceStructure.TRAME, "")
+            and bool(projet.nb_travees_x and projet.nb_travees_y))
+
+
+def positions_actuelles(projet):
+    """Positions des poteaux du projet, avec leur origine (plan, saisi,
+    trame) : base des variantes d'un projet importé ou dessiné."""
+    poteaux = projet.elements.filter(type_element=ElementStructurel.TypeElement.POTEAU,
+                                     position_x__isnull=False, position_y__isnull=False).order_by("id")
+    return [{"x": p.position_x, "y": p.position_y, "guid": f"variante-{p.id}", "nom": p.identifiant,
+             **({"origine": p.origine_geometrie} if p.origine_geometrie else {})} for p in poteaux]
+
+
+def _evaluer(projet_id, modifications, positions=None):
     """Calcule une variante dans une transaction TOUJOURS annulée."""
     resultat = {}
     try:
@@ -113,8 +132,14 @@ def _evaluer(projet_id, modifications):
             for champ, v in modifications.items():
                 setattr(projet, champ, v)
             projet.save()
-            prm = parametres_structure(projet, avec_grille=True)
-            _, hypotheses = creer_elements_trame(projet, prm)
+            if est_trame(projet):
+                prm = parametres_structure(projet, avec_grille=True)
+                _, hypotheses = creer_elements_trame(projet, prm)
+            else:
+                prm = parametres_structure(projet, avec_grille=False)
+                _, hypotheses, avertissements, _ = creer_elements_depuis_positions(
+                    projet, positions, prm, origine=ElementStructurel.OrigineGeometrie.PLAN)
+                hypotheses = list(hypotheses) + list(avertissements)
             # Résultat du moteur retenu tel quel (aucune saisie manuelle).
             for e in projet.elements.all():
                 if e.resultat_calcul:
@@ -130,9 +155,12 @@ def _evaluer(projet_id, modifications):
 
 
 def calculer_variantes(projet, variantes):
-    if not projet.nb_travees_x or not projet.nb_travees_y:
-        raise VarianteInvalide("Variantes disponibles pour les trames régulières uniquement "
-                               "(renseignez les travées et portées du projet).")
+    positions = None
+    if not est_trame(projet):
+        positions = positions_actuelles(projet)
+        if not positions:
+            raise VarianteInvalide("Aucun poteau positionné dans ce projet : calculez d'abord la structure "
+                                   "(trame, plan importé ou poteaux placés).")
     if not isinstance(variantes, list) or not variantes:
         raise VarianteInvalide("Fournissez au moins une variante.")
     if len(variantes) > MAX_VARIANTES:
@@ -141,12 +169,18 @@ def calculer_variantes(projet, variantes):
     for i, v in enumerate(variantes, start=1):
         if not isinstance(v, dict):
             raise VarianteInvalide(f"Variante {i} invalide.")
-        preparees.append(((v.get("nom") or f"Variante {i}")[:80], _nettoyer(v.get("modifications") or {})))
+        modifs = _nettoyer(v.get("modifications") or {})
+        grille = [c for c in modifs if c in CHAMPS_GRILLE]
+        if positions is not None and grille:
+            raise VarianteInvalide(
+                f"Variante {i} : {', '.join(grille)} ne s'applique(nt) qu'à une trame régulière. Ce projet suit "
+                "les positions réelles des poteaux (plan importé ou poteaux placés) : modifiez-les à l'étape 2.")
+        preparees.append(((v.get("nom") or f"Variante {i}")[:80], modifs))
 
     sorties = []
     for nom, modifs in [("Projet actuel (recalculé)", {})] + preparees:
         try:
-            r = _evaluer(projet.pk, modifs)
+            r = _evaluer(projet.pk, modifs, positions)
             r.update({"nom": nom, "modifications": modifs, "erreur": None})
         except ParametresIncomplets as exc:
             r = {"nom": nom, "modifications": modifs, "erreur": str(exc)}

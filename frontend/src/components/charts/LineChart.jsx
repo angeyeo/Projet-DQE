@@ -18,7 +18,8 @@ export default function LineChart({ series = [] }) {
   const y = (v) => H - M.b - (v / max) * (H - M.h - M.b);
   const nonMesures = series[0].points.filter((p) => p.valeur === null).length;
   const largeurHachure = nonMesures === n ? L - M.g - M.d : x(nonMesures) - M.g;
-  const graduations = [0, Math.round(max / 2), max];
+  // Sans doublon (max = 1 donnait 0, 1, 1 : graduation répétée et clé React en double).
+  const graduations = [...new Set([0, Math.round(max / 2), max])];
 
   return (
     <div className="line-chart">

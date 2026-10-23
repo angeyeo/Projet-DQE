@@ -27,7 +27,12 @@ const versValeur = (champ, v) => {
 
 // Variantes « et si ? » : chaque ligne est recalculée par le moteur côté
 // serveur (transaction annulée, rien n'est enregistré).
-export default function VariantesPanel({ projetId }) {
+// Portées et travées : seulement pour une trame régulière. Un projet importé
+// ou dessiné garde les positions réelles de ses poteaux (issue #80).
+const CHAMPS_GRILLE = ['portee_x', 'portee_y'];
+
+export default function VariantesPanel({ projetId, grille = true }) {
+  const champs = grille ? CHAMPS : CHAMPS.filter(([c]) => !CHAMPS_GRILLE.includes(c));
   const [lignes, setLignes] = useState([VIDE()]);
   const [etat, setEtat] = useState({ chargement: false, erreur: null, data: null });
 
@@ -50,16 +55,19 @@ export default function VariantesPanel({ projetId }) {
   return (
     <section className="glass-panel carte" aria-labelledby="titre-variantes">
       <div className="bloc-titre"><GitCompare size={20} aria-hidden="true" /><h3 id="titre-variantes">Comparer des variantes</h3></div>
-      <p className="texte-discret">Chaque variante est recalculée par le moteur (trame, semelles, DQE) sans rien modifier dans le projet.</p>
+      <p className="texte-discret">
+        Chaque variante est recalculée par le moteur (poteaux, poutres, semelles, DQE) sans rien modifier dans le projet.
+        {!grille && ' Projet importé ou dessiné : les positions réelles des poteaux sont conservées.'}
+      </p>
       {lignes.map((l, i) => {
-        const def = CHAMPS.find((c) => c[0] === l.champ);
+        const def = champs.find((c) => c[0] === l.champ) || champs[0];
         return (
           <div className="ligne-variante" key={i}>
             <input className="form-control" aria-label={`Nom de la variante ${i + 1}`} placeholder={`Variante ${i + 1}`}
               value={l.nom} onChange={(e) => maj(i, { nom: e.target.value })} />
             <select className="form-select" aria-label="Paramètre modifié" value={l.champ}
               onChange={(e) => maj(i, { champ: e.target.value, valeur: '' })}>
-              {CHAMPS.map(([c, lib]) => <option key={c} value={c}>{lib}</option>)}
+              {champs.map(([c, lib]) => <option key={c} value={c}>{lib}</option>)}
             </select>
             {Array.isArray(def[2]) ? (
               <select className="form-select" aria-label="Nouvelle valeur" value={l.valeur} onChange={(e) => maj(i, { valeur: e.target.value })}>

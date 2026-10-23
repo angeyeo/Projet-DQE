@@ -30,6 +30,7 @@ from moteur_calcul.constantes import (
 )
 
 from ..models import ElementStructurel, EvenementProduit, PosteComplementaire, Projet
+from .variantes import est_trame
 from .assistant_ia import analyser_projet_coherence
 from .dqe_calculator import LIBELLES_PRIX, DQEIncomplet, calculer_projet_dqe
 from .parametres_projet import statut_projet
@@ -353,7 +354,9 @@ def analytics_projet(projet) -> dict:
     return {
         "date_debut_fiabilite": debut,
         "projet": {"id": projet.id, "nom": projet.nom, "usage_batiment": projet.usage_batiment,
-                   "nb_niveaux": projet.nb_niveaux, "date_modification": projet.date_modification},
+                   "nb_niveaux": projet.nb_niveaux, "date_modification": projet.date_modification,
+                   # Variantes (issue #80) : portées et travées seulement pour une trame.
+                   "variantes_grille": est_trame(projet)},
         "statut": statut_projet(nb, nb - len(non_valides), dernier_dqe is not None),
         "progression": {"elements": nb, "valides": nb - len(non_valides),
                         "taux": round((nb - len(non_valides)) / nb, 4) if nb else None},
