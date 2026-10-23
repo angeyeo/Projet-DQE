@@ -967,6 +967,26 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                             status=status.HTTP_400_BAD_REQUEST)
         return self._structure_depuis_positions(projet, brut, references=_references_poteaux(projet))
 
+    @action(detail=True, methods=["get"], url_path="note-calcul", url_name="note-calcul")
+    def note_calcul(self, request, pk=None):
+        """Note de calcul du projet (issue #96) : PDF, ou ?format=json pour
+        les données. Uniquement des valeurs du moteur et du projet."""
+        from .services.note_calcul import NoteImpossible, construire_note
+        from .services.note_calcul_pdf import exporter_note_pdf
+
+        projet = self.get_object()
+        try:
+            note = construire_note(projet, auteur=_nom_utilisateur(request.user))
+        except NoteImpossible as exc:
+            return Response({"erreur": str(exc), "champs_manquants": exc.champs}, status=status.HTTP_400_BAD_REQUEST)
+        if request.query_params.get("format") == "json":
+            return Response(note, status=status.HTTP_200_OK)
+        response = HttpResponse(exporter_note_pdf(note).getvalue(), content_type="application/pdf")
+        nom = f"Note_de_calcul_{projet.nom.replace(' ', '_')}_{projet.id}.pdf"
+        response["Content-Disposition"] = f'attachment; filename="{nom}"'
+        response["Access-Control-Expose-Headers"] = "Content-Disposition"
+        return response
+
     @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser])
     def analyser_plan_image(self, request, pk=None):
         from django.conf import settings

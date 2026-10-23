@@ -462,6 +462,8 @@ export const dqeService = {
 
   // Fiche d'approvisionnement (calculée par le serveur à partir du DQE)
   getApprovisionnement: async (projetId) => getJSON(`${API_BASE_URL}/projets/${projetId}/approvisionnement/`),
+  telechargerNoteCalcul: async (projetId) =>
+    telechargerBlob(`${API_BASE_URL}/projets/${projetId}/note-calcul/`, `Note_de_calcul_${projetId}.pdf`),
   telechargerApprovisionnementExcel: async (projetId) =>
     telechargerBlob(`${API_BASE_URL}/projets/${projetId}/approvisionnement/?export=excel`, `Approvisionnement_projet_${projetId}.xlsx`),
 

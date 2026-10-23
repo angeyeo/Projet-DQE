@@ -373,6 +373,45 @@ def deduction_poutres_dalle(element: ElementStructurel, res: dict, largeurs_pout
     return volume, formule, hypothese
 
 
+def quantites_element(element: ElementStructurel, res: dict, largeurs_poutres=None) -> dict:
+    """Quantités d'un élément (béton m³, coffrage m², acier kg), × le nombre
+    d'ouvrages identiques, avec la source de l'acier : "calcul_moteur"
+    (poids calculé) ou "ratio_reference" (estimé au ratio). Partagé par le
+    DQE et la note de calcul (issue #96) : mêmes chiffres partout.
+    Renvoie {"manquants": [...]} non vide si une dimension manque."""
+    volume, coffrage, poids_moteur, manquants = _geometrie_element(element, res)
+    if manquants:
+        return {"manquants": manquants}
+
+    # Ouvrages identiques (ex. même poteau à chaque niveau) : quantité × n.
+    n = element.nombre_identiques or 1
+    fois = f" × {n} (niveaux identiques)" if n > 1 else ""
+    formules = _formules_element(element, res)
+    hyp_beton = None
+    if element.type_element == ElementStructurel.TypeElement.DALLE and largeurs_poutres:
+        volume_net, formule_nette, hyp_beton = deduction_poutres_dalle(element, res, largeurs_poutres)
+        if volume_net is not None:
+            volume = volume_net
+            formules = {**formules, "beton": formule_nette}
+    volume, coffrage = _dec(volume) * n, _dec(coffrage) * n
+    ratio = None
+    if poids_moteur is not None and poids_moteur > 0:
+        poids = _dec(poids_moteur) * n
+        source_acier, hyp_acier = "calcul_moteur", None
+    else:
+        ratio = RATIOS_ACIER_KG_M3[element.type_element]
+        poids = volume * ratio  # volume déjà multiplié par n
+        source_acier = "ratio_reference"
+        hyp_acier = (
+            f"{TYPES_PLURIEL.get(element.type_element, element.type_element)} : acier estimé à "
+            f"{_nombre_json(ratio)} kg par m³ de béton ({ORIGINE_RATIO_ACIER.get(element.type_element, 'ratio de référence')}), "
+            f"le ferraillage détaillé n'étant pas calculé pour ces éléments."
+        )
+    return {"manquants": [], "n": n, "fois": fois, "formules": formules, "hyp_beton": hyp_beton,
+            "volume": volume, "coffrage": coffrage, "poids": poids, "ratio_acier": ratio,
+            "source_acier": source_acier, "hyp_acier": hyp_acier}
+
+
 def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict, problemes: list | None = None,
                          largeurs_poutres: set | None = None) -> list:
     """Lignes béton / coffrage / acier d'un élément VALIDÉ.
@@ -398,39 +437,18 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict, probl
         })
         return []
 
-    volume, coffrage, poids_moteur, manquants = _geometrie_element(element, res)
-    if manquants:
+    q = quantites_element(element, res, largeurs_poutres)
+    if q["manquants"]:
         problemes.append({
             "code": "DIMENSION_MANQUANTE",
             "element_id": element.id,
             "repere": element.identifiant,
-            "message": f"{libelle} : donnée manquante ou nulle -- {', '.join(manquants)}.",
+            "message": f"{libelle} : donnée manquante ou nulle -- {', '.join(q['manquants'])}.",
         })
         return []
-
-    # Ouvrages identiques (ex. même poteau à chaque niveau) : quantité × n.
-    n = element.nombre_identiques or 1
-    fois = f" × {n} (niveaux identiques)" if n > 1 else ""
-    formules = _formules_element(element, res)
-    hyp_beton = None
-    if element.type_element == ElementStructurel.TypeElement.DALLE and largeurs_poutres:
-        volume_net, formule_nette, hyp_beton = deduction_poutres_dalle(element, res, largeurs_poutres)
-        if volume_net is not None:
-            volume = volume_net
-            formules = {**formules, "beton": formule_nette}
-    volume, coffrage = _dec(volume) * n, _dec(coffrage) * n
-    if poids_moteur is not None and poids_moteur > 0:
-        poids = _dec(poids_moteur) * n
-        source_acier, hyp_acier = "calcul_moteur", None
-    else:
-        ratio = RATIOS_ACIER_KG_M3[element.type_element]
-        poids = volume * ratio  # volume déjà multiplié par n
-        source_acier = "ratio_reference"
-        hyp_acier = (
-            f"{TYPES_PLURIEL.get(element.type_element, element.type_element)} : acier estimé à "
-            f"{_nombre_json(ratio)} kg par m³ de béton ({ORIGINE_RATIO_ACIER.get(element.type_element, 'ratio de référence')}), "
-            f"le ferraillage détaillé n'étant pas calculé pour ces éléments."
-        )
+    n, fois, formules, hyp_beton = q["n"], q["fois"], q["formules"], q["hyp_beton"]
+    volume, coffrage, poids = q["volume"], q["coffrage"], q["poids"]
+    source_acier, hyp_acier = q["source_acier"], q["hyp_acier"]
 
     pu_beton = _prix(prix_unitaires, "beton_m3", problemes, libelle)
     pu_coffrage = _prix(prix_unitaires, "coffrage_m2", problemes, libelle)

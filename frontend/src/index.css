@@ -1492,3 +1492,8 @@ button.account-card { width: 100%; border: none; background: transparent; color:
 .modifier-structure-entete h3 { margin: 0; font-size: 1.05rem; }
 .modifier-structure-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; margin-top: 1rem; }
 .modifier-structure-bilan { font-size: 0.88rem; color: var(--ink-700); }
+
+/* ---- Note de calcul (issue #96) ---- */
+.bouton-note-calcul { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 0.3rem; }
+.bouton-note-calcul .btn { display: inline-flex; align-items: center; gap: 0.4rem; }
+.bouton-note-calcul-erreur { max-width: 22rem; font-size: 0.8rem; color: var(--status-critical); text-align: right; }
