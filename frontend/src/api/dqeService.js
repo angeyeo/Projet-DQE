@@ -202,12 +202,25 @@ const versCouche = (c) => {
   return out;
 };
 
+// Parts matériaux / main-d'œuvre (issue #92) : envoyées telles que saisies.
+// Avec les deux parts, le prix unitaire envoyé est leur somme ; le serveur
+// le revérifie et refuse une seule part (jamais de répartition inventée).
+export function partsPrix(o) {
+  const vide = (v) => v === '' || v == null;
+  const materiaux = vide(o.prixMateriaux) ? null : nombreOuNull(o.prixMateriaux);
+  const mainOeuvre = vide(o.prixMainOeuvre) ? null : nombreOuNull(o.prixMainOeuvre);
+  const total = materiaux != null && mainOeuvre != null ? materiaux + mainOeuvre : null;
+  return { prix_materiaux: materiaux, prix_main_oeuvre: mainOeuvre, total };
+}
+
 function ouvrageVersApi(o) {
+  const { total, ...parts } = partsPrix(o);
   return {
     lot: o.lot,
     designation: (o.designation || '').trim(),
     unite: (o.unite || '').trim(),
-    prix_unitaire: nombreOuNull(o.prixUnitaire),
+    prix_unitaire: total ?? nombreOuNull(o.prixUnitaire),
+    ...parts,
     source_prix: (o.sourcePrix || '').trim(),
     date_prix: o.datePrix || null,
   };
@@ -397,7 +410,9 @@ export const dqeService = {
       payload.designation = poste.designation;
       payload.unite = poste.unite;
       payload.quantite = nombreOuNull(poste.quantite);
-      payload.prix_unitaire = nombreOuNull(poste.prixUnitaire);
+      const { total, ...parts } = partsPrix(poste);
+      payload.prix_unitaire = total ?? nombreOuNull(poste.prixUnitaire);
+      Object.assign(payload, parts);
     } else {
       payload.type_poste = poste.typePoste;
       payload.geometrie = poste.geometrie;
@@ -483,7 +498,7 @@ export const dqeService = {
   updateEntreprise: async (champs, logoFile) => {
     const formData = new FormData();
     Object.entries(champs || {}).forEach(([cle, valeur]) => {
-      formData.append(cle, ['prix_unitaires', 'prix_origines', 'parametres_approvisionnement'].includes(cle) ? JSON.stringify(valeur || {}) : (valeur ?? ''));
+      formData.append(cle, ['prix_unitaires', 'prix_origines', 'prix_decomposition', 'parametres_approvisionnement'].includes(cle) ? JSON.stringify(valeur || {}) : (valeur ?? ''));
     });
     if (logoFile) formData.append('logo', logoFile);
     return lireReponse(await apiFetch(`${API_BASE_URL}/entreprise/`, { method: 'PATCH', body: formData }));

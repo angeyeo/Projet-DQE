@@ -22,6 +22,8 @@ from collections import defaultdict
 
 from projets.models import Projet, ElementStructurel, PosteComplementaire
 
+from .decomposition_prix import decorer_ligne, totaux as totaux_decomposition
+
 from moteur_calcul.constantes import (
     RATIO_ACIER_POTEAUX_RETENU_KG_M3,
     RATIO_ACIER_POUTRES_RETENU_KG_M3,
@@ -446,7 +448,7 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict, probl
             "message": f"{libelle} : donnée manquante ou nulle -- {', '.join(q['manquants'])}.",
         })
         return []
-    n, fois, formules, hyp_beton = q["n"], q["fois"], q["formules"], q["hyp_beton"]
+    fois, formules, hyp_beton = q["fois"], q["formules"], q["hyp_beton"]
     volume, coffrage, poids = q["volume"], q["coffrage"], q["poids"]
     source_acier, hyp_acier = q["source_acier"], q["hyp_acier"]
 
@@ -603,7 +605,9 @@ def calculer_poste_simple_dqe(poste: PosteComplementaire, problemes: list) -> li
         source_quantite="saisie",
         formule="quantité saisie",
     ) | {"poste_id": poste.id, "prix_source": poste.prix_source or "saisie (poste)",
-         "prix_date": poste.prix_date.isoformat() if poste.prix_date else None}]
+         "prix_date": poste.prix_date.isoformat() if poste.prix_date else None,
+         # Parts du poste (copiées de la bibliothèque ou saisies), issue #92.
+         "_parts": (poste.prix_materiaux, poste.prix_main_oeuvre)}]
 
 
 # --- Montant en toutes lettres (Jour 4) ----------------------------------
@@ -787,6 +791,20 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict) -> dict:
                 m.get("source"), "barème du cabinet (date non tracée)")
             ligne["prix_date"] = m.get("date")
 
+    # Parts matériaux / main-d'œuvre (issue #92) : barème du cabinet pour
+    # les lignes à clé de prix, poste pour les postes saisis ; sinon la
+    # ligne est « non décomposé ». Aucune répartition supposée.
+    decomposition_bareme = (getattr(projet.entreprise, "prix_decomposition", None) or {}) if projet.entreprise_id else {}
+    incoherentes = set()
+    for ligne in toutes_lignes:
+        parts = ligne.pop("_parts", None)
+        if parts is None and ligne.get("cle_prix"):
+            d = decomposition_bareme.get(ligne["cle_prix"]) or {}
+            parts = (d.get("materiaux"), d.get("main_oeuvre"))
+        decorer_ligne(ligne, *(parts or (None, None)))
+        if ligne.pop("decomposition_incoherente", False):
+            incoherentes.add(LIBELLES_PRIX.get(ligne.get("cle_prix"), ligne["designation"]))
+
     sous_totaux_categorie = defaultdict(int)
     lots = defaultdict(lambda: {"lignes": [], "sous_total": 0, "sous_lots": {}})
     for ligne in toutes_lignes:
@@ -807,6 +825,9 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict) -> dict:
     libelles_lots = dict(PosteComplementaire.Lot.choices)
 
     hypotheses = sorted({l["hypothese"] for l in toutes_lignes if l.get("hypothese")})
+    if incoherentes:
+        hypotheses.append("ALERTE : décomposition matériaux / main-d'œuvre différente du prix unitaire pour : "
+                          + ", ".join(sorted(incoherentes)) + " -- lignes affichées « non décomposé ».")
 
     return {
         "projet": {
@@ -823,11 +844,17 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict) -> dict:
                 "lot": lot,
                 "libelle": libelles_lots.get(lot, lot),
                 "lignes": lots[lot]["lignes"],
-                "sous_lots": list(lots[lot]["sous_lots"].values()),
+                "sous_lots": [{**sl, "decomposition": totaux_decomposition(sl["lignes"])}
+                              for sl in lots[lot]["sous_lots"].values()],
                 "sous_total": lots[lot]["sous_total"],
+                "decomposition": totaux_decomposition(lots[lot]["lignes"]),
             }
             for lot in lots_ordonnes
         ],
+        # Totaux matériaux / main-d'œuvre / non décomposé (issue #92).
+        "decomposition": {**totaux_decomposition(toutes_lignes),
+                          "lignes_non_decomposees": sum(1 for l in toutes_lignes
+                                                        if l["decomposition"] != "decompose")},
         "sous_totaux": dict(sous_totaux_categorie),
         "synthese": _synthese_quantites(toutes_lignes),
         "hypotheses": hypotheses,

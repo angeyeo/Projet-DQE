@@ -58,6 +58,7 @@ MOTS_ENTETE = {
     "prix": ("p.u", "pu", "p.u.", "prix unitaire", "prix unitaires", "prix u", "p.u ht", "pu ht",
              "prix unitaire (fcfa)", "p.u. (fcfa)", "prix unitaire ht"),
 }
+OBLIGATOIRES = ("designation", "unite")
 EXCLUS = re.compile(r"^(sous[- ]?total|total|tva|montant|recapitulatif|arrete|net a payer|report)", re.IGNORECASE)
 
 
@@ -121,20 +122,41 @@ def lire_prix(valeur):
     return v if v >= 0 else None
 
 
+def _colonne_decomposition(t):
+    """« materiaux » / « main_oeuvre » pour un en-tête de part de prix, sinon None.
+    Testé AVANT le prix unitaire : « P.U. matériaux » n'est pas le P.U. total."""
+    if "materiau" in t or "fourniture" in t:
+        return "materiaux"
+    if ("main" in t and "oeuvre" in t) or t in ("mo", "m.o", "m.o.", "pu mo", "p.u mo", "p.u. mo"):
+        return "main_oeuvre"
+    return None
+
+
 def _colonnes(ligne):
-    """Indices des colonnes Désignation / Unité / Prix si la ligne est un en-tête."""
+    """Indices des colonnes Désignation / Unité / Prix (et, facultatives,
+    Matériaux / Main-d'œuvre) si la ligne est un en-tête."""
     idx = {}
     for i, v in enumerate(ligne):
         t = _norm_oe(v).rstrip(" :")
         if not t:
             continue
-        for cle, mots in MOTS_ENTETE.items():
+        part = _colonne_decomposition(t)
+        if part:
+            idx.setdefault(part, i)
+            continue
+        for cle in ("designation", "unite", "prix"):
+            mots = MOTS_ENTETE[cle]
             if cle in idx:
                 continue
             if t in mots or (cle != "unite" and any(t.startswith(m) for m in mots if len(m) > 3)):
                 idx[cle] = i
                 break
-    return idx if len(idx) == 3 else None
+    # En-tête : désignation + unité + (prix unitaire, ou les deux parts).
+    if not all(c in idx for c in OBLIGATOIRES):
+        return None
+    if "prix" in idx or ("materiaux" in idx and "main_oeuvre" in idx):
+        return idx
+    return None
 
 
 def analyser_dqe_excel(fichier, ouvrages_existants=()):
@@ -161,6 +183,7 @@ def analyser_dqe_excel(fichier, ouvrages_existants=()):
     candidats, ordre = {}, []
     feuilles, ignorees, avertissements = [], 0, []
     prix_vides = []
+    incoherentes = 0
 
     for feuille in classeur.worksheets:
         lot_feuille, ambigu_feuille = reconnaitre_lot(feuille.title)
@@ -178,10 +201,14 @@ def analyser_dqe_excel(fichier, ouvrages_existants=()):
                     if lot or ambigu:
                         contexte = {"lot": lot, "titre": " ".join(str(v) for v in ligne if isinstance(v, str))}
                 continue
-            cell = lambda cle: ligne[colonnes[cle]] if colonnes[cle] < len(ligne) else None  # noqa: E731
+            cell = lambda cle: (ligne[colonnes[cle]] if cle in colonnes and colonnes[cle] < len(ligne)  # noqa: E731
+                                else None)
             designation = str(cell("designation") or "").strip()
             unite = str(cell("unite") or "").strip()
+            mat, mo = lire_prix(cell("materiaux")), lire_prix(cell("main_oeuvre"))
             brut_prix = cell("prix")
+            if lire_prix(brut_prix) is None and mat is not None and mo is not None:
+                brut_prix = mat + mo  # pas de colonne de total : total = matériaux + main-d'œuvre
             if not designation:
                 continue
             if EXCLUS.match(_norm_oe(designation)):
@@ -198,21 +225,29 @@ def analyser_dqe_excel(fichier, ouvrages_existants=()):
                 ignorees += 1
                 continue
             prix = lire_prix(brut_prix)
-            if prix is None:
+            if prix is None and "prix" in colonnes:
                 prix_vides.append((feuille.title, num, colonnes["prix"] + 1))
+            parts = None
+            if prix is not None and mat is not None and mo is not None:
+                if abs(mat + mo - prix) <= 0.01:
+                    parts = {"prix": prix, "materiaux": mat, "main_oeuvre": mo}
+                else:
+                    incoherentes += 1  # jamais de répartition corrigée en silence
             lues += 1
             cle = (contexte["lot"], normaliser(designation), normaliser(unite))
             c = candidats.get(cle)
             if c is None:
                 c = candidats[cle] = {
                     "lot": contexte["lot"], "section": contexte["titre"], "designation": designation[:200],
-                    "unite": unite[:20], "prix_possibles": [], "occurrences": 0,
+                    "unite": unite[:20], "prix_possibles": [], "decompositions": [], "occurrences": 0,
                     "origine": f"{feuille.title}, ligne {num}",
                 }
                 ordre.append(cle)
             c["occurrences"] += 1
             if prix is not None and prix not in c["prix_possibles"]:
                 c["prix_possibles"].append(prix)
+            if parts and parts not in c["decompositions"]:
+                c["decompositions"].append(parts)
         if colonnes is not None:
             feuilles.append({"nom": feuille.title, "lignes": lues})
     classeur.close()
@@ -237,7 +272,10 @@ def analyser_dqe_excel(fichier, ouvrages_existants=()):
             existant = existants.get((c["lot"], normaliser(c["designation"]), normaliser(c["unite"])), "absent")
             statut = ("nouveau" if existant == "absent" else "identique" if existant == prix else "prix_different")
             c["prix_bibliotheque"] = None if existant == "absent" else existant
+        parts = next((d for d in c["decompositions"] if d["prix"] == prix), None)
         lignes.append({**c, "prix_unitaire": prix, "statut": statut,
+                       "prix_materiaux": parts["materiaux"] if parts else None,
+                       "prix_main_oeuvre": parts["main_oeuvre"] if parts else None,
                        "a_importer": statut in ("nouveau",)})
 
     if formules_sans_valeur:
@@ -246,6 +284,10 @@ def analyser_dqe_excel(fichier, ouvrages_existants=()):
             "Excel, enregistrez-le, puis importez-le à nouveau.")
     if ignorees:
         avertissements.append(f"{ignorees} ligne(s) sans unité ignorée(s).")
+    if incoherentes:
+        avertissements.append(
+            f"{incoherentes} ligne(s) dont matériaux + main-d'œuvre ne fait pas le prix unitaire : leur "
+            "décomposition est ignorée (prix importé « non décomposé »).")
     compte = {}
     for l in lignes:
         compte[l["statut"]] = compte.get(l["statut"], 0) + 1

@@ -32,6 +32,10 @@ function evaluer(l, bibliotheque) {
   return { importable: true, action: 'mettre_a_jour', ancienPrix: existant };
 }
 
+// Parts matériaux / main-d'œuvre lues dans le fichier pour le prix retenu
+// (issue #92) ; null si ce prix n'a pas de décomposition cohérente.
+const partsDuPrix = (l) => (l.decompositions || []).find((d) => d.prix === l.prix) || null;
+
 export default function ImportDQEExcel({ lots, ouvrages, onTermine, onFermer }) {
   const entree = useRef(null);
   const [etat, setEtat] = useState({ enCours: false, erreur: null, erreursLignes: null });
@@ -77,9 +81,13 @@ export default function ImportDQEExcel({ lots, ouvrages, onTermine, onFermer }) 
     setEtat({ enCours: true, erreur: null, erreursLignes: null });
     try {
       const r = await dqeService.confirmerImportDQE({
-        lignes: retenues.map((l) => ({
-          lot: l.lot, designation: l.designation, unite: l.unite, prix_unitaire: l.prix, action: l.ev.action,
-        })),
+        lignes: retenues.map((l) => {
+          const parts = partsDuPrix(l);
+          return {
+            lot: l.lot, designation: l.designation, unite: l.unite, prix_unitaire: l.prix, action: l.ev.action,
+            prix_materiaux: parts?.materiaux ?? null, prix_main_oeuvre: parts?.main_oeuvre ?? null,
+          };
+        }),
         ...origine,
       });
       setBilan(r);
@@ -110,7 +118,8 @@ export default function ImportDQEExcel({ lots, ouvrages, onTermine, onFermer }) 
         <div>
           <h3 id="titre-import-dqe"><FileSpreadsheet size={18} aria-hidden="true" /> Importer un DQE Excel</h3>
           <p className="texte-discret">
-            Le logiciel lit les désignations, unités et prix unitaires d'un DQE (.xlsx) déjà chiffré. Les quantités
+            Le logiciel lit les désignations, unités et prix unitaires d'un DQE (.xlsx) déjà chiffré, et
+            les colonnes « matériaux » et « main-d'œuvre » si le fichier en a. Les quantités
             et montants du fichier ne sont pas repris. Rien n'est enregistré avant votre confirmation.
           </p>
         </div>
@@ -201,6 +210,9 @@ export default function ImportDQEExcel({ lots, ouvrages, onTermine, onFermer }) 
                             {l.prix_possibles.map((p) => <option key={p} value={p}>{formatFCFA(p)}</option>)}
                           </select>
                         ) : l.prix != null ? formatFCFA(l.prix) : <span className="texte-discret">aucun</span>}
+                        {l.prix != null && (partsDuPrix(l)
+                          ? <span className="parts-prix">mat. {formatFCFA(partsDuPrix(l).materiaux)} · MO {formatFCFA(partsDuPrix(l).main_oeuvre)}</span>
+                          : <span className="parts-prix non-decompose">non décomposé</span>)}
                         {l.ev.action === 'mettre_a_jour' && (
                           <span className="origine-import">bibliothèque : {l.ev.ancienPrix != null ? formatFCFA(l.ev.ancienPrix) : 'sans prix'}</span>
                         )}

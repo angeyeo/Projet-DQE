@@ -1,18 +1,60 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BookOpen, Check, FileSpreadsheet, Loader2, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
-import { dqeService, formatFCFA } from '../../api/dqeService';
+import { dqeService, formatFCFA, partsPrix } from '../../api/dqeService';
 import useReferentiel from '../../hooks/useReferentiel';
 import Alerte from '../ui/Alerte';
 import ImportDQEExcel from './ImportDQEExcel';
 
 const UNITES = ['u', 'ens.', 'forfait', 'm²', 'm³', 'ml', 'kg', 'jour'];
-const VIDE = { lot: '', designation: '', unite: '', prixUnitaire: '', sourcePrix: '', datePrix: '' };
+const VIDE = { lot: '', designation: '', unite: '', prixUnitaire: '', prixMateriaux: '', prixMainOeuvre: '', sourcePrix: '', datePrix: '' };
 
 const versFormulaire = (o) => ({
   lot: o.lot, designation: o.designation, unite: o.unite,
-  prixUnitaire: o.prix_unitaire ?? '', sourcePrix: o.source_prix || '', datePrix: o.date_prix || '',
+  prixUnitaire: o.prix_unitaire ?? '', prixMateriaux: o.prix_materiaux ?? '', prixMainOeuvre: o.prix_main_oeuvre ?? '',
+  sourcePrix: o.source_prix || '', datePrix: o.date_prix || '',
 });
 const dateFr = (iso) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('fr-FR') : null);
+
+// Prix unitaire et, facultatives, ses deux parts (issue #92). Avec les deux
+// parts, le prix est leur somme (non modifiable) ; sans part, le prix reste
+// « non décomposé ». Une seule part est signalée : aucune n'est déduite.
+export function ChampsPrix({ valeur, onChange, prefixe, libellePrix = 'Prix unitaire HT (FCFA)', placeholder = 'facultatif' }) {
+  const maj = (k) => (e) => onChange({ ...valeur, [k]: e.target.value });
+  const { total, prix_materiaux: mat, prix_main_oeuvre: mo } = partsPrix(valeur);
+  const unePart = (mat == null) !== (mo == null);
+  return (
+    <fieldset className="groupe-prix" aria-describedby={`${prefixe}-pu-aide`}>
+      <legend className="sr-only">Prix unitaire et décomposition</legend>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`${prefixe}-pu`}>{libellePrix}</label>
+        <input id={`${prefixe}-pu`} type="number" min="0" step="1" className="form-control"
+          value={total ?? valeur.prixUnitaire} readOnly={total != null}
+          onChange={maj('prixUnitaire')} placeholder={placeholder} />
+      </div>
+      <span className="signe" aria-hidden="true">=</span>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`${prefixe}-mat`}>dont matériaux</label>
+        <input id={`${prefixe}-mat`} type="number" min="0" step="1" className="form-control" value={valeur.prixMateriaux ?? ''}
+          onChange={maj('prixMateriaux')} placeholder="facultatif" aria-invalid={unePart && mat == null} />
+      </div>
+      <span className="signe" aria-hidden="true">+</span>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`${prefixe}-mo`}>dont main-d'œuvre</label>
+        <input id={`${prefixe}-mo`} type="number" min="0" step="1" className="form-control" value={valeur.prixMainOeuvre ?? ''}
+          onChange={maj('prixMainOeuvre')} placeholder="facultatif" aria-invalid={unePart && mo == null} />
+      </div>
+      {unePart ? <small id={`${prefixe}-pu-aide`} className="texte-erreur aide-prix" role="alert">Renseignez les deux parts, ou aucune.</small>
+        : <small id={`${prefixe}-pu-aide`} className="texte-discret aide-prix">
+          {total != null ? "Prix = matériaux + main-d'œuvre." : 'Parts vides : prix « non décomposé ».'}
+        </small>}
+    </fieldset>
+  );
+}
+
+export const partsIncompletes = (v) => {
+  const { prix_materiaux: mat, prix_main_oeuvre: mo } = partsPrix(v);
+  return (mat == null) !== (mo == null) || (mat != null && mat < 0) || (mo != null && mo < 0);
+};
 
 // Champs d'un ouvrage, partagés par le formulaire d'ajout et l'édition en ligne.
 function ChampsOuvrage({ valeur, onChange, lots, prefixe, avecLot = true }) {
@@ -38,11 +80,6 @@ function ChampsOuvrage({ valeur, onChange, lots, prefixe, avecLot = true }) {
         <input id={`${prefixe}-unite`} className="form-control" maxLength={20} list="unites-ouvrage" value={valeur.unite} onChange={maj('unite')} />
       </div>
       <div className="form-group">
-        <label className="form-label" htmlFor={`${prefixe}-pu`}>Prix unitaire HT (FCFA)</label>
-        <input id={`${prefixe}-pu`} type="number" min="0" step="1" className="form-control" value={valeur.prixUnitaire}
-          onChange={maj('prixUnitaire')} placeholder="facultatif" />
-      </div>
-      <div className="form-group">
         <label className="form-label" htmlFor={`${prefixe}-src`}>Origine du prix</label>
         <input id={`${prefixe}-src`} className="form-control" maxLength={200} value={valeur.sourcePrix} onChange={maj('sourcePrix')}
           placeholder="ex : DQE de l'ingénieur, devis fournisseur" />
@@ -51,6 +88,7 @@ function ChampsOuvrage({ valeur, onChange, lots, prefixe, avecLot = true }) {
         <label className="form-label" htmlFor={`${prefixe}-date`}>Date du prix</label>
         <input id={`${prefixe}-date`} type="date" className="form-control" value={valeur.datePrix} onChange={maj('datePrix')} />
       </div>
+      <ChampsPrix valeur={valeur} onChange={onChange} prefixe={prefixe} />
     </>
   );
 }
@@ -98,7 +136,8 @@ export default function BibliothequeOuvrages({ peutModifier }) {
     }
   };
 
-  const incomplet = (o) => !o.lot || !o.designation.trim() || !o.unite.trim() || (o.prixUnitaire !== '' && Number(o.prixUnitaire) < 0);
+  const incomplet = (o) => !o.lot || !o.designation.trim() || !o.unite.trim() || (o.prixUnitaire !== '' && Number(o.prixUnitaire) < 0)
+    || partsIncompletes(o);
 
   const ajouter = async (e) => {
     e.preventDefault();
@@ -205,7 +244,12 @@ export default function BibliothequeOuvrages({ peutModifier }) {
                   <tr key={o.id}>
                     <td><strong>{o.designation}</strong></td>
                     <td>{o.unite}</td>
-                    <td className="tabular">{o.prix_unitaire != null ? formatFCFA(o.prix_unitaire) : <span className="texte-discret">à saisir par projet</span>}</td>
+                    <td className="tabular">
+                      {o.prix_unitaire != null ? formatFCFA(o.prix_unitaire) : <span className="texte-discret">à saisir par projet</span>}
+                      {o.prix_unitaire != null && (o.prix_materiaux != null
+                        ? <span className="parts-prix">mat. {formatFCFA(o.prix_materiaux)} · MO {formatFCFA(o.prix_main_oeuvre)}</span>
+                        : <span className="parts-prix non-decompose">non décomposé</span>)}
+                    </td>
                     <td className="texte-discret">{[o.source_prix, dateFr(o.date_prix)].filter(Boolean).join(' · ') || 'non précisée'}</td>
                     <td className="tabular">{o.nb_postes ? `${o.nb_postes} poste(s)` : '—'}</td>
                     {peutModifier && (

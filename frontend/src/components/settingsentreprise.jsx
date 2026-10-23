@@ -30,6 +30,9 @@ export default function SettingsEntreprise({ estAdmin }) {
   const { data: referentiel, erreur: erreurReferentiel } = useReferentiel();
   const [champs, setChamps] = useState(CHAMPS_VIDES);
   const [prix, setPrix] = useState({});
+  // Parts matériaux / main-d'œuvre par clé du barème (issue #92), saisies
+  // telles quelles : {cle: {materiaux, main_oeuvre}} ; vide = non décomposé.
+  const [parts, setParts] = useState({});
   const [paramsAppro, setParamsAppro] = useState({});
   const [meta, setMeta] = useState({});
   const [origines, setOrigines] = useState({});
@@ -64,6 +67,7 @@ export default function SettingsEntreprise({ estAdmin }) {
         setMeta(data.prix_unitaires_meta || {});
         setLogoUrl(data.logo || null);
         setPrix(data.prix_unitaires || {});
+        setParts(data.prix_decomposition || {});
         setParamsAppro(data.parametres_approvisionnement || {});
       })
       .catch((err) => {
@@ -97,6 +101,25 @@ export default function SettingsEntreprise({ estAdmin }) {
     });
   };
 
+  // Avec les deux parts, le prix du barème devient leur somme (champ prix
+  // en lecture seule) ; une seule part bloque l'enregistrement.
+  const handlePart = (cle, part) => (e) => {
+    setSucces(false);
+    const valeur = e.target.value;
+    const ligne = { ...(parts[cle] || {}), [part]: valeur === '' ? '' : Number(valeur) };
+    setParts((prev) => ({ ...prev, [cle]: ligne }));
+    if (partRemplie(ligne.materiaux) && partRemplie(ligne.main_oeuvre)) {
+      setOrigines((o) => { const n = { ...o }; delete n[cle]; return n; });
+      setPrix((p) => ({ ...p, [cle]: ligne.materiaux + ligne.main_oeuvre }));
+    }
+  };
+  const partRemplie = (v) => v !== '' && v != null;
+  const etatParts = (cle) => {
+    const l = parts[cle] || {};
+    const n = [l.materiaux, l.main_oeuvre].filter(partRemplie).length;
+    return n === 2 ? 'complet' : n === 1 ? 'incomplet' : 'vide';
+  };
+
   const handleLogoChange = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
@@ -113,15 +136,24 @@ export default function SettingsEntreprise({ estAdmin }) {
   const handleEnregistrer = async () => {
     setErreur(null);
     setSucces(false);
+    const incompletes = Object.keys(parts).filter((cle) => etatParts(cle) === 'incomplet');
+    if (incompletes.length) {
+      setErreur(`Renseignez les deux parts (matériaux et main-d'œuvre), ou aucune, pour : ${incompletes.map((c) => (referentiel?.cles_prix || []).find((x) => x.cle === c)?.libelle || c).join(', ')}.`);
+      return;
+    }
     setEnregistrement(true);
     try {
+      const decomposition = Object.fromEntries(Object.entries(parts)
+        .filter(([cle]) => etatParts(cle) === 'complet' && prix[cle] != null)
+        .map(([cle, l]) => [cle, { materiaux: Number(l.materiaux), main_oeuvre: Number(l.main_oeuvre) }]));
       const params = Object.fromEntries(Object.entries(paramsAppro).filter(([, v]) => v !== '' && v != null).map(([k, v]) => [k, Number(v)]));
-      const data = await dqeService.updateEntreprise({ ...champs, prix_unitaires: prix, prix_origines: origines, parametres_approvisionnement: params }, logoFile);
+      const data = await dqeService.updateEntreprise({ ...champs, prix_unitaires: prix, prix_decomposition: decomposition, prix_origines: origines, parametres_approvisionnement: params }, logoFile);
       setParamsAppro(data.parametres_approvisionnement || params);
       setMeta(data.prix_unitaires_meta || {});
       setOrigines({});
       setLogoUrl(data.logo || logoUrl);
       setPrix(data.prix_unitaires || prix);
+      setParts(data.prix_decomposition || decomposition);
       setLogoFile(null);
       setLogoPreview(null);
       setSucces(true);
@@ -291,7 +323,8 @@ export default function SettingsEntreprise({ estAdmin }) {
       </div>
       <p className="texte-discret">
         Ces prix sont propres à votre cabinet. Un prix non renseigné bloque le DQE des ouvrages qui l'utilisent :
-        le logiciel n'applique jamais de prix par défaut.
+        le logiciel n'applique jamais de prix par défaut. Facultatif : décomposez un prix en matériaux + main-d'œuvre
+        (le prix devient leur somme) ; sans décomposition, ses lignes de DQE sont « non décomposé ».
       </p>
       {erreurReferentiel && <Alerte type="erreur">Liste des prix indisponible : {erreurReferentiel}</Alerte>}
       {manquants.length > 0 && (
@@ -306,7 +339,20 @@ export default function SettingsEntreprise({ estAdmin }) {
           <div className="form-group" key={cle}>
             <label className="form-label" htmlFor={`prix-${cle}`}>{libelle} <span className="texte-discret">({uniteDeCle(cle)})</span></label>
             <input id={`prix-${cle}`} type="number" min="0" step="1" className="form-control" disabled={!estAdmin}
-              value={prix[cle] ?? ''} onChange={handlePrix(cle)} placeholder="Non renseigné : bloque le DQE" />
+              readOnly={etatParts(cle) === 'complet'} value={prix[cle] ?? ''} onChange={handlePrix(cle)}
+              placeholder="Non renseigné : bloque le DQE" />
+            <div className="parts-bareme" role="group" aria-label={`Décomposition du prix : ${libelle}`}>
+              <label className="part-bareme"><span aria-hidden="true">mat.</span>
+                <input type="number" min="0" step="1" className="form-control" disabled={!estAdmin} aria-label={`${libelle} : dont matériaux`}
+                  placeholder="facultatif" value={parts[cle]?.materiaux ?? ''} onChange={handlePart(cle, 'materiaux')}
+                  aria-invalid={etatParts(cle) === 'incomplet' && !partRemplie(parts[cle]?.materiaux)} /></label>
+              <span className="plus" aria-hidden="true">+</span>
+              <label className="part-bareme"><span aria-hidden="true">MO</span>
+                <input type="number" min="0" step="1" className="form-control" disabled={!estAdmin} aria-label={`${libelle} : dont main-d'œuvre`}
+                  placeholder="facultatif" value={parts[cle]?.main_oeuvre ?? ''} onChange={handlePart(cle, 'main_oeuvre')}
+                  aria-invalid={etatParts(cle) === 'incomplet' && !partRemplie(parts[cle]?.main_oeuvre)} /></label>
+            </div>
+            {etatParts(cle) === 'incomplet' && <small className="texte-erreur">Renseignez les deux parts, ou aucune.</small>}
             <small className="aide-champ">
               {origines[cle] === 'reference' ? 'Pré-rempli avec le barème de référence — non enregistré'
                 : meta[cle] ? `${meta[cle].source === 'reference' ? 'Barème de référence' : 'Saisi'} le ${meta[cle].date}${meta[cle].auteur ? ` par ${meta[cle].auteur}` : ''}`
