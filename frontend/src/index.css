@@ -1613,3 +1613,10 @@ button.account-card { width: 100%; border: none; background: transparent; color:
 .vignette-dalles .poteau { fill: var(--ink-900); }
 .liste-dalles-dxf { list-style: none; margin: 0 0 0.5rem; padding: 0; display: grid; gap: 0.3rem; max-height: 220px; overflow-y: auto; }
 @media (max-width: 640px) { .dalles-dxf-corps { grid-template-columns: 1fr; } }
+/* Avancement d'un dépôt de fichier (issue #90) */
+.progression-envoi { width: min(420px, 100%); margin: 0.75rem 0 0; display: grid; gap: 0.35rem; }
+.progression-envoi-barre { height: 8px; border-radius: 999px; background: var(--core-border, #e2e8f0); overflow: hidden; position: relative; }
+.progression-envoi-barre > span { display: block; height: 100%; background: var(--accent-primary, #c2410c); transition: width 0.2s ease; }
+.progression-envoi-barre > span.indeterminee { width: 35%; position: absolute; animation: progression-va-et-vient 1.2s ease-in-out infinite; }
+@keyframes progression-va-et-vient { 0% { left: -35%; } 100% { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .progression-envoi-barre > span.indeterminee { animation: none; width: 100%; opacity: 0.5; } }

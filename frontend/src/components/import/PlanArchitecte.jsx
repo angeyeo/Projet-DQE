@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, UploadCloud } from 'lucide-react';
-import { dqeService } from '../../api/dqeService';
+import { controlerTaille, dqeService } from '../../api/dqeService';
+import useReferentiel from '../../hooks/useReferentiel';
 import Alerte from '../ui/Alerte';
+import ProgressionEnvoi from '../ui/ProgressionEnvoi';
 import EditeurPoteaux from './EditeurPoteaux';
 import { MESSAGE_STRUCTURE_SAISIE } from './messages';
 
@@ -13,11 +15,15 @@ import { MESSAGE_STRUCTURE_SAISIE } from './messages';
 export default function PlanArchitecte({ projectData, updateProjectData, assurerProjet }) {
   const [fond, setFond] = useState(null);
   const [etat, setEtat] = useState({ chargement: false, erreur: null });
+  const [progression, setProgression] = useState(null);
+  const { data: referentiel } = useReferentiel();
   const projetId = projectData.id;
 
   // Réouverture d'un projet : relit le fond déjà déposé.
   useEffect(() => {
-    if (!projetId || fond) return;
+    // Pendant un dépôt, le projet vient d'être créé : ne pas relire un fond
+    // qui n'existe pas encore (lecture en double d'un gros DXF, issue #90).
+    if (!projetId || fond || etat.chargement) return;
     let actif = true;
     dqeService.getFondPlan(projetId)
       .then((f) => { if (actif) setFond(f); })
@@ -26,7 +32,7 @@ export default function PlanArchitecte({ projectData, updateProjectData, assurer
         if (actif && err.status !== 404) setEtat({ chargement: false, erreur: err.message });
       });
     return () => { actif = false; };
-  }, [projetId, fond]);
+  }, [projetId, fond, etat.chargement]);
 
   const deposer = async (e) => {
     const file = e.target.files?.[0];
@@ -36,10 +42,16 @@ export default function PlanArchitecte({ projectData, updateProjectData, assurer
       setEtat({ chargement: false, erreur: 'Le mode « Plan d’architecte » accepte les fichiers DXF ou DWG : exportez le plan en DXF depuis votre logiciel (voir l’aide ci-dessous).' });
       return;
     }
+    const tropGros = controlerTaille(file, referentiel?.limites_fichiers?.plan_octets, 'Le plan');
+    if (tropGros) {
+      setEtat({ chargement: false, erreur: tropGros });
+      return;
+    }
     setEtat({ chargement: true, erreur: null });
+    setProgression(null);
     try {
       const id = await assurerProjet();
-      const f = await dqeService.importerPlanArchitecte(id, file);
+      const f = await dqeService.importerPlanArchitecte(id, file, setProgression);
       setFond(f);
       updateProjectData({
         planArchitecte: true,
@@ -50,6 +62,8 @@ export default function PlanArchitecte({ projectData, updateProjectData, assurer
       setEtat({ chargement: false, erreur: null });
     } catch (err) {
       setEtat({ chargement: false, erreur: `Fond de plan non chargé : ${err.message}` });
+    } finally {
+      setProgression(null);
     }
   };
 
@@ -77,6 +91,7 @@ export default function PlanArchitecte({ projectData, updateProjectData, assurer
         )}
       </div>
 
+      {etat.chargement && <ProgressionEnvoi progression={progression} libelleLecture="Lecture du plan par le serveur…" />}
       {etat.erreur && <Alerte type="erreur">{etat.erreur}</Alerte>}
       {fond?.avertissements?.length > 0 && <Alerte type="attention" liste={fond.avertissements} />}
 
