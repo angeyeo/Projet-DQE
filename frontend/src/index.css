@@ -1596,3 +1596,6 @@ button.account-card { width: 100%; border: none; background: transparent; color:
   .ecart-total-valeur { font-size: 1.35rem; }
   .ecart-total-montants { flex-wrap: wrap; font-size: 0.95rem; }
 }
+.option-murs { margin: 1rem 0; padding: 0.85rem 1rem; border: 1px dashed var(--core-border); border-radius: var(--radius-md); background: var(--core-surface); }
+.option-murs .case-a-cocher { align-items: flex-start; gap: 0.6rem; }
+.option-murs .case-a-cocher input { margin-top: 0.25rem; }

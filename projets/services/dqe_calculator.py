@@ -707,6 +707,7 @@ def _fusionner_prix_manquants(problemes: list) -> list:
             if cle not in prix:
                 prix[cle] = dict(p, nb_ouvrages=0)
             prix[cle]["nb_ouvrages"] += 1
+            prix[cle]["plan_murs"] = prix[cle].get("plan_murs") or p.get("plan_murs", False)
         else:
             autres.append(p)
     for p in prix.values():
@@ -714,7 +715,9 @@ def _fusionner_prix_manquants(problemes: list) -> list:
         etat = "non renseigné" if p["code"] == "PRIX_MANQUANT" else "invalide"
         p["message"] = (
             f"Prix unitaire « {libelle} » {etat} dans le barème du cabinet "
-            f"(nécessaire pour {p['nb_ouvrages']} ouvrage(s))."
+            f"(nécessaire pour {p['nb_ouvrages']} ouvrage(s)"
+            + (", dont le métré de la maçonnerie et de l'enduit du plan des murs" if p.get("plan_murs") else "")
+            + ")."
         )
     return autres + list(prix.values())
 
@@ -780,6 +783,15 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict) -> dict:
             ligne["lot"] = poste.lot
             toutes_lignes.append(ligne)
 
+    # Maçonnerie et enduit tirés du plan des murs (issue #73), si demandé.
+    hypotheses_murs = []
+    if getattr(projet, "metrer_murs_depuis_plan", False):
+        from .metre_murs import lignes_murs_depuis_plan
+
+        lignes_murs, hypotheses_murs = lignes_murs_depuis_plan(projet, prix_unitaires, problemes, _ligne, _prix,
+                                                               LOT_SUPER)
+        toutes_lignes += lignes_murs
+
     if problemes:
         raise DQEIncomplet(_fusionner_prix_manquants(problemes))
 
@@ -824,7 +836,7 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict) -> dict:
     )
     libelles_lots = dict(PosteComplementaire.Lot.choices)
 
-    hypotheses = sorted({l["hypothese"] for l in toutes_lignes if l.get("hypothese")})
+    hypotheses = sorted({l["hypothese"] for l in toutes_lignes if l.get("hypothese")}) + hypotheses_murs
     if incoherentes:
         hypotheses.append("ALERTE : décomposition matériaux / main-d'œuvre différente du prix unitaire pour : "
                           + ", ".join(sorted(incoherentes)) + " -- lignes affichées « non décomposé ».")
@@ -837,6 +849,8 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict) -> dict:
             "usage_batiment": projet.usage_batiment,
             "nb_niveaux": projet.nb_niveaux,
             "numero_devis": projet.numero_devis,
+            "metrer_murs_depuis_plan": bool(getattr(projet, "metrer_murs_depuis_plan", False)),
+            "murs_places": len(projet.murs_rdc or []) + len(projet.murs_etages or []),
         },
         "lignes": toutes_lignes,
         "lots": [
@@ -877,7 +891,7 @@ def _hypotheses_projet(projet):
 SOUS_LOTS = {
     "SEMELLE": "Fondations isolées", "SEMELLE_FILANTE": "Fondations filantes", "LONGRINE": "Longrines",
     "POTEAU": "Poteaux", "POUTRE": "Poutres", "DALLE": "Dalles et planchers", "CHAINAGE": "Chaînages",
-    "MAIN_DOEUVRE": "Postes saisis",
+    "MAIN_DOEUVRE": "Postes saisis", "MURS_PLAN": "Maçonnerie et enduits (plan des murs)",
 }
 
 
