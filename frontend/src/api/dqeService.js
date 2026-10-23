@@ -330,7 +330,11 @@ export const dqeService = {
       } else if (formulaire.structureModifiee) {
         resultat = await postJSON(`${API_BASE_URL}/projets/${projet.id}/placer_poteaux/`, {});
       } else if (formulaire.ifcImporte) {
-        resultat = await postJSON(`${API_BASE_URL}/projets/${projet.id}/importer_plan/`, { confirmer: true });
+        // Dalles du DXF gardées dans l'aperçu (issue #80) : envoyées seulement
+        // si l'aperçu a été vu dans cette session (sinon, dalles inchangées).
+        resultat = await postJSON(`${API_BASE_URL}/projets/${projet.id}/importer_plan/`, {
+          confirmer: true, ...(Array.isArray(formulaire.dallesDxf) ? { dalles: formulaire.dallesDxf } : {}),
+        });
       } else {
         resultat = await postJSON(`${API_BASE_URL}/projets/${projet.id}/generer_trame/`, undefined);
       }

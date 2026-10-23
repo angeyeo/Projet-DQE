@@ -10,7 +10,12 @@ Ce que le module lit, et rien d'autre :
     (Column_12, POTEAU, Poteaux...) ; position = centre de l'emprise du
     bloc ;
   - les murs = blocs dont le nom ou le calque désigne un mur, rectilignes
-    et parallèles aux axes ; axe = ligne médiane du rectangle.
+    et parallèles aux axes ; axe = ligne médiane du rectangle ;
+  - les dalles (issue #80) = blocs, ou polylignes fermées, dont le nom ou le
+    calque désigne une dalle ou un plancher (Slab_1, DALLES, PLANCHER...),
+    seulement si leur contour est un RECTANGLE parallèle aux axes : Lx, Ly
+    = côtés du rectangle. Une autre forme n'est pas lue (signalée) : elle se
+    saisit à la main. Les dalles sont PROPOSÉES, jamais créées sans accord.
 
 Un DXF peut contenir plusieurs plans posés côte à côte (rez-de-chaussée,
 étage...) sans que le fichier dise lequel est lequel : les poteaux sont
@@ -43,6 +48,11 @@ RECOUVREMENT_MUR_MIN = 0.5
 
 MOTIF_POTEAU = re.compile(r"(^|[^a-z])(columns?|colonnes?|poteaux?)([^a-z]|$)", re.IGNORECASE)
 MOTIF_MUR = re.compile(r"(^|[^a-z])(walls?|murs?)([^a-z]|$)", re.IGNORECASE)
+MOTIF_DALLE = re.compile(r"(^|[^a-z])(slabs?|dalles?|planchers?|floors?)([^a-z]|$)", re.IGNORECASE)
+# Contour d'une dalle accepté comme rectangle si son aire diffère de moins
+# de ceci de l'aire de son rectangle englobant (tracés arrondis au mm).
+TOLERANCE_RECTANGLE = 0.01
+COTE_DALLE_MIN_M = 0.50
 NUMERO_FINAL = re.compile(r"[_ ]?\d+$")
 
 
@@ -103,7 +113,37 @@ def _nature(insert):
             return "poteau"
         if MOTIF_MUR.search(texte.replace("_", " ")):
             return "mur"
+        if MOTIF_DALLE.search(texte.replace("_", " ")):
+            return "dalle"
     return None
+
+
+def _aire_polyligne(points):
+    """Aire (formule du lacet) d'un contour fermé, en unités du dessin²."""
+    n = len(points)
+    return abs(sum(points[i][0] * points[(i + 1) % n][1] - points[(i + 1) % n][0] * points[i][1]
+                   for i in range(n))) / 2
+
+
+def _dalle_rectangulaire(entites, echelle):
+    """(x0, y0, x1, y1) en mètres si le plus grand contour fermé est un
+    rectangle parallèle aux axes ; sinon None (forme non lue)."""
+    contours = []
+    for e in entites:
+        if e.dxftype() == "LWPOLYLINE" and e.closed:
+            contours.append([(p[0], p[1]) for p in e.get_points("xy")])
+        elif e.dxftype() == "POLYLINE" and e.is_closed:
+            contours.append([(v.dxf.location.x, v.dxf.location.y) for v in e.vertices])
+    contours = [c for c in contours if len(c) >= 4]
+    if not contours:
+        return None
+    c = max(contours, key=_aire_polyligne)
+    xs, ys = [p[0] for p in c], [p[1] for p in c]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    englobant = (x1 - x0) * (y1 - y0)
+    if englobant <= 0 or abs(_aire_polyligne(c) - englobant) > TOLERANCE_RECTANGLE * englobant:
+        return None
+    return (x0 * echelle, y0 * echelle, x1 * echelle, y1 * echelle)
 
 
 def _regrouper_en_plans(poteaux):
@@ -158,8 +198,33 @@ def lire_dxf(chemin):
     doc = _ouvrir(chemin)
     unite, echelle = _echelle(doc)
     poteaux, murs, murs_ignores, murs_courts, inconnus = [], [], 0, 0, {}
+    dalles, dalles_ignorees = [], 0
+
+    def ajouter_dalle(rect, nom, handle):
+        nonlocal dalles_ignorees
+        if rect is None:
+            dalles_ignorees += 1
+            return
+        x0, y0, x1, y1 = rect
+        cotes = sorted((x1 - x0, y1 - y0))
+        if cotes[0] < COTE_DALLE_MIN_M:
+            dalles_ignorees += 1
+            return
+        dalles.append({"id": f"dxf-{handle}", "nom": nom, "x": (x0 + x1) / 2, "y": (y0 + y1) / 2,
+                       "lx": round(cotes[0], 3), "ly": round(cotes[1], 3),
+                       "emprise": (x0, y0, x1, y1)})
+
+    # Dalles dessinées en polylignes fermées sur un calque « dalle ».
+    for pl in doc.modelspace().query("LWPOLYLINE POLYLINE"):
+        if MOTIF_DALLE.search((pl.dxf.layer or "").replace("_", " ")) and \
+                (pl.closed if pl.dxftype() == "LWPOLYLINE" else pl.is_closed):
+            ajouter_dalle(_dalle_rectangulaire([pl], echelle), pl.dxf.layer, pl.dxf.handle)
     for insert in doc.modelspace().query("INSERT"):
         nature = _nature(insert)
+        if nature == "dalle":
+            ajouter_dalle(_dalle_rectangulaire(list(insert.virtual_entities()), echelle), insert.dxf.name,
+                          insert.dxf.handle)
+            continue
         if nature is None:
             cle = f"{insert.dxf.layer} / {NUMERO_FINAL.sub('', insert.dxf.name)}"
             inconnus[cle] = inconnus.get(cle, 0) + 1
@@ -188,7 +253,8 @@ def lire_dxf(chemin):
             + (f"Blocs trouvés (calque / bloc) : {apercu}." if apercu else "Le fichier ne contient aucun bloc : "
                "les poteaux sont sans doute dessinés en simples traits ; regroupez-les en blocs sur un calque POTEAUX.")
         )
-    return {"unite": unite, "poteaux": poteaux, "murs": murs, "murs_ignores": murs_ignores, "murs_courts": murs_courts}
+    return {"unite": unite, "poteaux": poteaux, "murs": murs, "murs_ignores": murs_ignores, "murs_courts": murs_courts,
+            "dalles": dalles, "dalles_ignorees": dalles_ignorees}
 
 
 def _dans_emprise(point, plan, marge=1.0):
@@ -214,8 +280,9 @@ def analyser_fichier_dxf(chemin, plan=None):
         info = {"id": f"plan-{i}", "x_min": x_min, "y_min": y_min, "x_max": x_max, "y_max": y_max}
         murs = [m for m in brut["murs"]
                 if _dans_emprise(m["debut"], info) and _dans_emprise(m["fin"], info)]
+        dalles = [d for d in brut["dalles"] if _dans_emprise((d["x"], d["y"]), info)]
         plans.append({
-            **info, "_poteaux": uniques, "_doublons": doublons, "_murs": murs,
+            **info, "_poteaux": uniques, "_doublons": doublons, "_murs": murs, "_dalles": dalles,
             "nb_poteaux": len(uniques), "nb_doublons": len(doublons), "nb_murs": len(murs),
             "largeur_m": round(x_max - x_min, 2), "profondeur_m": round(y_max - y_min, 2),
             # Positions locales (m) pour la vignette de choix du plan.
@@ -258,6 +325,15 @@ def analyser_fichier_dxf(chemin, plan=None):
                             "niveau_nom": retenu["id"]} for p in retenu["_poteaux"]]
     resultat["murs"] = [{**m, "debut": (m["debut"][0] - x0, m["debut"][1] - y0),
                          "fin": (m["fin"][0] - x0, m["fin"][1] - y0)} for m in retenu["_murs"]]
+    resultat["dalles"] = [{"id": d["id"], "nom": d["nom"], "lx": d["lx"], "ly": d["ly"],
+                           "x": round(d["x"] - x0, 3), "y": round(d["y"] - y0, 3),
+                           "emprise": [round(d["emprise"][0] - x0, 3), round(d["emprise"][1] - y0, 3),
+                                       round(d["emprise"][2] - x0, 3), round(d["emprise"][3] - y0, 3)]}
+                          for d in retenu["_dalles"]]
+    if brut["dalles_ignorees"]:
+        resultat["avertissements"].append(
+            f"{brut['dalles_ignorees']} dalle(s) non lue(s) : contour non rectangulaire ou côté de moins de "
+            f"{COTE_DALLE_MIN_M:g} m. Saisissez-les à l'étape Dalles.")
     if retenu["_doublons"]:
         resultat["avertissements"].append(
             f"{len(retenu['_doublons'])} poteau(x) dessiné(s) deux fois au même endroit, comptés une seule fois : "

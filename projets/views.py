@@ -712,6 +712,10 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             reponse["nb_murs"] = len(resultat["murs"])
             reponse["murs_proposes"] = associer_murs_aux_poutres(
                 resultat["murs"], troncons_adjacents(resultat["poteaux"]))
+            # Issue #80 : dalles rectangulaires lues dans le DXF, PROPOSÉES
+            # (créées seulement si l'utilisateur les garde à la confirmation).
+            reponse["dalles_proposees"] = resultat["dalles"]
+            reponse["poteaux_apercu"] = [[round(p["x"], 3), round(p["y"], 3)] for p in resultat["poteaux"]]
         reponse["avertissements"] = avertissements
         return reponse
 
@@ -853,6 +857,10 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         avertissements += avert_creation
+        if format_plan == ".dxf" and isinstance(request.data.get("dalles"), list):
+            dalles_creees, avert_dalles = self._creer_dalles_dxf(projet, resultat["dalles"], request.data["dalles"])
+            elements_crees += dalles_creees
+            avertissements += avert_dalles
         projet.source_structure = Projet.SourceStructure.PLAN
         projet.poteaux_saisis = []
         projet.save(update_fields=["source_structure", "poteaux_saisis"])
@@ -868,6 +876,39 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
              "hypotheses": sorted(set(hypotheses))},
             status=status.HTTP_201_CREATED,
         )
+
+    @staticmethod
+    def _creer_dalles_dxf(projet, proposees, choisies):
+        """Crée les dalles du DXF GARDÉES par l'utilisateur (issue #80) :
+        Lx, Ly = côtés du rectangle lu, origine « plan », calcul du moteur.
+        Les dalles d'un import précédent (origine plan) sont remplacées ; les
+        dalles saisies à la main ne sont jamais touchées."""
+        par_id = {d["id"]: d for d in proposees}
+        inconnues = [i for i in choisies if i not in par_id]
+        avertissements = []
+        if inconnues:
+            avertissements.append(f"{len(inconnues)} dalle(s) choisie(s) introuvable(s) dans le DXF : non créée(s).")
+        projet.elements.filter(type_element=ElementStructurel.TypeElement.DALLE,
+                               origine_geometrie=ElementStructurel.OrigineGeometrie.PLAN).delete()
+        creees = []
+        for n, ident in enumerate([i for i in choisies if i in par_id], start=1):
+            d = par_id[ident]
+            el = ElementStructurel.objects.create(
+                projet=projet, type_element=ElementStructurel.TypeElement.DALLE, identifiant=f"D{n}",
+                position=ElementStructurel.Position.SUPERSTRUCTURE,
+                origine_geometrie=ElementStructurel.OrigineGeometrie.PLAN,
+                position_x=d["x"], position_y=d["y"], portee=d["lx"], longueur_m=d["ly"],
+                surface_m2=round(d["lx"] * d["ly"], 4))
+            try:
+                el.resultat_calcul = calculer_element(el)
+                el.save(update_fields=["resultat_calcul"])
+            except (CalculNonDisponible, EntreeInvalide) as exc:
+                avertissements.append(f"Dalle {el.identifiant} créée mais non calculée : {exc}")
+            creees.append(el)
+        if creees:
+            avertissements.append(f"{len(creees)} dalle(s) lue(s) dans le DXF et créée(s) (D1 à D{len(creees)}) : "
+                                  "vérifiez Lx et Ly à l'étape Dalles avant de les valider.")
+        return creees, avertissements
 
     def _reponse_fond_plan(self, projet):
         from moteur_calcul.import_dxf.fond_plan import FondPlanVide, lire_fond_plan

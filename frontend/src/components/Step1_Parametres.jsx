@@ -46,6 +46,9 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
       // clairement un DXF dont le plan des fondations n'est pas choisi).
       ifcImporte: true,
       ...(params.format === 'dxf' && params.plan_retenu ? { mursRdc: reprise ? params.murs_proposes || [] : [] } : {}),
+      // Dalles lues dans le DXF (issue #80) : aucune n'est gardée sans
+      // l'accord de l'utilisateur (cases à cocher de l'aperçu).
+      ...(params.format === 'dxf' && params.plan_retenu ? { dallesDxf: [] } : {}),
     });
     setAnalysisWarnings(params.avertissements || []);
   };
@@ -343,7 +346,8 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
       </div>
 
       <ApercuDXF apercu={dxf} choixEnCours={choixPlanEnCours} onChoisirPlan={choisirPlan}
-        reprendreMurs={reprendreMurs} onReprendreMurs={basculerRepriseMurs} />
+        reprendreMurs={reprendreMurs} onReprendreMurs={basculerRepriseMurs}
+        dallesChoisies={projectData.dallesDxf || []} onDalles={(ids) => updateProjectData({ dallesDxf: ids })} />
 
       {analysisError && (
         <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--status-critical)', fontSize: '0.88rem' }}>

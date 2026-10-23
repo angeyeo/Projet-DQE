@@ -1601,3 +1601,15 @@ button.account-card { width: 100%; border: none; background: transparent; color:
 .option-murs .case-a-cocher input { margin-top: 0.25rem; }
 .plan-propre { margin: 0.25rem 0 0.75rem; }
 .plan-murs-svg.herite .troncon { cursor: not-allowed; opacity: 0.6; }
+
+/* Dalles lues dans un DXF (issue #80) */
+.dalles-dxf { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--core-border-subtle); }
+.dalles-dxf h4 { display: inline-flex; gap: 0.4rem; align-items: center; margin: 0 0 0.35rem; font-size: 0.98rem; }
+.dalles-dxf-corps { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 1rem; align-items: start; }
+.vignette-dalles { width: 100%; aspect-ratio: 4 / 3; background: var(--core-bg); border: 1px solid var(--core-border); border-radius: var(--radius-md); }
+.vignette-dalles .dalle rect { fill: var(--core-border-subtle); stroke: var(--ink-300); stroke-width: 0.02; vector-effect: non-scaling-stroke; }
+.vignette-dalles .dalle.gardee rect { fill: var(--accent-soft); stroke: var(--accent); }
+.vignette-dalles .dalle text { fill: var(--ink-700); font-weight: 700; }
+.vignette-dalles .poteau { fill: var(--ink-900); }
+.liste-dalles-dxf { list-style: none; margin: 0 0 0.5rem; padding: 0; display: grid; gap: 0.3rem; max-height: 220px; overflow-y: auto; }
+@media (max-width: 640px) { .dalles-dxf-corps { grid-template-columns: 1fr; } }
