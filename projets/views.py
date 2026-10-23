@@ -58,6 +58,7 @@ from .models import (
     OuvrageType,
     PosteComplementaire,
     Projet,
+    VersionDQE,
 )
 from .permissions import (
     EstAdminCabinet, EstMembreEntreprise, PeutModifierBibliotheque, PeutValiderElement, entreprise_de,
@@ -84,6 +85,8 @@ from .services.assistant_ia.explanations import expliquer_resultat_element
 from .services.assistant_ia.parser import structurer_description_projet
 from .services.assistant_ia.postes import suggerer_poste_complementaire
 from .services.assistant_ia.vision import analyser_plan_2d
+from .services.versions_dqe import comparer as comparer_versions_dqe
+from .services.versions_dqe import enregistrer_version, resume_version
 from .services.dqe_calculator import (
     DQEIncomplet,
     LIBELLES_PRIX,
@@ -1186,11 +1189,58 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             return Response({"erreur": f"Format d'export invalide : {export_format}"},
                             status=status.HTTP_400_BAD_REQUEST)
 
+        # Historique (issue #82) : nouvelle version seulement si le contenu
+        # diffère de la dernière ; le DQE affiché ou exporté porte son numéro.
+        version, _ = enregistrer_version(projet, dqe_data, request.user)
+        dqe_data["version"] = resume_version(version)
         if export_format is None:
             if not self._dqe_deja_journalise(projet, dqe_data):
                 self._journaliser_dqe(request, projet, dqe_data)
             return Response(dqe_data, status=status.HTTP_200_OK)
         return self._exporter_dqe(request, projet, dqe_data, export_format)
+
+    @action(detail=True, methods=["get"], url_path="versions-dqe", url_name="versions-dqe")
+    def versions_dqe(self, request, pk=None):
+        """Historique des versions du DQE du projet (plus récente d'abord)."""
+        projet = self.get_object()
+        return Response([resume_version(v) for v in projet.versions_dqe.all()])
+
+    @action(detail=True, methods=["get"], url_path=r"versions-dqe/(?P<numero>[0-9]+)", url_name="version-dqe")
+    def version_dqe(self, request, pk=None, numero=None):
+        """Contenu figé d'une version ; ?export=pdf|excel la réédite TELLE
+        QU'ELLE ÉTAIT (aucun recalcul, aucune nouvelle version)."""
+        projet = self.get_object()
+        version = projet.versions_dqe.filter(numero=numero).first()
+        if version is None:
+            return Response({"erreur": f"Version {numero} introuvable pour ce projet."},
+                            status=status.HTTP_404_NOT_FOUND)
+        dqe_data = {**version.donnees, "version": resume_version(version)}
+        export_format = request.query_params.get("export")
+        if export_format is None:
+            return Response(dqe_data)
+        if export_format not in ("pdf", "excel"):
+            return Response({"erreur": f"Format d'export invalide : {export_format}"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        dqe_data["projet"] = {**dqe_data.get("projet", {}), "date_edition": version.date.date().isoformat(),
+                              "auteur": version.auteur_nom or dqe_data.get("projet", {}).get("auteur")}
+        return self._exporter_dqe(request, projet, dqe_data, export_format, figee=True)
+
+    @action(detail=True, methods=["get"], url_path="versions-dqe/comparer", url_name="comparer-versions-dqe")
+    def comparer_versions(self, request, pk=None):
+        """Comparaison poste par poste : ?de=<numéro>&a=<numéro>."""
+        projet = self.get_object()
+        try:
+            de, a = int(request.query_params.get("de", "")), int(request.query_params.get("a", ""))
+        except ValueError:
+            return Response({"erreur": "Indiquez les deux versions à comparer : ?de=<numéro>&a=<numéro>."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        versions = {v.numero: v for v in projet.versions_dqe.filter(numero__in=(de, a))}
+        manquantes = [n for n in (de, a) if n not in versions]
+        if manquantes:
+            return Response({"erreur": f"Version(s) introuvable(s) : {', '.join(map(str, manquantes))}."},
+                            status=status.HTTP_404_NOT_FOUND)
+        return Response({"de": resume_version(versions[de]), "a": resume_version(versions[a]),
+                         **comparer_versions_dqe(versions[de].donnees, versions[a].donnees)})
 
     @staticmethod
     def _dqe_deja_journalise(projet, dqe_data):
@@ -1221,13 +1271,15 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             synthese=dqe_data["synthese"],
         )
 
-    def _exporter_dqe(self, request, projet, dqe_data, export_format):
-        dqe_data["projet"]["date_edition"] = timezone.localdate().isoformat()
-        dqe_data["projet"]["auteur"] = _nom_utilisateur(request.user)
-        if not dqe_data["projet"]["numero_devis"]:
+    def _exporter_dqe(self, request, projet, dqe_data, export_format, figee=False):
+        if not figee:  # version figée : sa date et son auteur d'origine
+            dqe_data["projet"]["date_edition"] = timezone.localdate().isoformat()
+            dqe_data["projet"]["auteur"] = _nom_utilisateur(request.user)
+        if not dqe_data["projet"].get("numero_devis"):
             dqe_data["projet"]["numero_devis"] = "non attribué"
         entreprise = _entreprise_export_dict(projet.entreprise)
-        nom_fichier_base = f"DQE_{projet.nom.replace(' ', '_')}_{projet.id}"
+        nom_fichier_base = f"DQE_{projet.nom.replace(' ', '_')}_{projet.id}" + (
+            f"_v{dqe_data['version']['numero']}" if dqe_data.get("version") else "")
         if export_format == "pdf":
             buffer = exporter_dqe_pdf(dqe_data, entreprise=entreprise)
             response = HttpResponse(buffer.getvalue(), content_type="application/pdf")

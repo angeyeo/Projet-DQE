@@ -475,6 +475,16 @@ export const dqeService = {
       `DQE_projet_${projetId}.${format === 'pdf' ? 'pdf' : 'xlsx'}`,
     ),
 
+  // Historique des versions du DQE (issue #82) : versions figées côté serveur.
+  listerVersionsDQE: async (projetId) => getJSON(`${API_BASE_URL}/projets/${projetId}/versions-dqe/`),
+  comparerVersionsDQE: async (projetId, de, a) =>
+    getJSON(`${API_BASE_URL}/projets/${projetId}/versions-dqe/comparer/?de=${de}&a=${a}`),
+  telechargerVersionDQE: async (projetId, numero, format) =>
+    telechargerBlob(
+      `${API_BASE_URL}/projets/${projetId}/versions-dqe/${numero}/?export=${format}`,
+      `DQE_projet_${projetId}_v${numero}.${format === 'pdf' ? 'pdf' : 'xlsx'}`,
+    ),
+
   // Fiche d'approvisionnement (calculée par le serveur à partir du DQE)
   getApprovisionnement: async (projetId) => getJSON(`${API_BASE_URL}/projets/${projetId}/approvisionnement/`),
   telechargerNoteCalcul: async (projetId) =>

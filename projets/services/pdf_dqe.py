@@ -575,7 +575,7 @@ def cartouche(dqe_data, lots):
     ref = reference_devis(projet)
     data = [
         [cell("PROJET", projet.get("nom")), cell("LOT" + ("S" if len(lots) > 1 else ""), lots_txt),
-         cell("DOCUMENT", "DQE"), cell("RÉFÉRENCE", ref or "non attribuée"),
+         cell("DOCUMENT", f"DQE v{dqe_data['version']['numero']}" if dqe_data.get("version") else "DQE"), cell("RÉFÉRENCE", ref or "non attribuée"),
          cell("DATE", _date_fr(projet.get("date_edition"))), cell("ÉTABLI PAR", projet.get("auteur"))],
         [cell("VÉRIFIÉ PAR", None), "", cell("DATE DE VALIDATION", None), "", cell("VISA / CACHET", None), ""],
     ]
@@ -677,6 +677,8 @@ def generer_pdf(dqe_data, entreprise=None, lots=None) -> BytesIO:
             "contact": " • ".join(contact),
             "document": f"DQE — {projet.get('nom', '')}",
             "entete_droite": " · ".join(x for x in (projet.get("nom"), f"Devis n° {ref}" if ref else None,
+                                                    f"version {dqe_data['version']['numero']}"
+                                                    if dqe_data.get("version") else None,
                                                     _date_fr(projet.get("date_edition"))) if x),
         }
 

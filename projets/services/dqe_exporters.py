@@ -264,7 +264,8 @@ def exporter_dqe_excel(dqe_data: dict, entreprise: dict = None) -> BytesIO:
 
     ws.cell(row=row, column=1, value="DEVIS QUANTITATIF ET ESTIMATIF (DQE)").font = font_title
     row += 1
-    ws.cell(row=row, column=1, value=f"Devis N° {projet.get('numero_devis', '')} — Édition du {formater_date(projet.get('date_edition', ''))}").font = font_normal
+    ws.cell(row=row, column=1, value=f"Devis N° {projet.get('numero_devis', '')} — Édition du {formater_date(projet.get('date_edition', ''))}"
+            + (f" — version {dqe_data['version']['numero']}" if dqe_data.get("version") else "")).font = font_normal
     row += 1
     if projet.get("auteur"):
         ws.cell(row=row, column=1, value=f"Établi par {projet['auteur']}").font = font_small
