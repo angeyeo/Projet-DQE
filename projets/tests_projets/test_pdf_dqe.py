@@ -127,3 +127,16 @@ class Logo(SimpleTestCase):
             img = get_logo({"logo_path": chemin})
             self.assertIsNotNone(img)
             self.assertAlmostEqual(img.drawWidth / img.drawHeight, 4.0, places=2)
+
+
+@unittest.skipUnless(PDFTOTEXT, "pdftotext indisponible")
+class MentionResponsabilite(SimpleTestCase):
+    """Issue #72 (audit A-17) : mention de responsabilité en pied de page."""
+
+    def test_mention_sur_chaque_page(self):
+        t = texte_pdf(exporter_dqe_pdf(dqe(nb_lignes=150)))
+        pages = t.split("\f")
+        pages = [p for p in pages if p.strip()]
+        self.assertGreater(len(pages), 1)
+        for p in pages:
+            self.assertIn("seul responsable de l'ouvrage", " ".join(p.split()))

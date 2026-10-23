@@ -62,15 +62,26 @@ class Tailles:
     PIED = 7
 
 
+# Mention de responsabilité (issue #72), en pied de chaque page des PDF
+# (DQE et note de calcul). Texte à faire valider par le chef de projet.
+MENTION_RESPONSABILITE_COURTE = (
+    "Pré-dimensionnement et métré indicatifs : à vérifier et valider par un ingénieur structure, "
+    "seul responsable de l'ouvrage."
+)
+
 MARGE_X = 18 * mm
 MARGE_HAUT = 16 * mm
 MARGE_BAS = 22 * mm
 LARGEUR_PAGE, HAUTEUR_PAGE = A4
 LARGEUR_UTILE = LARGEUR_PAGE - 2 * MARGE_X
 
-# Police EMBARQUÉE dans le PDF (Bitstream Vera, livrée avec reportlab) :
-# les polices standard non embarquées (Helvetica) laissaient certains
-# lecteurs afficher « m » au lieu de « m³ » / « m² ».
+# Police EMBARQUÉE dans le PDF : DejaVu Sans (livrée dans projets/polices,
+# licence libre, voir LICENCE_DejaVu.txt). C'est Bitstream Vera étendue :
+# même dessin et mêmes chasses pour le latin, avec en plus les lettres
+# grecques et symboles des formules (γ, λ, α, Σ, √, ≤) que Vera n'a pas
+# (affichés en carrés dans la note de calcul, issue #96). Vera (livrée
+# avec reportlab) reste le secours si les fichiers manquent. Les polices
+# standard non embarquées (Helvetica) affichaient « m » pour « m³ ».
 def _enregistrer_polices():
     import os
 
@@ -78,10 +89,15 @@ def _enregistrer_polices():
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
-    dossier = os.path.join(os.path.dirname(reportlab.__file__), "fonts")
-    for nom, fichier in (("DQE", "Vera.ttf"), ("DQE-Bold", "VeraBd.ttf"), ("DQE-Oblique", "VeraIt.ttf")):
-        if nom not in pdfmetrics.getRegisteredFontNames():
-            pdfmetrics.registerFont(TTFont(nom, os.path.join(dossier, fichier)))
+    dejavu = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "polices")
+    vera = os.path.join(os.path.dirname(reportlab.__file__), "fonts")
+    for nom, (fichier_dejavu, fichier_vera) in (("DQE", ("DejaVuSans.ttf", "Vera.ttf")),
+                                                ("DQE-Bold", ("DejaVuSans-Bold.ttf", "VeraBd.ttf")),
+                                                ("DQE-Oblique", ("DejaVuSans-Oblique.ttf", "VeraIt.ttf"))):
+        if nom in pdfmetrics.getRegisteredFontNames():
+            continue
+        chemin = os.path.join(dejavu, fichier_dejavu)
+        pdfmetrics.registerFont(TTFont(nom, chemin if os.path.exists(chemin) else os.path.join(vera, fichier_vera)))
 
 
 _enregistrer_polices()
@@ -553,6 +569,11 @@ class CanevasNumerote(pdfcanvas.Canvas):
         gris = Couleurs.GRIS
         # Pied de page
         y = MARGE_BAS - 9 * mm
+        mention = c.get("mention", MENTION_RESPONSABILITE_COURTE)
+        if mention:
+            self.setFont(POLICE_ITALIQUE, Tailles.PIED - 0.6)
+            self.setFillColor(gris)
+            self.drawCentredString(LARGEUR_PAGE / 2, y - 4.2 * mm, mention)
         self.setStrokeColor(Couleurs.FILET)
         self.setLineWidth(0.5)
         self.line(MARGE_X, y + 6.5 * mm, LARGEUR_PAGE - MARGE_X, y + 6.5 * mm)
@@ -573,7 +594,7 @@ class CanevasNumerote(pdfcanvas.Canvas):
             yh = HAUTEUR_PAGE - MARGE_HAUT + 4 * mm
             self.setFont(POLICE_GRAS, Tailles.PIED)
             self.setFillColor(Couleurs.NUIT)
-            self.drawString(MARGE_X, yh, "DEVIS QUANTITATIF ET ESTIMATIF")
+            self.drawString(MARGE_X, yh, c.get("titre_courant", "DEVIS QUANTITATIF ET ESTIMATIF"))
             self.setFont(POLICE, Tailles.PIED)
             self.setFillColor(gris)
             self.drawRightString(LARGEUR_PAGE - MARGE_X, yh, c.get("entete_droite", ""))

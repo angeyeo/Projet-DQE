@@ -21,7 +21,7 @@ ajoutés côté Projet/ElementStructurel (nb_travees_x, position_x...).
 
 from ..hypotheses import CONTENU_G_FORFAITAIRE, G_PLANCHER_FORFAITAIRE_KN_M2, HypothesesCalcul, hypotheses_par_defaut
 from ..import_ifc.lecture_ifc import TOLERANCE_ALIGNEMENT_M
-from ..constantes import PORTEE_MAX_M, PORTEE_MIN_POUTRE_M, RESISTANCE_BETON_DEFAUT
+from ..constantes import LF_SUR_L0_DEFAUT, PORTEE_MAX_M, PORTEE_MIN_POUTRE_M, RESISTANCE_BETON_DEFAUT
 from ..unites import cm_vers_m
 from .descente_charges import calculer_surface_influence, cumuler_charges_exploitation_degressives
 from .dimensionnement_poteaux import dimensionner_poteau
@@ -212,14 +212,7 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
                         f"{hyp.gamma_g_elu} × {round(g_cumul, 2)} + {hyp.gamma_q_elu} × {round(q_cumul, 2)}",
                         round(nu, 2), "kN"))
     trace.append(_etape("Effort ELS", "Ns = G + Q", f"{round(g_cumul, 2)} + {round(q_cumul, 2)}", round(ns, 2), "kN"))
-    trace_poteau = trace + [
-        _etape("Section du poteau", "B ≥ 1,3 Nu / (0,7 fc28), arrondi 5 cm, min 20 cm",
-               f"Nu = {round(nu, 2)} kN, fc28 = {RESISTANCE_BETON_DEFAUT} MPa", resultat_poteau["cote_cm"], "cm"),
-        _etape("Flambement", "λ = lf / i, i = a/√12 ; α = 0,85/(1+0,2(λ/35)²) si λ ≤ 50",
-               f"λ = {resultat_poteau['elancement']}", resultat_poteau["coefficient_alpha"], "—"),
-        _etape("Acier longitudinal", "A = max(A_min ; (Nu/α − Br fc28/(0,9 γb)) γs/fe)",
-               "Br = (a − 2)² cm²", resultat_poteau["section_acier_retenue_cm2"], "cm²"),
-    ]
+    trace_poteau = trace + _trace_section_poteau(nu, hauteur_etage, resultat_poteau)
 
     # Semelle : effort du poteau + murs du RDC apportés par les longrines.
     g_murs_rdc = g_murs_rdc_total if hyp.murs_rdc_sur_semelles else 0.0
@@ -272,6 +265,38 @@ def _calcul_noeud(portees, hyp: HypothesesCalcul, nb_niveaux, usage_batiment, ha
         "surface_influence_m2": round(surface, 4),
         "hypotheses": hyp.messages(),
     }
+
+
+def _v(valeur, decimales=3):
+    """Nombre lisible dans une trace : décimales utiles seulement."""
+    return f"{round(valeur, decimales):g}"
+
+
+def _trace_section_poteau(nu, hauteur_etage, res):
+    """Étapes de la section et du ferraillage d'un poteau, avec les valeurs
+    (issue #96) ; la formule de flambement est celle de la branche
+    réellement appliquée par le moteur."""
+    a = res["cote_cm"]
+    lam = res["elancement"]
+    lf = LF_SUR_L0_DEFAUT * hauteur_etage
+    i_cm = min(res.get("largeur_cm") or a, res.get("profondeur_cm") or a) / 12 ** 0.5
+    if lam <= 50:
+        formule_alpha = "α = 0,85 / (1 + 0,2 (λ/35)²)  (λ ≤ 50)"
+    else:
+        formule_alpha = "α = 0,6 (50/λ)²  (50 < λ ≤ 70)"
+    return [
+        _etape("Section du poteau", "B ≥ 1,3 Nu / (0,7 fc28) ; a = √B arrondi à 5 cm, 20 cm au minimum",
+               f"1,3 × {_v(nu / 1000, 5)} MN / (0,7 × {_v(RESISTANCE_BETON_DEFAUT)} MPa) = "
+               f"{_v(res['section_theorique_cm2'])} cm² ⇒ a ≥ {_v(res['section_theorique_cm2'] ** 0.5, 1)} cm",
+               a, "cm"),
+        _etape("Flambement", "λ = lf / i, lf = k × l0, i = a / √12 ; " + formule_alpha,
+               f"lf = {_v(LF_SUR_L0_DEFAUT)} × {_v(hauteur_etage)} = {_v(lf)} m ; i = {_v(i_cm, 2)} cm ; λ = {_v(lam)}",
+               res["coefficient_alpha"], "—"),
+        _etape("Acier longitudinal", "A = max(A_min ; (Nu/α − Br fc28 / (0,9 γb)) γs / fe), Br = (a − 2)²",
+               f"Br = ({_v(a)} − 2)² = {_v((a - 2) ** 2)} cm² ; A théorique = {_v(res['section_acier_theorique_cm2'])} cm² ; "
+               f"A_min = {_v(res['section_acier_min_cm2'])} cm²",
+               res["section_acier_retenue_cm2"], "cm²"),
+    ]
 
 
 def _virgule(v):
@@ -525,8 +550,15 @@ def generer_poutre_sur_grille(portee, largeur_influence, charge_exploitation, hy
                f"max({portee} / 8 ; 0,25)", resultat_poutre["hauteur_cm"], "cm"),
         _etape("Moment ELU", "Mu = pu L² / 8", f"{round(pu, 2)} × {portee}² / 8",
                resultat_poutre["moment_flechissant_knm"], "kN·m"),
-        _etape("Moment réduit", "µ = Mu / (b d² fbu), d = 0,9 h", "", resultat_poutre["moment_reduit"], "—"),
-        _etape("Acier tendu", "As = Mu / (z fsu), z = d(1 − 0,4α)", "",
+        _etape("Moment réduit", "µ = Mu / (b d² fbu), d = 0,9 h, fbu = 0,85 fc28 / γb",
+               f"{_v(resultat_poutre['moment_flechissant_knm'] / 1000, 5)} MN·m / "
+               f"({_v(resultat_poutre['largeur_cm'] / 100)} × {_v(resultat_poutre['hauteur_utile_cm'] / 100)}² "
+               f"× {_v(resultat_poutre['fbu_mpa'])} MPa)",
+               resultat_poutre["moment_reduit"], "—"),
+        _etape("Acier tendu", "α = 1,25 (1 − √(1 − 2µ)) ; z = d (1 − 0,4 α) ; As = Mu / (z fsu), fsu = fe / γs",
+               f"α = {_v(resultat_poutre['alpha_u'], 4)} ; z = {_v(resultat_poutre['bras_levier_cm'])} cm ; "
+               f"As = {_v(resultat_poutre['moment_flechissant_knm'] / 1000, 5)} / "
+               f"({_v(resultat_poutre['bras_levier_cm'] / 100, 4)} × {_v(resultat_poutre['fsu_mpa'])}) × 10⁴",
                resultat_poutre["section_acier_theorique_cm2"], "cm²"),
         _etape("Effort tranchant", "Vu = pu L / 2 ; τu = Vu / (b d) ≤ min(0,2 fc28 / γb ; 5 MPa)",
                f"Vu = {resultat_poutre['effort_tranchant_kn']} kN ; τu = {resultat_poutre['contrainte_cisaillement_mpa']} MPa",

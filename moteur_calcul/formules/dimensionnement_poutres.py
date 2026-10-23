@@ -176,6 +176,11 @@ def _dimensionner_ferraillage_flexion(moment_flechissant_knm, hauteur_utile, lar
         "section_acier_min_cm2": round(section_min_cm2, 2),
         "non_fragilite_respectee": section_acier_cm2 >= section_min_cm2,
         "barres_proposees": barres,
+        # Valeurs intermédiaires, pour la note de calcul (issue #96).
+        "fbu_mpa": round(fbu, 2),
+        "alpha_u": round(alpha, 4),
+        "bras_levier_m": round(bras_de_levier, 4),
+        "fsu_mpa": round(fsu, 1),
     }
 
 
@@ -245,6 +250,12 @@ def dimensionner_poutre(portee, charge_lineaire, largeur=0.20, resistance_beton=
         "barres_proposees": ferraillage["barres_proposees"],
         "gamma_estime": gamma_estime,
         "hauteur_minimale_appliquee": hauteur > portee / RATIO_HAUTEUR_POUTRE_ISOSTATIQUE[0],
+        # Valeurs intermédiaires du calcul, reprises par la note de calcul.
+        "hauteur_utile_cm": round(m_vers_cm(hauteur_utile), 1),
+        "fbu_mpa": ferraillage["fbu_mpa"],
+        "alpha_u": ferraillage["alpha_u"],
+        "bras_levier_cm": round(m_vers_cm(ferraillage["bras_levier_m"]), 2),
+        "fsu_mpa": ferraillage["fsu_mpa"],
         **tranchant,
     }
 

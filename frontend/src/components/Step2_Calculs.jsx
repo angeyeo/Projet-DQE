@@ -5,6 +5,7 @@ import Alerte from './ui/Alerte';
 import PlanMurs from './murs/PlanMurs';
 import { MESSAGE_STRUCTURE_SAISIE } from './import/messages';
 import ModifierStructure from './structure/ModifierStructure';
+import BoutonNoteCalcul from './structure/BoutonNoteCalcul';
 
 const ND = <span className="texte-discret" title="Aucun résultat de calcul pour cet élément">ND</span>;
 
@@ -93,6 +94,7 @@ export default function Step2_Calculs({ sections, projet, hypotheses = [], avert
             {projet?.nom} — {total} élément(s) générés par le moteur (BAEL 91). « ND » : aucun résultat de calcul.
           </p>
         </div>
+        {total > 0 && <div className="actions-ligne"><BoutonNoteCalcul projetId={projet?.id} /></div>}
       </header>
 
       {projet?.source_structure === 'saisie' && (

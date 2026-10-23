@@ -5,6 +5,7 @@ import useRessource from '../hooks/useRessource';
 import Alerte from './ui/Alerte';
 import FicheApprovisionnement from './approvisionnement/FicheApprovisionnement';
 import { nf } from './charts/palette';
+import BoutonNoteCalcul from './structure/BoutonNoteCalcul';
 
 // Conseil d'action par code de problème renvoyé par le moteur DQE.
 const CONSEILS = {
@@ -75,6 +76,7 @@ export default function Step4_DQEExport({ projetId, nomProjet, onBack, onCorrige
           <p className="texte-discret">{nomProjet} — {onglet === 'dqe' ? 'généré à partir des seuls éléments validés et du barème du cabinet.' : 'matériaux à acheter, calculés à partir des quantités du DQE.'}</p>
         </div>
         {onglet === 'dqe' && <div className="actions-ligne">
+          <BoutonNoteCalcul projetId={projetId} />
           <button type="button" className="btn btn-secondary" onClick={recharger} disabled={chargement}>
             <RefreshCw size={16} className={chargement ? 'spin' : ''} aria-hidden="true" /> <span>Régénérer</span>
           </button>
