@@ -199,7 +199,7 @@ def murs_orphelins(hyp, elements, troncons_non_calcules=()):
     géométrie a changé depuis le placement des murs."""
     cles = {(e.resultat_calcul or {}).get("cle_segment") for e in elements
             if e.type_element == ElementStructurel.TypeElement.POUTRE}
-    sans_poutre = (set(hyp.murs_rdc) | set(hyp.murs_etages)) - cles
+    sans_poutre = (set(hyp.murs_rdc) | set(hyp.tous_murs_etages)) - cles
     non_calcules = sans_poutre & set(troncons_non_calcules)
     orphelins = sans_poutre - non_calcules
     messages = []

@@ -3,10 +3,21 @@ import { BrickWall, Eraser, Loader2, RefreshCw, ScanLine } from 'lucide-react';
 import Alerte from '../ui/Alerte';
 import { nf } from '../charts/palette';
 
-const NIVEAUX = {
-  etages: { cle: 'mursEtages', champ: 'murs_etages', libelle: 'Murs des étages', aide: 'posés sur les poutres du plancher' },
-  rdc: { cle: 'mursRdc', champ: 'murs_rdc', libelle: 'Murs du rez-de-chaussée', aide: 'posés sur les longrines' },
+// Niveaux du plan des murs : « rdc » (sur les longrines) puis un plan par
+// étage R+k (sur les poutres du plancher dessous). Issue #81 : chaque étage
+// R+2 et plus a son plan propre, ou reprend celui du R+1.
+const libelleNiveau = (n, nbNiveaux) => {
+  if (n === 'rdc') return 'Murs du rez-de-chaussée';
+  return nbNiveaux > 2 ? `Murs du R+${n}` : 'Murs des étages';
 };
+const aideNiveau = (n) => (n === 'rdc' ? 'posés sur les longrines' : 'posés sur les poutres du plancher situé dessous');
+
+const ensembles = (projet) => {
+  const plans = { rdc: new Set(projet?.murs_rdc || []), 1: new Set(projet?.murs_etages || []) };
+  Object.entries(projet?.murs_par_etage || {}).forEach(([k, v]) => { plans[k] = new Set(v || []); });
+  return { plans, propres: new Set(Object.keys(projet?.murs_par_etage || {})) };
+};
+const memeEnsemble = (a, b) => a.size === b.size && [...a].every((c) => b.has(c));
 
 // Tronçons de la trame (poutres) avec leurs extrémités : géométrie lue
 // telle que le serveur l'a calculée (clé du tronçon comprise).
@@ -35,34 +46,52 @@ export default function PlanMurs({ projet, poidsRenseigne, onEnregistrer }) {
   const troncons = useMemo(() => lireTroncons(elements), [elements]);
   const poteaux = elements.filter((e) => e.type_element === 'poteau' && e.position_x != null);
   const nbNiveaux = projet?.nb_niveaux || 1;
-  const niveauxDispo = nbNiveaux >= 2 ? ['etages', 'rdc'] : ['rdc'];
+  const etages = Array.from({ length: Math.max(nbNiveaux - 1, 0) }, (_, i) => String(i + 1));
+  const niveauxDispo = [...etages, 'rdc'];
 
   const [niveau, setNiveau] = useState(niveauxDispo[0]);
-  const initial = useMemo(() => ({
-    etages: new Set(projet?.murs_etages || []), rdc: new Set(projet?.murs_rdc || []),
-  }), [projet?.murs_etages, projet?.murs_rdc]);
-  const [selection, setSelection] = useState(initial);
+  const initial = useMemo(() => ensembles(projet),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projet?.murs_etages, projet?.murs_rdc, projet?.murs_par_etage]);
+  const [selection, setSelection] = useState(initial.plans);
+  const [propres, setPropres] = useState(initial.propres); // étages R+2+ avec un plan propre
   const [etat, setEtat] = useState({ enCours: false, erreur: null });
   const [projetVu, setProjetVu] = useState(projet?.id);
-  if (projetVu !== projet?.id) { setProjetVu(projet?.id); setSelection(initial); }
+  if (projetVu !== projet?.id) { setProjetVu(projet?.id); setSelection(initial.plans); setPropres(initial.propres); }
 
   const niveauActif = niveauxDispo.includes(niveau) ? niveau : niveauxDispo[0];
-  const courante = selection[niveauActif];
+  // Un étage R+2+ sans plan propre affiche (en lecture) le plan du R+1.
+  const herite = niveauActif !== 'rdc' && niveauActif !== '1' && !propres.has(niveauActif);
+  const planDe = (n) => (n !== 'rdc' && n !== '1' && !propres.has(n) ? selection['1'] : selection[n]) || new Set();
+  const courante = planDe(niveauActif);
   const cles = new Set(troncons.map((t) => t.cle).filter(Boolean));
   const sansCle = troncons.some((t) => !t.cle);
   const orphelins = [...courante].filter((c) => !cles.has(c));
-  const modifie = ['etages', 'rdc'].some((n) => selection[n].size !== initial[n].size
-    || [...selection[n]].some((c) => !initial[n].has(c)));
+  const modifie = !memeEnsemble(propres, initial.propres)
+    || ['rdc', '1', ...propres].some((n) => !memeEnsemble(selection[n] || new Set(), initial.plans[n] || new Set()));
   const longueur = troncons.filter((t) => courante.has(t.cle)).reduce((s, t) => s + (t.portee || 0), 0);
 
-  const changer = (maj) => setSelection((s) => ({ ...s, [niveauActif]: maj(new Set(s[niveauActif])) }));
+  const changer = (maj) => {
+    if (herite) return;
+    setSelection((s) => ({ ...s, [niveauActif]: maj(new Set(s[niveauActif] || [])) }));
+  };
+  // Plan propre : part d'une copie du plan du R+1 ; le retirer revient au R+1.
+  const basculerPropre = (actif) => {
+    setPropres((p) => { const n = new Set(p); if (actif) n.add(niveauActif); else n.delete(niveauActif); return n; });
+    if (actif) setSelection((s) => ({ ...s, [niveauActif]: new Set(s['1']) }));
+  };
   const basculer = (cle) => changer((s) => { if (s.has(cle)) s.delete(cle); else s.add(cle); return s; });
   const proposerFacades = () => changer((s) => { troncons.filter((t) => t.rive && t.cle).forEach((t) => s.add(t.cle)); return s; });
 
   const enregistrer = async () => {
     setEtat({ enCours: true, erreur: null });
     try {
-      await onEnregistrer({ mursEtages: [...selection.etages], mursRdc: [...selection.rdc] });
+      await onEnregistrer({
+        mursEtages: [...selection['1'] || []],
+        mursRdc: [...selection.rdc],
+        mursParEtage: Object.fromEntries([...propres].filter((k) => Number(k) < nbNiveaux)
+          .map((k) => [k, [...(selection[k] || [])]])),
+      });
       setEtat({ enCours: false, erreur: null });
     } catch (err) {
       setEtat({ enCours: false, erreur: err.message });
@@ -116,29 +145,38 @@ export default function PlanMurs({ projet, poidsRenseigne, onEnregistrer }) {
         {niveauxDispo.map((n) => (
           <button key={n} type="button" role="tab" aria-selected={niveauActif === n}
             className={niveauActif === n ? 'onglet actif' : 'onglet'} onClick={() => setNiveau(n)}>
-            {NIVEAUX[n].libelle} <span className="texte-discret">({selection[n].size})</span>
+            {libelleNiveau(n, nbNiveaux)} <span className="texte-discret">({planDe(n).size}{n !== 'rdc' && n !== '1' && !propres.has(n) ? ', = R+1' : ''})</span>
           </button>
         ))}
       </div>
-      <p className="texte-discret">{NIVEAUX[niveauActif].libelle} : {NIVEAUX[niveauActif].aide}.
-        {niveauActif === 'etages' && " Vérifiez qu'aucun mur d'étage ne tombe à faux sur une dalle sans poutre dessous."}</p>
+      <p className="texte-discret">{libelleNiveau(niveauActif, nbNiveaux)} : {aideNiveau(niveauActif)}.
+        {niveauActif !== 'rdc' && " Vérifiez qu'aucun mur d'étage ne tombe à faux sur une dalle sans poutre dessous."}</p>
+      {niveauActif !== 'rdc' && niveauActif !== '1' && (
+        <label className="case-a-cocher plan-propre">
+          <input type="checkbox" checked={!herite} onChange={(e) => basculerPropre(e.target.checked)} />
+          <span>Plan des murs propre au R+{niveauActif}
+            <span className="texte-discret"> {herite ? '— reprend aujourd’hui le plan du R+1 (affiché en lecture)' : '— modifiable, indépendant du R+1'}</span>
+          </span>
+        </label>
+      )}
 
       <div className="plan-murs-outils">
-        <button type="button" className="btn btn-secondary btn-compact" onClick={proposerFacades}>
+        <button type="button" className="btn btn-secondary btn-compact" onClick={proposerFacades} disabled={herite}>
           <ScanLine size={14} aria-hidden="true" /> <span>Ajouter les façades</span>
         </button>
-        <button type="button" className="btn btn-secondary btn-compact" disabled={!courante.size}
+        <button type="button" className="btn btn-secondary btn-compact" disabled={herite || !courante.size}
           onClick={() => changer(() => new Set())}>
           <Eraser size={14} aria-hidden="true" /> <span>Tout effacer</span>
         </button>
       </div>
 
-      <svg className="plan-murs-svg" viewBox={vb.join(' ')} role="group" aria-label={`Plan de la trame : ${NIVEAUX[niveauActif].libelle.toLowerCase()}`}>
+      <svg className={`plan-murs-svg${herite ? ' herite' : ''}`} viewBox={vb.join(' ')} role="group"
+        aria-label={`Plan de la trame : ${libelleNiveau(niveauActif, nbNiveaux).toLowerCase()}`}>
         {troncons.map((t) => {
           const actif = t.cle && courante.has(t.cle);
           return (
             <g key={t.id} className={`troncon${actif ? ' avec-mur' : ''}${t.cle ? '' : ' inactif'}`}
-              role="button" tabIndex={t.cle ? 0 : -1} aria-pressed={!!actif}
+              role="button" tabIndex={t.cle && !herite ? 0 : -1} aria-pressed={!!actif} aria-disabled={herite || undefined}
               aria-label={`Poutre ${t.nom}, ${nf(t.portee, 2)} m${t.rive ? ', façade' : ''} : ${actif ? 'mur placé' : 'sans mur'}`}
               onClick={() => t.cle && basculer(t.cle)}
               onKeyDown={(e) => { if (t.cle && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); basculer(t.cle); } }}>

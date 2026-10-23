@@ -1599,3 +1599,5 @@ button.account-card { width: 100%; border: none; background: transparent; color:
 .option-murs { margin: 1rem 0; padding: 0.85rem 1rem; border: 1px dashed var(--core-border); border-radius: var(--radius-md); background: var(--core-surface); }
 .option-murs .case-a-cocher { align-items: flex-start; gap: 0.6rem; }
 .option-murs .case-a-cocher input { margin-top: 0.25rem; }
+.plan-propre { margin: 0.25rem 0 0.75rem; }
+.plan-murs-svg.herite .troncon { cursor: not-allowed; opacity: 0.6; }

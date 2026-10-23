@@ -11,8 +11,9 @@ tronçon porte un mur sur le plan des murs :
               (h_poutre = hauteur VALIDÉE de la poutre ; même hauteur de mur
               que pour la charge des murs)
     S_brute = L_net × h_mur × n                            [m²]
-              n = 1 au rez-de-chaussée, nb_niveaux − 1 aux étages
-              (un seul plan des murs pour tous les étages, règle actuelle)
+              n = 1 au rez-de-chaussée ; aux étages, nombre d'étages R+k
+              dont le plan porte ce mur (plan propre de l'étage, sinon
+              celui du R+1 -- issue #81)
     S_nette = S_brute × (1 − baies / 100)   si la part des baies est saisie
             = S_brute × 0,80                sinon (règle B6, confirmée par le
               technicien le 21/10/2026 : 20 % d'ouvertures) -> « estimé »
@@ -56,19 +57,25 @@ def _cote_cm(poteau):
 
 def troncons_murs(projet):
     """Tronçons de mur du plan, avec leur métré. Renvoie (troncons, alertes)."""
-    rdc, etages = set(projet.murs_rdc or []), set(projet.murs_etages or [])
+    from .parametres_projet import murs_etages_specifiques
+
+    rdc, commun = set(projet.murs_rdc or []), set(projet.murs_etages or [])
+    specifiques = dict(murs_etages_specifiques(projet))
+    n_etages = max((projet.nb_niveaux or 1) - 1, 0)
+    # Plan de chaque étage R+k (issue #81) ; sans plan propre : celui du R+1.
+    plans = {k: set(specifiques.get(k, commun)) for k in range(1, n_etages + 1)}
     alertes, troncons = [], []
-    if not (rdc or etages):
+    if not (rdc or any(plans.values())):
         return troncons, ["ALERTE : métré des murs demandé, mais aucun mur n'est placé sur le plan des murs."]
     if not projet.hauteur_etage:
         return troncons, ["ALERTE : métré des murs impossible : hauteur d'étage non renseignée."]
-    n_etages = max((projet.nb_niveaux or 1) - 1, 0)
     poutres = (projet.elements.filter(type_element=ElementStructurel.TypeElement.POUTRE)
                .select_related("poteau_origine", "poteau_destination").order_by("id"))
     vus = set()
     for p in poutres:
         cle = (p.resultat_calcul or {}).get("cle_segment")
-        niveaux = [("RDC", 1)] * (cle in rdc) + [("étages", n_etages)] * (cle in etages and n_etages > 0)
+        n_avec_mur = sum(1 for k in plans if cle in plans[k])
+        niveaux = [("RDC", 1)] * (cle in rdc) + [("étages", n_avec_mur)] * (n_avec_mur > 0)
         if not cle or not niveaux or cle in vus:
             continue
         vus.add(cle)
