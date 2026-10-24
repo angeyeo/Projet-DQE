@@ -12,6 +12,7 @@ import os
 import time
 from io import BytesIO
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Count, Exists, OuterRef, Q
 from django.http import HttpResponse
@@ -546,6 +547,17 @@ def _avec_conversion(reponse, conversion):
     return reponse
 
 
+def _avec_duree(reponse, t0, taille_octets, nom):
+    """Issue #90 : taille et temps de lecture d'un plan déposé, renvoyés au
+    frontend (affichés) et journalisés (mesure en production)."""
+    duree = time.monotonic() - t0
+    logger.info("Import de plan « %s » : %.1f Mo lus en %.1f s (statut %s)",
+                nom, taille_octets / 1048576, duree, reponse.status_code)
+    if reponse.status_code == 200 and isinstance(reponse.data, dict):
+        reponse.data["lecture"] = {"taille_mo": round(taille_octets / 1048576, 1), "duree_s": round(duree, 1)}
+    return reponse
+
+
 def _est_mode_architecte(projet):
     return bool(projet.fichier_import_origine) and (projet.parametres_import or {}).get("mode") == MODE_ARCHITECTE
 
@@ -749,6 +761,7 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
 
         erreurs_lecture = (FichierIFCInvalide, AucunPoteauDetecte, FichierDXFInvalide, AucunPoteauDXF)
         if fichier is not None:
+            t0, taille, nom_depose = time.monotonic(), fichier.size, fichier.name
             extension = _extension_plan(fichier.name)
             if extension not in FORMATS_PLAN:
                 return Response({"erreur": _message_format_refuse(extension)}, status=status.HTTP_400_BAD_REQUEST)
@@ -783,20 +796,21 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                 projet.parametres_import = {"format": "dxf", "mode": MODE_ARCHITECTE,
                                             **({"converti_depuis": "dwg"} if conversion else {})}
                 projet.save(update_fields=["fichier_import_origine", "parametres_import"])
-                return _avec_conversion(self._reponse_fond_plan(projet), conversion)
+                return _avec_duree(_avec_conversion(self._reponse_fond_plan(projet), conversion), t0, taille, nom_depose)
             projet.fichier_import_origine = fichier
             projet.parametres_import = {"format": extension.lstrip("."),
                                         **({"converti_depuis": "dwg"} if conversion else {})}
             projet.save(update_fields=["fichier_import_origine", "parametres_import"])
             try:
                 if extension == ".dxf":
-                    return _avec_conversion(
-                        Response(self._apercu_dxf(projet, plan=None), status=status.HTTP_200_OK), conversion)
+                    return _avec_duree(_avec_conversion(
+                        Response(self._apercu_dxf(projet, plan=None), status=status.HTTP_200_OK), conversion),
+                        t0, taille, nom_depose)
                 parametres = analyser_fichier_ifc(projet.fichier_import_origine.path)
             except erreurs_lecture as exc:
                 return Response({"erreur": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
             parametres.pop("poteaux", None)
-            return Response(parametres, status=status.HTTP_200_OK)
+            return _avec_duree(Response(parametres, status=status.HTTP_200_OK), t0, taille, nom_depose)
 
         if not projet.fichier_import_origine:
             return Response(
@@ -1033,7 +1047,6 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser])
     def analyser_plan_image(self, request, pk=None):
-        from django.conf import settings
 
         projet = self.get_object()
         fichier = request.FILES.get("fichier")
@@ -1634,6 +1647,12 @@ class ReferentielView(APIView):
                 for c, l in PosteComplementaire.TypePoste.choices
             ],
             "norme": "BAEL 91 modifié 99 (seule norme implémentée par le moteur)",
+            # Tailles maximales de dépôt (issue #90) : vérifiées avant l'envoi
+            # par le frontend, et de nouveau par le serveur.
+            "limites_fichiers": {
+                "plan_octets": TAILLE_MAX_PLAN_OCTETS,
+                "image_plan_octets": getattr(settings, "PLAN_IMAGE_MAX_BYTES", 5 * 1024 * 1024),
+            },
             "charges_permanentes": {
                 "forfait_kn_m2": G_PLANCHER_FORFAITAIRE_KN_M2,
                 "contenu_forfait": CONTENU_G_FORFAITAIRE,

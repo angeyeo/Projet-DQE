@@ -15,8 +15,12 @@ Service Railway : `Backend`
 - Start Command : laisser Railway utiliser le `Procfile`, ou mettre :
 
 ```bash
-python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT
+python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT --timeout 120
 ```
+
+`--timeout 120` (issue #90) : la lecture d'un plan de 47 Mo prend environ 13 à 15 s sur un poste
+de développement, et davantage sur le serveur. Le délai par défaut de gunicorn (30 s) coupait la requête
+sans message pour un gros IFC ou DXF. Si la Start Command est saisie dans Railway, la mettre à jour aussi.
 
 Variables minimales :
 

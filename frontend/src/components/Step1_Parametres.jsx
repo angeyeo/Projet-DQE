@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle, Sparkles, Check } from 'lucide-react';
-import { dqeService } from '../api/dqeService';
+import { controlerTaille, dqeService } from '../api/dqeService';
 import useReferentiel from '../hooks/useReferentiel';
 import Alerte from './ui/Alerte';
 import HypothesesCharges from './parametres/HypothesesCharges';
 import ApercuDXF from './import/ApercuDXF';
 import PlanArchitecte from './import/PlanArchitecte';
 import AideExport from './import/AideExport';
+import ProgressionEnvoi from './ui/ProgressionEnvoi';
 
 const TYPE_LABELS = {
   semelle: 'Semelles',
@@ -23,6 +24,9 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
   const [visionResult, setVisionResult] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const [progression, setProgression] = useState(null); // envoi du fichier (issue #90)
+  const [typeAnalyse, setTypeAnalyse] = useState(null);  // 'plan' | 'image'
+  const [lecture, setLecture] = useState(null);          // taille et durée de lecture (serveur)
   const [analysisError, setAnalysisError] = useState(null);
   const [analysisSuccess, setAnalysisSuccess] = useState(false);
   const [analysisWarnings, setAnalysisWarnings] = useState([]);
@@ -106,9 +110,22 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
       return;
     }
 
+    // Taille contrôlée AVANT l'envoi (et avant de créer le projet) ; le
+    // serveur revérifie de son côté.
+    const limites = referentiel?.limites_fichiers;
+    const tropGros = controlerTaille(file, isPlan ? limites?.plan_octets : limites?.image_plan_octets,
+      isPlan ? 'Le plan' : "L'image du plan", isPlan ? 'plan' : 'image');
+    if (tropGros) {
+      setAnalysisError(tropGros);
+      return;
+    }
+
     setAnalysisError(null);
     setAnalysisSuccess(false);
     setAnalysisWarnings([]);
+    setTypeAnalyse(isPlan ? 'plan' : 'image');
+    setProgression(null);
+    setLecture(null);
     // Nom du fichier enregistré seulement APRÈS réussite : à la création du
     // projet (assurerProjet), le formulaire est relu depuis le serveur et
     // un nom posé avant aurait été effacé.
@@ -126,7 +143,8 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
       try {
         const projetId = await assurerProjet();
 
-        const params = await dqeService.importerPlanIFC(projetId, file);
+        const params = await dqeService.importerPlanIFC(projetId, file, setProgression);
+        setLecture(params.lecture || null);
         if (params.format === 'dxf') setDxf(params);
         appliquerApercu(params);
         updateProjectData(fichierCharge);
@@ -145,6 +163,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         updateProjectData({ planFileName: null, planFileSize: null });
       } finally {
         setAnalyzing(false);
+        setProgression(null);
       }
       return;
     }
@@ -156,7 +175,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
       try {
         const projetId = await assurerProjet();
 
-        const result = await dqeService.analyserPlanImage(projetId, file);
+        const result = await dqeService.analyserPlanImage(projetId, file, setProgression);
         setVisionResult(result);
         updateProjectData(fichierCharge);
         setAnalysisSuccess(true);
@@ -165,6 +184,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         updateProjectData({ planFileName: null, planFileSize: null });
       } finally {
         setAnalyzing(false);
+        setProgression(null);
       }
     }
   };
@@ -310,11 +330,15 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         {analyzing ? (
           <div>
             <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--accent-primary)', marginBottom: '0.25rem' }}>
-              Analyse Vision IA du plan en cours...
+              {typeAnalyse === 'image' ? 'Analyse Vision IA du plan en cours…' : 'Import du plan en cours…'}
             </h3>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              Extraction automatique des cotes, travées et niveaux du bâtiment.
+              {typeAnalyse === 'image'
+                ? 'Extraction automatique des cotes, travées et niveaux du bâtiment.'
+                : 'Lecture des poteaux, des murs et des niveaux du fichier.'}
             </p>
+            <ProgressionEnvoi progression={progression}
+              libelleLecture={typeAnalyse === 'image' ? "Analyse de l'image par l'IA…" : 'Lecture du plan par le serveur…'} />
           </div>
         ) : projectData.planFileName ? (
           <div>
@@ -324,7 +348,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
             </div>
             {analysisSuccess && (
               <p style={{ fontSize: '0.85rem', color: 'var(--status-ok)', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
-                <CheckCircle2 size={16} /> Plan lu automatiquement : vérifiez les valeurs pré-remplies avant le calcul.
+                <CheckCircle2 size={16} /> Plan lu automatiquement{lecture ? ` (${String(lecture.taille_mo).replace('.', ',')} Mo en ${String(lecture.duree_s).replace('.', ',')} s)` : ''} : vérifiez les valeurs pré-remplies avant le calcul.
               </p>
             )}
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.75rem', marginBottom: '0.75rem' }}>
@@ -339,6 +363,10 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
             </h3>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
               IFC, DXF ou DWG (AutoCAD) : poteaux et murs lus. Projet ArchiCAD (.pln) : exportez-le en IFC.
+              {referentiel?.limites_fichiers && (
+                <> Taille maximale : {Math.round(referentiel.limites_fichiers.plan_octets / 1048576)} Mo pour un plan,
+                  {' '}{Math.round(referentiel.limites_fichiers.image_plan_octets / 1048576)} Mo pour une image.</>
+              )}
             </p>
             {boutonFichier('Parcourir les fichiers')}
           </div>

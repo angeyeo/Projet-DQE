@@ -147,6 +147,71 @@ async function lireReponse(response) {
   return data;
 }
 
+// --- Envoi de fichier avec progression (issue #90) ------------------------
+// fetch() ne donne pas l'avancement d'un envoi : XMLHttpRequest, avec les
+// mêmes règles d'authentification que apiFetch (jeton, rafraîchissement).
+// onProgression({ phase: 'envoi', envoye, total }) puis ({ phase: 'lecture' })
+// quand le fichier est arrivé et que le serveur le lit.
+
+const MESSAGES_ENVOI = {
+  413: "Fichier refusé par le serveur : trop volumineux.",
+  502: "Le serveur n'a pas pu terminer la lecture du fichier (réponse interrompue). Réessayez ; si l'erreur revient, allégez le plan (calques masqués).",
+  504: "Délai dépassé pendant la lecture du fichier par le serveur. Réessayez ; si l'erreur revient, allégez le plan (calques masqués).",
+};
+
+function envoiXHR(url, formData, jeton, onProgression) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    if (jeton) xhr.setRequestHeader('Authorization', `Bearer ${jeton}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgression?.({ phase: 'envoi', envoye: e.loaded, total: e.total });
+    };
+    xhr.upload.onload = () => onProgression?.({ phase: 'lecture' });
+    xhr.onload = () => resolve(xhr);
+    xhr.onerror = () => reject(erreurReseau());
+    xhr.onabort = () => reject(erreurReseau());
+    xhr.send(formData);
+  });
+}
+
+async function envoyerFichier(url, formData, onProgression) {
+  let xhr = await envoiXHR(url, formData, getAccessToken(), onProgression);
+  if (xhr.status === 401 && getRefreshToken()) {
+    const nouvelAccess = await rafraichirToken();
+    if (nouvelAccess) xhr = await envoiXHR(url, formData, nouvelAccess, onProgression);
+  }
+  if (xhr.status === 401) {
+    clearTokens();
+    window.dispatchEvent(new CustomEvent('dqe:auth-expired'));
+  }
+  if (xhr.status === 204) return null;
+  let data = null;
+  try { data = JSON.parse(xhr.responseText); } catch { data = null; }
+  if (xhr.status < 200 || xhr.status >= 300) {
+    // Réponse non JSON (proxy, délai dépassé) : message propre à l'envoi.
+    const err = new Error(data ? messageErreur(data, xhr.status) : (MESSAGES_ENVOI[xhr.status] || messageErreur(null, xhr.status)));
+    err.status = xhr.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+// Contrôle AVANT l'envoi (le serveur revérifie) : renvoie un message, ou
+// null si la taille est acceptée. Sans limite connue (référentiel non
+// chargé), aucun contrôle local : le serveur reste juge.
+const CONSEILS_TAILLE = {
+  plan: 'Allégez le fichier (calques de mobilier ou de cotation masqués, export limité au niveau utile) puis déposez-le à nouveau.',
+  image: "Réduisez l'image (JPG, ou résolution plus faible) puis déposez-la à nouveau.",
+};
+
+export function controlerTaille(fichier, limiteOctets, libelle = 'Le fichier', type = 'plan') {
+  if (!fichier || !limiteOctets || fichier.size <= limiteOctets) return null;
+  const mo = (o) => (o / 1048576).toLocaleString('fr-FR', { maximumFractionDigits: 1 });
+  return `${libelle} pèse ${mo(fichier.size)} Mo : ${mo(limiteOctets)} Mo au maximum. ${CONSEILS_TAILLE[type]}`;
+}
+
 const json = (methode, body) => ({
   method: methode,
   headers: { 'Content-Type': 'application/json' },
@@ -351,24 +416,18 @@ export const dqeService = {
     };
   },
 
-  importerPlanIFC: async (projetId, file) => {
+  importerPlanIFC: async (projetId, file, onProgression) => {
     const formData = new FormData();
     formData.append('fichier', file);
-    return lireReponse(await apiFetch(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, {
-      method: 'POST',
-      body: formData,
-    }));
+    return envoyerFichier(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, formData, onProgression);
   },
 
   // Plan d'architecte : le DXF sert de fond, aucun élément n'est créé.
-  importerPlanArchitecte: async (projetId, file) => {
+  importerPlanArchitecte: async (projetId, file, onProgression) => {
     const formData = new FormData();
     formData.append('fichier', file);
     formData.append('mode', 'architecte');
-    return lireReponse(await apiFetch(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, {
-      method: 'POST',
-      body: formData,
-    }));
+    return envoyerFichier(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, formData, onProgression);
   },
   getFondPlan: async (projetId) => getJSON(`${API_BASE_URL}/projets/${projetId}/fond_plan/`),
   // Étape 2 : liste complète des poteaux voulue ; le serveur fixe l'origine
@@ -381,13 +440,10 @@ export const dqeService = {
   choisirPlanDXF: async (projetId, plan) =>
     postJSON(`${API_BASE_URL}/projets/${projetId}/importer_plan/`, { plan }),
 
-  analyserPlanImage: async (projetId, file) => {
+  analyserPlanImage: async (projetId, file, onProgression) => {
     const formData = new FormData();
     formData.append('fichier', file);
-    return lireReponse(await apiFetch(`${API_BASE_URL}/projets/${projetId}/analyser_plan_image/`, {
-      method: 'POST',
-      body: formData,
-    }));
+    return envoyerFichier(`${API_BASE_URL}/projets/${projetId}/analyser_plan_image/`, formData, onProgression);
   },
 
   // Éléments

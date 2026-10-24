@@ -138,7 +138,18 @@ export default function App() {
   // --- Formulaire du projet (miroir éditable des données serveur) ----------
   const [formulaire, setFormulaire] = useState(FORMULAIRE_VIDE);
   useEffect(() => {
-    if (courant.projet) setFormulaire(projetVersFormulaire(courant.projet));
+    const p = courant.projet;
+    if (!p) return;
+    setFormulaire((prev) => {
+      const suivant = projetVersFormulaire(p);
+      // Onglet « Plan d'architecte » choisi mais aucun plan encore déposé :
+      // le serveur ne le sait pas encore. Sans cela, la création du projet au
+      // premier dépôt rebasculait sur l'autre onglet PENDANT l'envoi (barre
+      // de progression et fond de plan perdus) -- vu en testant #90.
+      const memeProjet = prev.id == null || prev.id === p.id;
+      if (memeProjet && prev.planArchitecte && !p.fichier_import_origine) suivant.planArchitecte = true;
+      return suivant;
+    });
   }, [courant.projet]);
   const updateProjectData = (champs) => setFormulaire((prev) => ({ ...prev, ...champs }));
 
