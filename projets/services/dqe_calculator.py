@@ -72,6 +72,47 @@ LIBELLES_PRIX = {
     "enduit_m2": "Enduit (FCFA/m²)",
 }
 
+# Prix PAR TYPE D'OUVRAGE (facultatifs) : un cabinet peut chiffrer le
+# coffrage ou le béton différemment selon l'ouvrage (ex. DQE CIMBAT :
+# coffrage 3 000 en fondation, 4 000 aux poteaux, 5 000 aux poutres et
+# dalles). Prix propre renseigné -> il est appliqué ; sinon, le prix général
+# du cabinet s'applique et la ligne le dit (« prix général »). Ces clés ne
+# sont jamais obligatoires et ne sont jamais complétées par le logiciel.
+FAMILLES_OUVRAGE = {
+    "fondations": ("Fondations (semelles, longrines)", ("semelle", "semelle_filante", "longrine")),
+    "poteaux": ("Poteaux", ("poteau",)),
+    "poutres": ("Poutres", ("poutre",)),
+    "dalles": ("Dalles", ("dalle",)),
+    "chainages": ("Chaînages et linteaux", ("chainage",)),
+}
+CLES_SPECIALISABLES = {"beton_m3": ("beton", "m3", "Béton"), "coffrage_m2": ("coffrage", "m2", "Coffrage")}
+LIBELLES_PRIX_SPECIALISES = {
+    f"{racine}_{famille}_{unite}": f"{nom} — {libelle_famille.lower()} (FCFA/{'m³' if unite == 'm3' else 'm²'})"
+    for (racine, unite, nom) in CLES_SPECIALISABLES.values()
+    for famille, (libelle_famille, _) in FAMILLES_OUVRAGE.items()
+}
+
+
+def famille_de(type_element):
+    return next((f for f, (_, types) in FAMILLES_OUVRAGE.items() if type_element in types), None)
+
+
+def cle_prix_ouvrage(prix_unitaires, cle_generale, type_element):
+    """(clé appliquée, prix propre ?) : la clé propre au type d'ouvrage si le
+    cabinet l'a renseignée, sinon la clé générale."""
+    if cle_generale in CLES_SPECIALISABLES and type_element:
+        racine, unite, _ = CLES_SPECIALISABLES[cle_generale]
+        famille = famille_de(type_element)
+        cle = f"{racine}_{famille}_{unite}" if famille else None
+        if cle and prix_unitaires.get(cle) not in (None, ""):
+            return cle, True
+    return cle_generale, False
+
+
+def libelle_prix(cle):
+    return LIBELLES_PRIX.get(cle) or LIBELLES_PRIX_SPECIALISES.get(cle) or cle
+
+
 # Ratios d'acier (kg/m³) utilisés quand le moteur ne fournit pas le poids
 # réel. Poteaux, poutres, longrines, dalles et chaînages : valeurs du
 # technicien BTP (règle B4, issue #64, 21/10/2026). Semelles : milieu de
@@ -137,7 +178,7 @@ def _prix(prix_unitaires: dict, cle: str, problemes: list, contexte: str):
             "code": "PRIX_MANQUANT",
             "cle_prix": cle,
             "message": (
-                f"Prix unitaire « {LIBELLES_PRIX.get(cle, cle)} » non renseigné dans le "
+                f"Prix unitaire « {libelle_prix(cle)} » non renseigné dans le "
                 f"barème du cabinet (nécessaire pour {contexte})."
             ),
         })
@@ -150,7 +191,7 @@ def _prix(prix_unitaires: dict, cle: str, problemes: list, contexte: str):
         problemes.append({
             "code": "PRIX_INVALIDE",
             "cle_prix": cle,
-            "message": f"Prix unitaire « {LIBELLES_PRIX.get(cle, cle)} » invalide : {brut!r}.",
+            "message": f"Prix unitaire « {libelle_prix(cle)} » invalide : {brut!r}.",
         })
         return None
     return pu
@@ -452,8 +493,10 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict, probl
     volume, coffrage, poids = q["volume"], q["coffrage"], q["poids"]
     source_acier, hyp_acier = q["source_acier"], q["hyp_acier"]
 
-    pu_beton = _prix(prix_unitaires, "beton_m3", problemes, libelle)
-    pu_coffrage = _prix(prix_unitaires, "coffrage_m2", problemes, libelle)
+    cle_beton, _ = cle_prix_ouvrage(prix_unitaires, "beton_m3", element.type_element)
+    cle_coffrage, _ = cle_prix_ouvrage(prix_unitaires, "coffrage_m2", element.type_element)
+    pu_beton = _prix(prix_unitaires, cle_beton, problemes, libelle)
+    pu_coffrage = _prix(prix_unitaires, cle_coffrage, problemes, libelle)
     pu_acier = _prix(prix_unitaires, "acier_kg", problemes, libelle)
     if None in (pu_beton, pu_coffrage, pu_acier):
         return []
@@ -465,10 +508,10 @@ def calculer_element_dqe(element: ElementStructurel, prix_unitaires: dict, probl
     }
     return [
         _ligne(**commun, designation=f"Béton armé — {libelle}", categorie="BETON",
-               unite="m³", quantite=volume, pu=pu_beton, cle_prix="beton_m3", hypothese=hyp_beton,
+               unite="m³", quantite=volume, pu=pu_beton, cle_prix=cle_beton, hypothese=hyp_beton,
                formule=(formules.get("beton") or "") + fois or None),
         _ligne(**commun, designation=f"Coffrage — {libelle}", categorie="COFFRAGE",
-               unite="m²", quantite=coffrage, pu=pu_coffrage, cle_prix="coffrage_m2",
+               unite="m²", quantite=coffrage, pu=pu_coffrage, cle_prix=cle_coffrage,
                formule=(formules.get("coffrage") or "") + fois or None),
         _ligne(**commun, designation=f"Armatures acier — {libelle}", categorie="ACIER",
                unite="kg", quantite=poids, pu=pu_acier, cle_prix="acier_kg",
@@ -554,7 +597,9 @@ def calculer_poste_ratio_dqe(poste: PosteComplementaire, prix_unitaires: dict, p
 
     lignes = []
     for brute in lignes_brutes:
-        cle = _cle_prix_unitaire(brute["designation"])
+        # Chaînage au ratio : prix « chaînages » du cabinet s'il existe.
+        cle, _ = cle_prix_ouvrage(prix_unitaires, _cle_prix_unitaire(brute["designation"]),
+                                  "chainage" if poste.type_poste == "chainage" else None)
         pu = _prix(prix_unitaires, cle, problemes, libelle)
         if pu is None:
             continue
@@ -711,7 +756,7 @@ def _fusionner_prix_manquants(problemes: list) -> list:
         else:
             autres.append(p)
     for p in prix.values():
-        libelle = LIBELLES_PRIX.get(p["cle_prix"], p["cle_prix"])
+        libelle = libelle_prix(p["cle_prix"])
         etat = "non renseigné" if p["code"] == "PRIX_MANQUANT" else "invalide"
         p["message"] = (
             f"Prix unitaire « {libelle} » {etat} dans le barème du cabinet "
@@ -802,6 +847,14 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict) -> dict:
             ligne["prix_source"] = {"reference": "barème de référence (pré-rempli)", "saisie": "barème du cabinet"}.get(
                 m.get("source"), "barème du cabinet (date non tracée)")
             ligne["prix_date"] = m.get("date")
+            # Prix par type d'ouvrage : dire lequel s'applique.
+            if ligne["cle_prix"] in LIBELLES_PRIX_SPECIALISES:
+                ligne["prix_source"] += " — prix propre à ce type d'ouvrage"
+            elif ligne["cle_prix"] in CLES_SPECIALISABLES and famille_de((ligne.get("type_element") or "").lower()):
+                racine = CLES_SPECIALISABLES[ligne["cle_prix"]][0] + "_"
+                if any(k.startswith(racine) and v not in (None, "") for k, v in prix_unitaires.items()
+                       if k in LIBELLES_PRIX_SPECIALISES):
+                    ligne["prix_source"] += " — prix général (aucun prix propre à ce type d'ouvrage)"
 
     # Parts matériaux / main-d'œuvre (issue #92) : barème du cabinet pour
     # les lignes à clé de prix, poste pour les postes saisis ; sinon la
@@ -815,7 +868,7 @@ def calculer_projet_dqe(projet: Projet, prix_unitaires: dict) -> dict:
             parts = (d.get("materiaux"), d.get("main_oeuvre"))
         decorer_ligne(ligne, *(parts or (None, None)))
         if ligne.pop("decomposition_incoherente", False):
-            incoherentes.add(LIBELLES_PRIX.get(ligne.get("cle_prix"), ligne["designation"]))
+            incoherentes.add((libelle_prix(ligne["cle_prix"]) if ligne.get("cle_prix") else ligne["designation"]))
 
     sous_totaux_categorie = defaultdict(int)
     lots = defaultdict(lambda: {"lignes": [], "sous_total": 0, "sous_lots": {}})
