@@ -28,6 +28,23 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, OpenApiRequest, OpenApiResponse, extend_schema, extend_schema_view
+
+from api.schema import (
+    ConfirmerImportBibliothequeRequest,
+    DescriptionIARequest,
+    ElementIARequest,
+    ExportRequest,
+    ImportBibliothequeRequest,
+    ImportPlanJSONRequest,
+    ExplicationIAResponse,
+    StructurationIAResponse,
+    SuggestionIAResponse,
+    UploadFichierRequest,
+    VariantesRequest,
+    VisionResponse,
+)
 
 from moteur_calcul.constantes import (
     CHARGE_EXPLOITATION_TOITURE_KN_M2,
@@ -42,6 +59,9 @@ from moteur_calcul.constantes import (
     COEFFICIENT_Q_ELU,
     CONTRAINTE_SOL_DEFAUT,
     POIDS_COUCHES_COURANTES,
+    NB_NIVEAUX_MAX,
+    PORTEE_MAX_M,
+    PORTEE_MIN_M,
 )
 from moteur_calcul.hypotheses import (
     CONTENU_G_FORFAITAIRE,
@@ -50,7 +70,11 @@ from moteur_calcul.hypotheses import (
     POIDS_PROPRE_OSSATURE_PAR_DEFAUT,
 )
 from moteur_calcul.formules.postes_ratio import SCHEMA_GEOMETRIE
-from moteur_calcul.validators import EntreeInvalide
+from moteur_calcul.validators import (
+    CONTRAINTE_SOL_MAX_KN_M2,
+    CONTRAINTE_SOL_MIN_KN_M2,
+    EntreeInvalide,
+)
 
 from .models import (
     CoucheCharge,
@@ -86,6 +110,11 @@ from .services.assistant_ia.explanations import expliquer_resultat_element
 from .services.assistant_ia.parser import structurer_description_projet
 from .services.assistant_ia.postes import suggerer_poste_complementaire
 from .services.assistant_ia.vision import analyser_plan_2d
+from .services.assistant_ia.consentement import (
+    CONSENTEMENT_VERSION,
+    consentement_valide,
+    verifier_consentement,
+)
 from .services.versions_dqe import comparer as comparer_versions_dqe
 from .services.versions_dqe import enregistrer_version, resume_version
 from .services.dqe_calculator import (
@@ -594,6 +623,14 @@ def valider_poteaux_saisis(brut):
     return poteaux
 
 
+@extend_schema_view(
+    list=extend_schema(tags=["Projets"]),
+    retrieve=extend_schema(tags=["Projets"]),
+    create=extend_schema(tags=["Projets"]),
+    update=extend_schema(tags=["Projets"]),
+    partial_update=extend_schema(tags=["Projets"]),
+    destroy=extend_schema(tags=["Projets"]),
+)
 class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
     queryset = Projet.objects.all()
     serializer_class = ProjetSerializer
@@ -634,6 +671,8 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             return [ScopedRateThrottle()]
         return super().get_throttles()
 
+    @extend_schema(responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Analyse déterministe de cohérence."),
+                              404: OpenApiResponse(description="Projet absent du cabinet courant.")}, tags=["Projets", "Analyses"])
     @action(detail=True, methods=["get"], url_path="analyse-coherence", url_name="analyse-coherence")
     def analyse_coherence(self, request, pk=None):
         projet = self.get_object()
@@ -646,11 +685,14 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @extend_schema(request=None, responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Éléments recalculés."),
+                                            400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Paramètres invalides ou incomplets.")}, tags=["Projets", "Calculs"])
     @action(detail=True, methods=["post"])
     def recalculer(self, request, pk=None):
         projet = self.get_object()
         return Response(recalculer_projet(projet), status=status.HTTP_200_OK)
 
+    @extend_schema(responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Longueur calculée ou liste des paramètres manquants.")}, tags=["Projets", "Calculs"])
     @action(detail=True, methods=["get"])
     def chainage_suggere(self, request, pk=None):
         from moteur_calcul.formules.trame import calculer_longueur_chainage
@@ -669,6 +711,8 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         )
         return Response({"longueur_m": longueur}, status=status.HTTP_200_OK)
 
+    @extend_schema(request=None, responses={201: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Éléments créés et hypothèses."),
+                                            400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Paramètres invalides ou incomplets.")}, tags=["Projets", "Calculs"])
     @action(detail=True, methods=["post"])
     def generer_trame(self, request, pk=None):
         """Génère poteaux, semelles et poutres d'une grille régulière.
@@ -734,6 +778,14 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         reponse["avertissements"] = avertissements
         return reponse
 
+    @extend_schema(
+        request={"multipart/form-data": UploadFichierRequest, "application/json": ImportPlanJSONRequest},
+        responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Aperçu IFC/DXF, paramètres détectés ou sélection de plan."),
+                   201: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Éléments importés après confirmation."),
+                   400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Fichier, paramètres ou plan invalide."),
+                   503: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Moteur d'import indisponible.")},
+        tags=["Imports"],
+    )
     @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser, JSONParser])
     def importer_plan(self, request, pk=None):
         projet = self.get_object()
@@ -758,7 +810,7 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             )
         except ImportError as exc:
             return Response(
-                {"erreur": f"Moteur d'import IFC indisponible sur ce serveur : {exc}"},
+                {"erreur": "Moteur d'import IFC indisponible sur ce serveur."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
@@ -1048,10 +1100,25 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         response["Access-Control-Expose-Headers"] = "Content-Disposition"
         return response
 
+    @extend_schema(
+        request={"multipart/form-data": UploadFichierRequest},
+        responses={
+            200: OpenApiResponse(response=VisionResponse, description="Résultat Vision et source réelle."),
+            400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Image absente ou invalide."),
+            403: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Assistance IA désactivée."),
+            413: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Image trop volumineuse."),
+            428: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Consentement IA requis."),
+            502: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Service IA indisponible."),
+        },
+        tags=["Assistant IA", "Vision"],
+    )
     @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser])
     def analyser_plan_image(self, request, pk=None):
 
         projet = self.get_object()
+        consentement = verifier_consentement(request)
+        if consentement is not None:
+            return consentement
         fichier = request.FILES.get("fichier")
         if not fichier:
             return Response(
@@ -1087,6 +1154,15 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @extend_schema(
+        parameters=[OpenApiParameter("export", str, OpenApiParameter.QUERY, enum=["pdf", "dxf"])],
+        responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Données JSON des semelles."),
+                   (200, "application/pdf"): OpenApiResponse(response=OpenApiTypes.BINARY, description="Plan PDF."),
+                   (200, "application/dxf"): OpenApiResponse(response=OpenApiTypes.BINARY, description="Plan DXF."),
+                   400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Export invalide ou données incomplètes."),
+                   503: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Générateur DXF indisponible.")},
+        tags=["Exports"],
+    )
     @action(detail=True, methods=["get"])
     def plan_fondation(self, request, pk=None):
         projet = self.get_object()
@@ -1130,7 +1206,7 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             except ImportError as exc:
                 # Avant : un DXF VIDE était renvoyé avec un code 200.
                 return Response(
-                    {"erreur": f"Générateur DXF indisponible sur ce serveur : {exc}"},
+                    {"erreur": "Générateur DXF indisponible sur ce serveur."},
                     status=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
             ouvrages = _ouvrages_lineaires_pour_dxf(projet.elements.all())
@@ -1154,6 +1230,8 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         serializer = ElementStructurelSerializer(semelles, many=True)
         return Response({"semelles": serializer.data}, status=status.HTTP_200_OK)
 
+    @extend_schema(request=VariantesRequest, responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Résultats de comparaison non enregistrés."),
+                                                        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Variante invalide.")}, tags=["Projets", "Calculs"])
     @action(detail=True, methods=["post"])
     def variantes(self, request, pk=None):
         """Compare des variantes (G, sol, portées, méthode des semelles...)
@@ -1170,6 +1248,8 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                          "note": "Calcul à titre de comparaison : résultats du moteur non validés par "
                                  "l'ingénieur, rien n'est enregistré."})
 
+    @extend_schema(request=None, responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Plan de fondation validé."),
+                                            403: OpenApiResponse(description="Validation réservée à l'ingénieur ou à l'admin.")}, tags=["Validation ingénieur"])
     @action(detail=True, methods=["post"], permission_classes=[PeutValiderElement])
     def valider_plan_fondation(self, request, pk=None):
         projet = self.get_object()
@@ -1203,6 +1283,13 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+    @extend_schema(
+        parameters=[OpenApiParameter("export", str, OpenApiParameter.QUERY, enum=["excel"])],
+        responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Fiche d'approvisionnement JSON."),
+                   (200, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"): OpenApiResponse(response=OpenApiTypes.BINARY, description="Fiche Excel."),
+                   400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="DQE absent, incomplet ou non validé.")},
+        tags=["Exports"],
+    )
     @action(detail=True, methods=["get"], url_path="approvisionnement", url_name="approvisionnement")
     def approvisionnement(self, request, pk=None):
         """Fiche d'approvisionnement (matériaux à acheter) calculée à partir du DQE."""
@@ -1233,6 +1320,15 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         response["Access-Control-Expose-Headers"] = "Content-Disposition"
         return response
 
+    @extend_schema(
+        parameters=[OpenApiParameter("export", str, OpenApiParameter.QUERY, enum=["pdf", "excel"])],
+        responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="DQE JSON."),
+                   (200, "application/pdf"): OpenApiResponse(response=OpenApiTypes.BINARY, description="DQE PDF."),
+                   (200, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"): OpenApiResponse(response=OpenApiTypes.BINARY, description="DQE Excel."),
+                   400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="DQE incomplet, éléments non validés ou format invalide.")},
+        tags=["Exports"],
+    )
+    @extend_schema(methods=["POST"], request={"application/json": ExportRequest})
     @action(detail=True, methods=["get", "post"], url_path="generer-dqe", url_name="generer-dqe")
     def generer_dqe(self, request, pk=None):
         projet = self.get_object()
@@ -1356,6 +1452,14 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         return response
 
 
+@extend_schema_view(
+    list=extend_schema(parameters=[OpenApiParameter("projet", int, OpenApiParameter.QUERY)], tags=["Éléments"]),
+    retrieve=extend_schema(tags=["Éléments"]),
+    create=extend_schema(tags=["Éléments"]),
+    update=extend_schema(tags=["Éléments"]),
+    partial_update=extend_schema(tags=["Éléments"]),
+    destroy=extend_schema(tags=["Éléments"]),
+)
 class ElementStructurelViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
     queryset = ElementStructurel.objects.select_related("projet")
     serializer_class = ElementStructurelSerializer
@@ -1375,6 +1479,10 @@ class ElementStructurelViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             return [ScopedRateThrottle()]
         return super().get_throttles()
 
+    @extend_schema(request=None, responses={200: OpenApiResponse(response=ElementStructurelSerializer, description="Élément avec résultat de calcul."),
+                                            400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Entrées refusées par le moteur."),
+                                            409: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Élément déjà validé."),
+                                            503: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Moteur indisponible.")}, tags=["Calculs"])
     @action(detail=True, methods=["post"])
     def calculer(self, request, pk=None):
         element = self.get_object()
@@ -1394,6 +1502,9 @@ class ElementStructurelViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         element.save(update_fields=["resultat_calcul", "date_modification"])
         return Response(ElementStructurelSerializer(element).data)
 
+    @extend_schema(request=ElementValidationSerializer, responses={200: OpenApiResponse(response=ElementStructurelSerializer, description="Élément validé."),
+                                                                   400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Résultat absent ou corps invalide."),
+                                                                   403: OpenApiResponse(description="Validation réservée à l'ingénieur ou à l'admin.")}, tags=["Validation ingénieur"])
     @action(detail=True, methods=["post"], permission_classes=[PeutValiderElement])
     def valider(self, request, pk=None):
         element = self.get_object()
@@ -1410,6 +1521,9 @@ class ElementStructurelViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                               element_id=element.id)
         return Response(ElementStructurelSerializer(element).data)
 
+    @extend_schema(request=None, responses={200: OpenApiResponse(response=ElementStructurelSerializer, description="Élément déverrouillé."),
+                                            403: OpenApiResponse(description="Action réservée à l'ingénieur ou à l'admin."),
+                                            409: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Élément non verrouillé.")}, tags=["Validation ingénieur"])
     @action(detail=True, methods=["post"], permission_classes=[PeutValiderElement])
     def deverrouiller(self, request, pk=None):
         """Déverrouillage CÔTÉ SERVEUR : l'élément repasse en "modifié" et
@@ -1426,9 +1540,21 @@ class ElementStructurelViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
                               projet=element.projet, element_id=element.id)
         return Response(ElementStructurelSerializer(element).data)
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Analyse et explication de cohérence."),
+            403: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Assistance IA désactivée."),
+            428: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Consentement IA requis."),
+        },
+        tags=["Assistant IA", "Analyses"],
+    )
     @action(detail=True, methods=["post"], url_path="expliquer-coherence", url_name="expliquer-coherence")
     def expliquer_coherence(self, request, pk=None):
         element = self.get_object()  # 404 si autre cabinet
+        consentement = verifier_consentement(request)
+        if consentement is not None:
+            return consentement
         t0 = time.time()
         analyse = analyser_element_coherence(element)
         resultat = expliquer_analyse_coherence(analyse)
@@ -1451,6 +1577,14 @@ class ElementStructurelViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         instance.delete()
 
 
+@extend_schema_view(
+    list=extend_schema(tags=["Couches de charges"]),
+    retrieve=extend_schema(tags=["Couches de charges"]),
+    create=extend_schema(tags=["Couches de charges"]),
+    update=extend_schema(tags=["Couches de charges"]),
+    partial_update=extend_schema(tags=["Couches de charges"]),
+    destroy=extend_schema(tags=["Couches de charges"]),
+)
 class CoucheChargeViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
     queryset = CoucheCharge.objects.all()
     serializer_class = CoucheChargeSerializer
@@ -1478,6 +1612,14 @@ def _lignes_poste_ratio(type_poste, geometrie):
         raise drf_serializers.ValidationError({"geometrie": str(exc)})
 
 
+@extend_schema_view(
+    list=extend_schema(parameters=[OpenApiParameter("projet", int, OpenApiParameter.QUERY)], tags=["Postes complémentaires"]),
+    retrieve=extend_schema(tags=["Postes complémentaires"]),
+    create=extend_schema(tags=["Postes complémentaires"]),
+    update=extend_schema(tags=["Postes complémentaires"]),
+    partial_update=extend_schema(tags=["Postes complémentaires"]),
+    destroy=extend_schema(tags=["Postes complémentaires"]),
+)
 class PosteComplementaireViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
     queryset = PosteComplementaire.objects.all()
     serializer_class = PosteComplementaireSerializer
@@ -1509,6 +1651,17 @@ class PosteComplementaireViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         self._sauver(serializer)
 
 
+@extend_schema_view(
+    list=extend_schema(parameters=[
+        OpenApiParameter("lot", str, OpenApiParameter.QUERY),
+        OpenApiParameter("q", str, OpenApiParameter.QUERY, description="Recherche partielle sur la désignation."),
+    ], tags=["Bibliothèque"]),
+    retrieve=extend_schema(tags=["Bibliothèque"]),
+    create=extend_schema(tags=["Bibliothèque"]),
+    update=extend_schema(tags=["Bibliothèque"]),
+    partial_update=extend_schema(tags=["Bibliothèque"]),
+    destroy=extend_schema(tags=["Bibliothèque"]),
+)
 class OuvrageTypeViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
     """Bibliothèque d'ouvrages du cabinet (filtres : ?lot=, ?q=)."""
 
@@ -1529,6 +1682,12 @@ class OuvrageTypeViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(entreprise=entreprise_de(self.request.user), cree_par=self.request.user)
 
+    @extend_schema(
+        request={"multipart/form-data": ImportBibliothequeRequest},
+        responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Aperçu sans écriture."),
+                   400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Fichier invalide ou non pris en charge.")},
+        tags=["Bibliothèque"],
+    )
     @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser])
     def importer(self, request):
         """Aperçu de l'import d'un DQE Excel : rien n'est écrit."""
@@ -1552,6 +1711,10 @@ class OuvrageTypeViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
         apercu["fichier"] = fichier.name
         return Response(apercu)
 
+    @extend_schema(request=ConfirmerImportBibliothequeRequest, responses={
+        201: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Nombre d'ouvrages créés et mis à jour."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Import annulé intégralement avec erreurs par ligne."),
+    }, tags=["Bibliothèque"])
     @action(detail=False, methods=["post"], url_path="importer/confirmer")
     def confirmer_import(self, request):
         """Écrit les lignes retenues dans l'aperçu : tout ou rien. Chaque
@@ -1613,13 +1776,16 @@ class EntrepriseParametresView(APIView):
             return [EstMembreEntreprise()]
         return [EstAdminCabinet()]
 
+    @extend_schema(responses={200: OpenApiResponse(response=EntrepriseParametresSerializer, description="Paramètres du cabinet courant.")}, tags=["Cabinet"])
     def get(self, request):
         entreprise = request.user.profil.entreprise
         return Response(EntrepriseParametresSerializer(entreprise, context={"request": request}).data)
 
+    @extend_schema(request=EntrepriseParametresSerializer, responses={200: OpenApiResponse(response=EntrepriseParametresSerializer)}, tags=["Cabinet"])
     def put(self, request):
         return self._update(request, partial=False)
 
+    @extend_schema(request=EntrepriseParametresSerializer, responses={200: OpenApiResponse(response=EntrepriseParametresSerializer)}, tags=["Cabinet"])
     def patch(self, request):
         return self._update(request, partial=True)
 
@@ -1636,6 +1802,7 @@ class ReferentielView(APIView):
     """Référentiel technique exposé au frontend (source unique : le
     moteur). Évite toute copie locale des constantes côté React."""
 
+    @extend_schema(responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Référentiel technique issu des constantes métier, incluant les bornes T11.")}, tags=["Référentiel"])
     def get(self, request):
         return Response({
             "usages": [
@@ -1643,6 +1810,13 @@ class ReferentielView(APIView):
                 for cle, v in CHARGES_EXPLOITATION.items()
             ],
             "contrainte_sol_defaut_kn_m2": CONTRAINTE_SOL_DEFAUT,
+            "limites_structuration": {
+                "nb_niveaux_max": NB_NIVEAUX_MAX,
+                "portee_min_m": PORTEE_MIN_M,
+                "portee_max_m": PORTEE_MAX_M,
+                "contrainte_sol_min_kn_m2": CONTRAINTE_SOL_MIN_KN_M2,
+                "contrainte_sol_max_kn_m2": CONTRAINTE_SOL_MAX_KN_M2,
+            },
             "cles_prix": [{"cle": c, "libelle": l} for c, l in LIBELLES_PRIX.items()],
             # Prix facultatifs par type d'ouvrage (béton, coffrage) : à défaut,
             # le prix général du cabinet s'applique, et la ligne du DQE le dit.
@@ -1726,6 +1900,7 @@ class ReferentielView(APIView):
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses={200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Compte courant, cabinet et état du consentement IA.")}, tags=["Comptes"])
     def get(self, request):
         user = request.user
         entreprise = entreprise_de(user)
@@ -1737,6 +1912,11 @@ class MeView(APIView):
             "nom_complet": user.get_full_name(),
             "is_staff": user.is_staff,
             "role": profil.role if profil else None,
+            "consentement_ia": profil.consentement_ia if profil else None,
+            "consentement_ia_version": profil.consentement_ia_version if profil else None,
+            "consentement_ia_date": profil.consentement_ia_date if profil else None,
+            "consentement_ia_valide": consentement_valide(profil),
+            "consentement_ia_version_courante": CONSENTEMENT_VERSION,
             "entreprise": (
                 {"id": entreprise.id, "nom": entreprise.nom, "email": entreprise.email}
                 if entreprise else None
@@ -1752,6 +1932,9 @@ class _AssistantBase(APIView):
         t0 = time.time()
         try:
             res = appel()
+            if self.endpoint == '/api/assistant/structurer-projet/':
+                from .services.assistant_ia.provenance import signer_proposition
+                res['preuve_proposition'] = signer_proposition(res, request.user)
             _journaliser_ia(request, self.endpoint, res.get("source", "INCONNUE"), t0)
             return Response(res, status=status.HTTP_200_OK)
         except LLMServiceError as exc:
@@ -1771,6 +1954,14 @@ class AssistantStructurerView(_AssistantBase):
     throttle_scope = "assistant_structurer"
     endpoint = "/api/assistant/structurer-projet/"
 
+    @extend_schema(request=DescriptionIARequest, responses={
+        200: OpenApiResponse(response=StructurationIAResponse, description="Proposition structurée et preuve signée T10."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Description absente, trop longue ou données IA invalides."),
+        403: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Assistance IA désactivée pour le compte."),
+        428: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Consentement IA requis."),
+        429: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Limite de requêtes atteinte."),
+        502: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Service IA indisponible."),
+    }, tags=["Assistant IA"])
     def post(self, request):
         description = (request.data.get("description") or "").strip()
         if not description:
@@ -1779,6 +1970,9 @@ class AssistantStructurerView(_AssistantBase):
         if len(description) > 1000:
             return Response({"detail": "La description ne doit pas dépasser 1000 caractères."},
                             status=status.HTTP_400_BAD_REQUEST)
+        consentement = verifier_consentement(request)
+        if consentement is not None:
+            return consentement
         return self._executer(request, lambda: structurer_description_projet(description))
 
 
@@ -1786,6 +1980,13 @@ class AssistantExpliquerView(_AssistantBase):
     throttle_scope = "assistant_expliquer"
     endpoint = "/api/assistant/expliquer-element/"
 
+    @extend_schema(request=ElementIARequest, responses={
+        200: OpenApiResponse(response=ExplicationIAResponse, description="Explication d'un résultat calculé."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Identifiant absent ou calcul indisponible."),
+        403: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Assistance IA désactivée pour le compte."),
+        404: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Élément absent du cabinet courant."),
+        428: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Consentement IA requis."),
+    }, tags=["Assistant IA"])
     def post(self, request):
         element_id = request.data.get("element_id")
         if not element_id:
@@ -1799,6 +2000,9 @@ class AssistantExpliquerView(_AssistantBase):
         if element.resultat_calcul is None:
             return Response({"detail": "Cet élément n'a aucun calcul disponible à expliquer."},
                             status=status.HTTP_400_BAD_REQUEST)
+        consentement = verifier_consentement(request)
+        if consentement is not None:
+            return consentement
         payload = {
             "repere": element.identifiant,
             "type_element": element.type_element,
@@ -1818,6 +2022,14 @@ class AssistantSuggererPosteView(_AssistantBase):
     throttle_scope = "assistant_suggerer_poste"
     endpoint = "/api/assistant/suggerer-poste/"
 
+    @extend_schema(request=DescriptionIARequest, responses={
+        200: OpenApiResponse(response=SuggestionIAResponse, description="Suggestion sans création automatique d'un poste."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Description absente, trop longue ou invalide."),
+        403: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Assistance IA désactivée pour le compte."),
+        428: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Consentement IA requis."),
+        429: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Limite de requêtes atteinte."),
+        502: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Service IA indisponible."),
+    }, tags=["Assistant IA"])
     def post(self, request):
         description = (request.data.get("description") or "").strip()
         if not description:
@@ -1826,4 +2038,7 @@ class AssistantSuggererPosteView(_AssistantBase):
         if len(description) > 500:
             return Response({"detail": "La description ne doit pas dépasser 500 caractères."},
                             status=status.HTTP_400_BAD_REQUEST)
+        consentement = verifier_consentement(request)
+        if consentement is not None:
+            return consentement
         return self._executer(request, lambda: suggerer_poste_complementaire(description))

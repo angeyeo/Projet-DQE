@@ -1628,3 +1628,32 @@ button.account-card { width: 100%; border: none; background: transparent; color:
 .prix-par-ouvrage[open] summary { margin-bottom: 0.4rem; }
 .grille-prix-ouvrage { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0.6rem 0.9rem; }
 .grille-prix-ouvrage .form-group { margin-bottom: 0; }
+.consentement-gemini-overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 1rem; background: rgba(27, 24, 18, 0.52); }
+.consentement-gemini-dialog { width: min(100%, 30rem); max-width: 30rem; padding: 1.5rem; border: 1px solid var(--core-border); border-radius: var(--radius-lg); background: var(--core-surface); box-shadow: var(--shadow-raised); }
+.consentement-gemini-dialog h2 { margin-bottom: 1rem; font-family: var(--font-heading); font-size: 1.35rem; }
+.consentement-gemini-dialog p { margin-bottom: 0.9rem; color: var(--ink-700); }
+.consentement-gemini-controle { font-size: 0.9rem; }
+.consentement-gemini-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.25rem; }
+.consentement-gemini-en-savoir-plus { display: block; margin-top: 1.1rem; color: var(--ink-500); font-size: 0.82rem; font-style: italic; }
+.consentement-gemini-erreur { color: var(--status-critical); font-size: 0.85rem; }
+.assistance-ia-desactivee { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; padding: 0.85rem 1rem; border: 1px solid color-mix(in srgb, var(--status-warning) 55%, var(--core-border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--status-warning) 10%, var(--core-surface)); }
+.assistance-ia-desactivee p { margin: 0; color: var(--ink-700); font-weight: 600; }
+.assistance-ia-desactivee .btn { flex-shrink: 0; }
+.assistance-ia-desactivee-compact { margin: 0.35rem 0 0; padding: 0.35rem 0; border: 0; border-radius: 0; background: transparent; }
+.assistance-ia-desactivee-compact p { color: var(--ink-500); font-size: 0.82rem; font-weight: 500; }
+.assistance-ia-image { margin: -1.25rem 0 1rem; }
+.source-ia { padding: 0.25rem 0.6rem; border: 1px solid var(--core-border); border-radius: 12px; background: var(--status-neutral-soft); color: var(--ink-700); font-size: 0.75rem; font-weight: 600; }
+.source-ia-gemini { border-color: var(--accent-soft-border); background: var(--accent-soft); color: var(--accent); }
+.source-ia-mock, .source-ia-locale { background: var(--status-warn-soft); color: var(--status-warn); }
+.parametres-ia-utilisateur { margin-top: 2rem; padding: 1.25rem; border: 1px solid var(--core-border); border-radius: var(--radius-lg); background: var(--core-surface); }
+.parametres-ia-utilisateur h2 { margin-bottom: 0.5rem; font-size: 1.15rem; }
+.parametres-ia-utilisateur p { margin-bottom: 0.65rem; }
+@media (max-width: 640px) {
+  .consentement-gemini-dialog { padding: 1.25rem; }
+  .consentement-gemini-actions { flex-direction: column; }
+  .consentement-gemini-actions .btn { width: 100%; justify-content: center; }
+  .assistance-ia-desactivee { align-items: stretch; flex-direction: column; }
+  .assistance-ia-desactivee .btn { width: 100%; justify-content: center; }
+  .assistance-ia-desactivee-compact { align-items: center; flex-direction: row; }
+  .assistance-ia-desactivee-compact .btn { width: auto; }
+}

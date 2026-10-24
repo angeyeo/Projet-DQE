@@ -10,7 +10,10 @@
 //   les détails structurés du backend dans `err.data` (champs_manquants,
 //   problemes, erreurs par champ...).
 
-const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
+import { acceptationsVersApi, champsProvenance } from '../components/parametres/provenance.js';
+import { creerErreurHTTP, messageErreur, normaliserBaseApi } from './clientUtils.js';
+
+export const API_BASE_URL = normaliserBaseApi(import.meta.env?.VITE_API_URL);
 
 // --- Authentification JWT ------------------------------------------------
 
@@ -101,48 +104,19 @@ async function apiFetch(url, options = {}) {
 // --- Erreurs lisibles ------------------------------------------------------
 
 function erreurReseau() {
-  const err = new Error(
-    "Serveur injoignable : vérifiez votre connexion ou réessayez dans un instant."
-  );
-  err.status = 0;
-  return err;
+  const error = creerErreurHTTP(null, 0);
+  error.code = 'NETWORK_ERROR';
+  return error;
 }
-
-const MESSAGES_STATUT = {
-  401: 'Votre session a expiré : reconnectez-vous.',
-  403: "Vous n'avez pas les droits nécessaires pour cette action.",
-  404: 'Élément introuvable (supprimé, ou appartenant à un autre cabinet).',
-  409: "Action impossible dans l'état actuel de l'élément.",
-  413: 'Fichier trop volumineux.',
-  429: 'Trop de requêtes : patientez quelques instants avant de réessayer.',
-  502: 'Le service externe (IA) a renvoyé une erreur.',
-  503: 'Service momentanément indisponible sur le serveur.',
-};
 
 // Transforme n'importe quelle réponse d'erreur DRF en phrase lisible.
-export function messageErreur(data, status) {
-  if (data) {
-    if (typeof data === 'string') return data;
-    if (data.erreur) return data.erreur;
-    if (data.detail) return data.detail;
-    if (Array.isArray(data)) return data.join(' ');
-    // Erreurs par champ DRF : {"champ": ["message", ...], ...}
-    const parties = Object.entries(data)
-      .filter(([, v]) => v && (typeof v === 'string' || Array.isArray(v)))
-      .map(([champ, v]) => `${champ === 'non_field_errors' ? '' : `${champ} : `}${[].concat(v).join(' ')}`);
-    if (parties.length) return parties.join(' — ');
-  }
-  return MESSAGES_STATUT[status] || `Erreur inattendue du serveur (code ${status}).`;
-}
+export { messageErreur };
 
 async function lireReponse(response) {
   if (response.status === 204) return null;
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const err = new Error(messageErreur(data, response.status));
-    err.status = response.status;
-    err.data = data;
-    throw err;
+    throw creerErreurHTTP(data, response.status);
   }
   return data;
 }
@@ -227,10 +201,7 @@ async function telechargerBlob(url, nomParDefaut) {
   const response = await apiFetch(url);
   if (!response.ok) {
     const data = await response.json().catch(() => null);
-    const err = new Error(messageErreur(data, response.status));
-    err.status = response.status;
-    err.data = data;
-    throw err;
+    throw creerErreurHTTP(data, response.status);
   }
   const blob = await response.blob();
   const disposition = response.headers.get('Content-Disposition') || '';
@@ -293,6 +264,7 @@ function ouvrageVersApi(o) {
 
 export function formulaireVersProjet(f) {
   return {
+    acceptations_ia: acceptationsVersApi(f),
     nom: (f.nomProjet || '').trim(),
     numero_devis: f.numeroDevis || '',
     usage_batiment: f.typeUsage || '',
@@ -323,6 +295,10 @@ const versTexte = (v) => (v === null || v === undefined ? '' : String(v));
 
 export function projetVersFormulaire(p) {
   return {
+    provenanceParametres: p.provenance_parametres || {},
+    acceptationsIA: {},
+    valeursSauvegardees: Object.fromEntries(Object.entries(champsProvenance)
+      .map(([champ, cle]) => [champ, versTexte(p[cle])])),
     id: p.id,
     nomProjet: p.nom || '',
     numeroDevis: p.numero_devis || '',
@@ -590,10 +566,8 @@ export const dqeService = {
     const response = await publicFetch(`${API_BASE_URL}/auth/token/`, json('POST', { username, password: motDePasse }));
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      const err = new Error(response.status === 401 ? 'Identifiant ou mot de passe incorrect.' : messageErreur(data, response.status));
-      err.status = response.status;
-      err.data = data;
-      throw err;
+      throw creerErreurHTTP(data, response.status,
+        response.status === 401 ? 'Identifiant ou mot de passe incorrect.' : null);
     }
     setTokens(data);
     return data;
@@ -614,10 +588,8 @@ export const dqeService = {
     }));
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      const err = new Error('Impossible de créer le compte.');
-      err.status = response.status;
-      err.data = data;
-      throw err;
+      throw creerErreurHTTP(data, response.status,
+        messageErreur(data, response.status) || 'Impossible de créer le compte.');
     }
     setTokens(data);
     return data;
@@ -633,6 +605,8 @@ export const dqeService = {
       ancien_mot_de_passe: ancienMotDePasse, nouveau_mot_de_passe: nouveauMotDePasse,
     }),
   getMoi: async () => getJSON(`${API_BASE_URL}/auth/moi/`),
+  enregistrerConsentementIA: async (decision) =>
+    postJSON(`${API_BASE_URL}/auth/moi/consentement-ia/`, { decision }),
   inviterUtilisateur: async ({ email, role }) => postJSON(`${API_BASE_URL}/auth/inviter/`, { email, role }),
   listerMembres: async () => getJSON(`${API_BASE_URL}/auth/membres/`),
   desactiverMembre: async (userId) => postJSON(`${API_BASE_URL}/auth/membres/${userId}/desactiver/`),

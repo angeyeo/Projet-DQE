@@ -7,10 +7,16 @@ from django.urls import URLPattern, URLResolver, get_resolver
 from rest_framework.test import APITestCase
 
 PUBLIQUES = {
+    # Documentation sans données client, montée uniquement lorsque DEBUG=True.
+    "/api/schema/", "/api/docs/", "/api/v1/schema/", "/api/v1/docs/",
     "/api/token/", "/api/token/refresh/", "/api/token/verify/",
+    "/api/v1/token/", "/api/v1/token/refresh/", "/api/v1/token/verify/",
     "/api/auth/token/", "/api/auth/token/refresh/",
     "/api/auth/inscription/", "/api/auth/activer/",
     "/api/auth/mot-de-passe-oublie/", "/api/auth/reinitialiser-mot-de-passe/",
+    "/api/v1/auth/token/", "/api/v1/auth/token/refresh/",
+    "/api/v1/auth/inscription/", "/api/v1/auth/activer/",
+    "/api/v1/auth/mot-de-passe-oublie/", "/api/v1/auth/reinitialiser-mot-de-passe/",
 }
 
 

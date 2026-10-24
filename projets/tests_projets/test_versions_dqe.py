@@ -45,6 +45,9 @@ class Versions(APITestCase):
         self.assertEqual(self.generer()["version"]["numero"], 2)
         liste = self.client.get(f"{self.url}versions-dqe/").data
         self.assertEqual([v["numero"] for v in liste], [2, 1])
+        liste_v1 = self.client.get(f"/api/v1/projets/{self.projet.id}/versions-dqe/")
+        self.assertEqual(liste_v1.status_code, 200, liste_v1.data)
+        self.assertEqual(liste_v1.data, liste)
         self.assertEqual(liste[1]["total_general"], 355000)
         self.assertEqual(liste[1]["auteur"], self.user.get_username())
 
@@ -59,6 +62,11 @@ class Versions(APITestCase):
         self.generer()
 
         c = self.client.get(f"{self.url}versions-dqe/comparer/", {"de": 1, "a": 2}).data
+        c_v1 = self.client.get(
+            f"/api/v1/projets/{self.projet.id}/versions-dqe/comparer/", {"de": 1, "a": 2},
+        )
+        self.assertEqual(c_v1.status_code, 200, c_v1.data)
+        self.assertEqual(c_v1.data, c)
         self.assertEqual((c["total_avant"], c["total_apres"], c["ecart"]), (355000, 390000, 35000))
         p = {x["designation"]: x for x in c["postes"]}
         self.assertEqual(p["Porte"]["statut"], "modifie")
@@ -79,6 +87,9 @@ class Versions(APITestCase):
             v.save()
         r = self.client.get(f"{self.url}versions-dqe/1/")
         self.assertEqual((r.status_code, r.data["total_general"]), (200, 255000))
+        v1 = self.client.get(f"/api/v1/projets/{self.projet.id}/versions-dqe/1/")
+        self.assertEqual(v1.status_code, 200, v1.data)
+        self.assertEqual(v1.data, r.data)
         # Réédition PDF d'une version : rien n'est recalculé ni créé.
         r = self.client.get(f"{self.url}versions-dqe/1/", {"export": "pdf"})
         self.assertEqual(r.status_code, 200)

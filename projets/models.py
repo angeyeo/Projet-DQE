@@ -38,6 +38,7 @@ class Entreprise(models.Model):
     
 
 class Projet(models.Model):
+    provenance_parametres = models.JSONField(default=dict, blank=True)
     nom = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     # Plus de valeur par défaut inventée ("habitation", 1 niveau, 4 m de
@@ -604,6 +605,11 @@ class JournalAppelIA(models.Model):
     endpoint = models.CharField(max_length=255)
     source = models.CharField(max_length=30, choices=Source.choices)
     duree_ms = models.IntegerField(null=True, blank=True)
+    modele = models.CharField(max_length=100, null=True, blank=True)
+    tokens_entree = models.IntegerField(null=True, blank=True)
+    tokens_sortie = models.IntegerField(null=True, blank=True)
+    tokens_reflexion = models.IntegerField(null=True, blank=True)
+    tokens_total = models.IntegerField(null=True, blank=True)
     date_appel = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -630,6 +636,11 @@ class Profil(models.Model):
         INGENIEUR = "ingenieur", "Ingénieur"
         ADMIN = "admin", "Admin (Gérant du cabinet)"
 
+    class ConsentementIA(models.TextChoices):
+        NON_RENSEIGNE = "non_renseigne", "Non renseigné"
+        ACCEPTE = "accepte", "Accepté"
+        REFUSE = "refuse", "Refusé"
+
     utilisateur = models.OneToOneField(
         "auth.User",
         on_delete=models.CASCADE,
@@ -645,6 +656,13 @@ class Profil(models.Model):
         choices=Role.choices,
         default=Role.TECHNICIEN,
     )
+    consentement_ia = models.CharField(
+        max_length=20,
+        choices=ConsentementIA.choices,
+        default=ConsentementIA.NON_RENSEIGNE,
+    )
+    consentement_ia_version = models.CharField(max_length=40, null=True, blank=True)
+    consentement_ia_date = models.DateTimeField(null=True, blank=True)
     date_creation = models.DateTimeField(auto_now_add=True)
 
     class Meta:

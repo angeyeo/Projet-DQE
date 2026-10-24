@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
+    'drf_spectacular',
     'corsheaders',
     'api',
     'moteur_calcul',
@@ -72,6 +73,24 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_SCHEMA_CLASS': 'api.openapi.DQEAutoSchema',
+    'EXCEPTION_HANDLER': 'api.errors.api_exception_handler',
+    'DEFAULT_RENDERER_CLASSES': [
+        'api.errors.CompatibleJSONRenderer',
+        'rest_framework.renderers.BrowsableAPIRenderer',
+    ],
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'API Projet DQE',
+    'DESCRIPTION': 'Contrat actuel de l’API Projet DQE.',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'POSTPROCESSING_HOOKS': [
+        'drf_spectacular.hooks.postprocess_schema_enums',
+        'api.openapi.postprocess_error_envelopes',
     ],
 }
 

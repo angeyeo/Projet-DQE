@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { AlertCircle, ArrowLeft, ArrowRight, Loader2, Sparkles } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
+import { useConsentementGemini, useEtatConsentementGemini } from './ui/ConsentementGemini';
+import AssistanceIADesactivee from './ui/AssistanceIADesactivee';
+import { etiquetteSourceIA } from './ui/sourceIA';
 import Alerte from './ui/Alerte';
 import PlanMurs from './murs/PlanMurs';
 import { MESSAGE_STRUCTURE_SAISIE } from './import/messages';
@@ -9,17 +12,15 @@ import BoutonNoteCalcul from './structure/BoutonNoteCalcul';
 
 const ND = <span className="texte-discret" title="Aucun résultat de calcul pour cet élément">ND</span>;
 
-const SOURCES_IA = { GEMINI: 'Gemini', MOCK: 'SIMULATION (non IA)', FALLBACK_LOCAL: 'Explication locale (sans IA)' };
-
 // Ligne d'élément + explication IA à la demande (l'IA commente un résultat
 // du moteur ; elle ne le produit ni ne le modifie).
-function LigneElement({ item, colonnes, nbColonnes, explication, onExpliquer }) {
+function LigneElement({ item, colonnes, nbColonnes, explication, onExpliquer, assistanceDesactivee }) {
   return (
     <>
       <tr>
         {colonnes}
         <td>
-          <button type="button" className="btn btn-ia btn-compact" disabled={explication?.chargement || item.calculIndisponible}
+          <button type="button" className="btn btn-ia btn-compact" disabled={explication?.chargement || item.calculIndisponible || assistanceDesactivee}
             onClick={() => onExpliquer(item)}
             title={item.calculIndisponible ? 'Aucun calcul à expliquer' : "Demander une explication à l'IA"}>
             {explication?.chargement ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
@@ -34,7 +35,7 @@ function LigneElement({ item, colonnes, nbColonnes, explication, onExpliquer }) 
               <span className="texte-erreur"><AlertCircle size={14} aria-hidden="true" /> {explication.erreur}</span>
             ) : (
               <>
-                <span className="type-donnee">RECOMMANDATION IA · {SOURCES_IA[explication.source] || explication.source}</span>
+                <span className="type-donnee">RECOMMANDATION IA · {etiquetteSourceIA(explication.source)}</span>
                 <p>{explication.texte}</p>
               </>
             )}
@@ -45,11 +46,12 @@ function LigneElement({ item, colonnes, nbColonnes, explication, onExpliquer }) 
   );
 }
 
-function Tableau({ titre, elements, entetes, cellules, explications, onExpliquer }) {
+function Tableau({ titre, elements, entetes, cellules, explications, onExpliquer, assistanceDesactivee, afficherReactivationIA }) {
   if (!elements.length) return null;
   return (
     <section className="bloc-tableau">
       <h3>{titre} <span className="texte-discret">({elements.length})</span></h3>
+      {afficherReactivationIA && <AssistanceIADesactivee compact />}
       <div className="table-scroll">
         <table className="custom-table">
           <thead><tr>{entetes.map((e) => <th key={e}>{e}</th>)}<th><span className="sr-only">IA</span></th></tr></thead>
@@ -57,6 +59,7 @@ function Tableau({ titre, elements, entetes, cellules, explications, onExpliquer
             {elements.map((item) => (
               <LigneElement key={item.elementId} item={item} nbColonnes={entetes.length + 1}
                 explication={explications[item.elementId]} onExpliquer={onExpliquer}
+                assistanceDesactivee={assistanceDesactivee}
                 colonnes={cellules(item).map((c, i) => <td key={i} className={i ? 'tabular' : ''}>{c ?? ND}</td>)} />
             ))}
           </tbody>
@@ -67,12 +70,17 @@ function Tableau({ titre, elements, entetes, cellules, explications, onExpliquer
 }
 
 export default function Step2_Calculs({ sections, projet, hypotheses = [], avertissements = [], alertes = [], onEnregistrerMurs, onModifierPoteaux, onRetablirStructure, onBack, onNext }) {
+  const demanderConsentementGemini = useConsentementGemini();
+  const { assistanceDesactivee } = useEtatConsentementGemini();
   const { poteaux = [], poutres = [], semelles = [], autres = [] } = sections || {};
+  const groupes = [poteaux, poutres, semelles, autres];
+  const premierGroupeAvecElements = groupes.findIndex((elements) => elements.length > 0);
   const total = poteaux.length + poutres.length + semelles.length + autres.length;
   const sansResultat = [...poteaux, ...poutres, ...semelles, ...autres].filter((e) => e.calculIndisponible).length;
   const [explications, setExplications] = useState({});
 
   const expliquer = async (item) => {
+    if (!await demanderConsentementGemini()) return;
     setExplications((p) => ({ ...p, [item.elementId]: { chargement: true } }));
     try {
       const res = await dqeService.expliquerElementIA(item.elementId);
@@ -82,7 +90,7 @@ export default function Step2_Calculs({ sections, projet, hypotheses = [], avert
     }
   };
 
-  const communs = { explications, onExpliquer: expliquer };
+  const communs = { explications, onExpliquer: expliquer, assistanceDesactivee };
 
   return (
     <div className="glass-panel etape">
@@ -133,17 +141,21 @@ export default function Step2_Calculs({ sections, projet, hypotheses = [], avert
       )}
 
       <Tableau titre="Poteaux" {...communs} elements={poteaux}
+        afficherReactivationIA={premierGroupeAvecElements === 0}
         entetes={['Repère', 'Effort normal', 'Section', 'Armatures']}
         cellules={(i) => [<strong>{i.name}</strong>, i.charge, i.section, i.armatures]} />
       <Tableau titre="Poutres" {...communs} elements={poutres}
+        afficherReactivationIA={premierGroupeAvecElements === 1}
         entetes={['Repère', 'Portée', 'Charge linéaire', 'Section', 'Armatures']}
         cellules={(i) => [<strong>{i.name}</strong>, i.portee, i.chargeLineaire, i.section, i.armatures]} />
       <Tableau titre="Semelles" {...communs} elements={semelles}
+        afficherReactivationIA={premierGroupeAvecElements === 2}
         entetes={['Repère', 'Effort', 'Contrainte sol', 'Dimensions', 'Hauteur']}
         cellules={(i) => [<strong>{i.name}</strong>, i.charge,
           i.contrainteSol && <>{i.contrainteSol}{i.hypotheseSol && <span className="type-donnee type-hypothèse"> hypothèse</span>}</>,
           i.section, i.hauteur]} />
       <Tableau titre="Autres ouvrages (longrines, chaînages, semelles filantes)" {...communs} elements={autres}
+        afficherReactivationIA={premierGroupeAvecElements === 3}
         entetes={['Repère', 'Type', 'Longueur / portée', 'Section']}
         cellules={(i) => [<strong>{i.name}</strong>, i.categorie, i.portee || (i.longueur != null ? `${i.longueur} m` : null), i.section]} />
 

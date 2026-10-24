@@ -121,6 +121,10 @@ class APIPlanArchitecte(APITestCase):
         # Le fond est relu plus tard (réouverture du projet).
         r = self.client.get(f"/api/projets/{self.projet.id}/fond_plan/")
         self.assertEqual((r.status_code, r.data["nb_segments"] > 8), (200, True))
+        v1 = self.client.get(f"/api/v1/projets/{self.projet.id}/fond_plan/")
+        self.assertEqual(v1.status_code, 200, v1.data)
+        self.assertEqual(v1.data, r.data)
+        self.assertEqual(self.projet.elements.count(), 0)
 
     def test_mode_architecte_refuse_un_ifc(self):
         r = self.client.post(f"/api/projets/{self.projet.id}/importer_plan/",
@@ -148,6 +152,18 @@ class APIPlanArchitecte(APITestCase):
         # Le calcul « confirmer » d'un plan importé est refusé en mode architecte.
         r = self.client.post(f"/api/projets/{self.projet.id}/importer_plan/", {"confirmer": True}, format="json")
         self.assertEqual(r.status_code, 400)
+
+    def test_placement_v1_cree_et_persiste_la_structure_saisie(self):
+        projet_v1 = self.nouveau_projet("Villa API v1")
+        self.assertEqual(self.deposer(projet_v1, "archi.dxf", mode="architecte").status_code, 200)
+        response = self.client.post(
+            f"/api/v1/projets/{projet_v1.id}/placer_poteaux/", {"poteaux": GRILLE_3X3}, format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["poteaux"], {"total": 9, "saisis": 9, "conserves": 0})
+        self.assertEqual(projet_v1.elements.filter(type_element=T.POTEAU).count(), 9)
+        projet_v1.refresh_from_db()
+        self.assertEqual(projet_v1.source_structure, Projet.SourceStructure.SAISIE)
 
     def test_regeneration_sans_liste_reprend_les_poteaux_enregistres(self):
         self.placer(self.projet, GRILLE_3X3)

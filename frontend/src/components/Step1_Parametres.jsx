@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { UploadCloud, FileText, ArrowRight, Loader2, CheckCircle2, AlertCircle, Sparkles, Check } from 'lucide-react';
 import { controlerTaille, dqeService } from '../api/dqeService';
+import { useConsentementGemini, useEtatConsentementGemini } from './ui/ConsentementGemini';
+import AssistanceIADesactivee from './ui/AssistanceIADesactivee';
+import { classeSourceIA, etiquetteSourceIA } from './ui/sourceIA';
+import { champsNlp } from './parametres/champsNlp';
+import { accepterProposition, libelleProvenance } from './parametres/provenance';
 import useReferentiel from '../hooks/useReferentiel';
 import Alerte from './ui/Alerte';
 import HypothesesCharges from './parametres/HypothesesCharges';
@@ -21,6 +26,8 @@ const TYPE_LABELS = {
 
 export default function Step1_Parametres({ projectData, updateProjectData, assurerProjet, onNext, calcul, alertes = [] }) {
   const { data: referentiel, erreur: erreurReferentiel } = useReferentiel();
+  const demanderConsentementGemini = useConsentementGemini();
+  const { assistanceDesactivee } = useEtatConsentementGemini();
   const [visionResult, setVisionResult] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -170,6 +177,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
 
     // Traitement Vision IA si c'est une image de plan (Aperçu uniquement, aucune mutation des paramètres du projet)
     if (isImage) {
+      if (!await demanderConsentementGemini()) return;
       setAnalyzing(true);
       setAnalysisError(null);
       try {
@@ -180,7 +188,9 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         updateProjectData(fichierCharge);
         setAnalysisSuccess(true);
       } catch (err) {
-        setAnalysisError(`Erreur d'analyse IA : ${err.message || "Impossible d'extraire le plan"}`);
+        setAnalysisError(err.status === 403 || err.status === 428
+          ? err.message
+          : `Erreur d'analyse IA : ${err.message || "Impossible d'extraire le plan"}`);
         updateProjectData({ planFileName: null, planFileSize: null });
       } finally {
         setAnalyzing(false);
@@ -195,6 +205,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
       setNlpError("Veuillez saisir une description avant de lancer l'analyse.");
       return;
     }
+    if (!await demanderConsentementGemini()) return;
     setNlpError(null);
     setNlpResult(null);
     setNlpApplied(false);
@@ -207,7 +218,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
       const status = err.status;
       if (status === 429) {
         setNlpError("Limite d'appels IA atteinte. Veuillez patienter avant de réessayer.");
-      } else if (status === 400) {
+      } else if (status === 400 || status === 403 || status === 428) {
         setNlpError(err.message || "Description invalide ou absente.");
       } else {
         setNlpError("Impossible d'analyser la description pour le moment. Vous pouvez continuer à saisir les paramètres manuellement.");
@@ -217,27 +228,17 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
     }
   };
 
-  // Champs exploitables : les valeurs ont déjà été validées par le serveur
-  // (bornes physiques) ; ici on ne fait que recopier ce qui est présent.
-  const champsNlp = (d) => {
-    if (!d) return {};
-    const u = {};
-    if (d.nombre_niveaux != null && d.nombre_niveaux !== '') u.nombreNiveaux = String(d.nombre_niveaux);
-    if (d.usage_batiment) u.typeUsage = d.usage_batiment;
-    if (d.portee_m != null && d.portee_m !== '') {
-      u.porteeX = String(d.portee_m);
-      if (!projectData.porteeY) u.porteeY = String(d.portee_m);
-    }
-    if (d.hauteur_niveau_m != null && d.hauteur_niveau_m !== '') u.hauteurEtage = String(d.hauteur_niveau_m);
-    if (d.contrainte_sol_kn_m2 != null && d.contrainte_sol_kn_m2 !== '') u.contrainteSol = String(d.contrainte_sol_kn_m2);
-    return u;
-  };
-  const hasApplicableNlpData = (d) => Object.keys(champsNlp(d)).length > 0;
+  const hasApplicableNlpData = (donnees) => Object.keys(champsNlp(donnees)).length > 0;
 
   const handleApplyNlpParameters = () => {
-    if (!nlpResult?.donnees) return;
-    updateProjectData(champsNlp(nlpResult.donnees));
+    if (!nlpResult?.donnees || !nlpResult.preuve_proposition) return;
+    updateProjectData(accepterProposition(projectData, champsNlp(nlpResult.donnees), nlpResult));
     setNlpApplied(true);
+  };
+
+  const origineChamp = (champ) => {
+    const libelle = libelleProvenance(projectData, champ);
+    return libelle ? <small className="aide-champ">{libelle}</small> : null;
   };
 
   const usages = referentiel?.usages || [];
@@ -264,6 +265,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
 
   const visionMaxCount = Math.max(...visionCategories.map((c) => c.count), 1);
   const visionSource = vision?.source;
+  const visionSourceClasse = classeSourceIA(visionSource);
   const visionMessage = vision?.message;
 
   // Bouton de sélection, présent dans tous les états de la zone (avant
@@ -373,6 +375,10 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         )}
       </div>
 
+      {typeAnalyse === 'image' && assistanceDesactivee && !analyzing && (
+        <AssistanceIADesactivee compact className="assistance-ia-image" label="Analyse d'image indisponible : assistance IA désactivée." />
+      )}
+
       <ApercuDXF apercu={dxf} choixEnCours={choixPlanEnCours} onChoisirPlan={choisirPlan}
         reprendreMurs={reprendreMurs} onReprendreMurs={basculerRepriseMurs}
         dallesChoisies={projectData.dallesDxf || []} onDalles={(ids) => updateProjectData({ dallesDxf: ids })} />
@@ -395,8 +401,8 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
               </h4>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: vision.source === 'GEMINI' ? 'var(--accent-soft-border)' : 'var(--status-warn-soft)', color: vision.source === 'GEMINI' ? 'var(--accent)' : 'var(--status-warn)', border: vision.source === 'GEMINI' ? '1px solid var(--accent-soft-border)' : '1px solid var(--status-warn-soft)' }}>
-                Source : {vision.source || 'GEMINI'}
+              <span className={`source-ia source-ia-${visionSourceClasse}`}>
+                {etiquetteSourceIA(visionSource)}
               </span>
               {vision.validation_humaine_requise && (
                 <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', fontStyle: 'italic' }}>
@@ -524,37 +530,27 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
           Saisissez une description en langage naturel du bâtiment. L'assistant extraira automatiquement les paramètres structurels clés.
         </p>
 
-        <textarea
-          className="form-control"
-          rows={3}
-          value={nlpDescription}
-          onChange={(e) => setNlpDescription(e.target.value)}
-          placeholder="Ex. Maison R+1 à usage d'habitation, 2 travées de 4 m en X, 3 travées de 5 m en Y, hauteur d'étage 3 m..."
-          disabled={nlpAnalyzing}
-          style={{ marginBottom: '1rem', width: '100%', resize: 'vertical' }}
-        />
-
-        <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={handleAnalyzeDescription}
-            disabled={nlpAnalyzing || !nlpDescription.trim()}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
-          >
-            {nlpAnalyzing ? (
-              <>
-                <Loader2 size={16} className="spin" />
-                <span>Analyse de la description en cours...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles size={16} />
-                <span>Analyser la description</span>
-              </>
-            )}
-          </button>
-        </div>
+        {assistanceDesactivee ? <AssistanceIADesactivee compact label="Assistance IA désactivée" /> : (
+          <>
+            <textarea
+              className="form-control"
+              rows={3}
+              value={nlpDescription}
+              onChange={(e) => setNlpDescription(e.target.value)}
+              placeholder="Ex. Maison R+1 à usage d'habitation, 2 travées de 4 m en X, 3 travées de 5 m en Y, hauteur d'étage 3 m..."
+              disabled={nlpAnalyzing}
+              style={{ marginBottom: '1rem', width: '100%', resize: 'vertical' }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+              <button type="button" className="btn btn-secondary" onClick={handleAnalyzeDescription}
+                disabled={nlpAnalyzing || !nlpDescription.trim()}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                {nlpAnalyzing ? <><Loader2 size={16} className="spin" /><span>Analyse de la description en cours...</span></>
+                  : <><Sparkles size={16} /><span>Analyser la description</span></>}
+              </button>
+            </div>
+          </>
+        )}
 
         {nlpError && (
           <div style={{ padding: '0.85rem 1rem', borderRadius: '10px', background: 'var(--status-critical-soft)', border: '1px solid var(--status-critical-soft)', marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--status-critical)', fontSize: '0.88rem' }}>
@@ -569,11 +565,9 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
               <h4 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: 'var(--ink-900)' }}>
                 Paramètres détectés
               </h4>
-              {nlpResult.source && (
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '0.25rem 0.6rem', borderRadius: '12px', background: nlpResult.source === 'GEMINI' ? 'var(--accent-soft-border)' : nlpResult.source === 'MOCK' ? 'var(--status-warn-soft)' : 'var(--status-neutral-soft)', color: nlpResult.source === 'GEMINI' ? 'var(--accent)' : nlpResult.source === 'MOCK' ? 'var(--status-warn)' : 'var(--core-border)', border: '1px solid var(--core-border)' }}>
-                  Source : {nlpResult.source === 'GEMINI' ? 'Gemini' : nlpResult.source === 'MOCK' ? 'SIMULATION (non IA)' : 'Analyse automatique indisponible / partielle'}
-                </span>
-              )}
+              <span className={`source-ia source-ia-${classeSourceIA(nlpResult.source)}`}>
+                {etiquetteSourceIA(nlpResult.source)}
+              </span>
             </div>
 
             {/* Ingrédients / Paramètres extraits */}
@@ -594,17 +588,22 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
 
               <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
                 <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Usage du bâtiment</span>
-                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.usage ? 'var(--accent)' : 'var(--ink-500)' }}>
-                  {nlpResult.donnees?.usage || 'Non détecté'}
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.usage_batiment ? 'var(--accent)' : 'var(--ink-500)' }}>
+                  {nlpResult.donnees?.usage_batiment || 'Non détecté'}
                 </span>
               </div>
 
-              <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
-                <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Portée principale</span>
-                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: nlpResult.donnees?.portee_m != null ? 'var(--accent)' : 'var(--ink-500)' }}>
-                  {nlpResult.donnees?.portee_m != null ? `${nlpResult.donnees.portee_m} m` : 'Non détectée'}
-                </span>
-              </div>
+              {['x', 'y'].map((axe) => {
+                const valeur = nlpResult.donnees?.[`portee_${axe}_m`];
+                return (
+                  <div key={axe} style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Portée en {axe.toUpperCase()}</span>
+                    <span style={{ fontWeight: 700, fontSize: '0.95rem', color: valeur != null ? 'var(--accent)' : 'var(--ink-500)' }}>
+                      {valeur != null ? `${valeur} m` : 'Non renseignée'}
+                    </span>
+                  </div>
+                );
+              })}
 
               <div style={{ padding: '0.75rem', borderRadius: '8px', background: 'var(--core-bg)', border: '1px solid var(--status-neutral-soft)' }}>
                 <span style={{ fontSize: '0.75rem', color: 'var(--ink-500)', display: 'block', marginBottom: '0.25rem' }}>Hauteur d'étage</span>
@@ -630,7 +629,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
               ((Array.isArray(nlpResult.donnees_manquantes) && nlpResult.donnees_manquantes.length > 0) ||
                 nlpResult.donnees?.nombre_niveaux == null ||
                 nlpResult.donnees?.usage == null ||
-                nlpResult.donnees?.portee_m == null) && (
+                (nlpResult.donnees?.portee_x_m == null || nlpResult.donnees?.portee_y_m == null)) && (
                 <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'var(--status-warn-soft)', border: '1px solid var(--status-warn-soft)', marginBottom: '1rem', color: 'var(--status-warn)', fontSize: '0.85rem' }}>
                   Certains paramètres n'ont pas pu être déterminés. Complétez-les manuellement avant de poursuivre.
                 </div>
@@ -649,7 +648,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
             )}
 
             {/* Bouton de confirmation d'application (affiché UNIQUEMENT si au moins 1 donnée est exploitable) */}
-            {hasApplicableNlpData(nlpResult.donnees) && (
+            {hasApplicableNlpData(nlpResult.donnees) && nlpResult.preuve_proposition && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
                 <button
                   type="button"
@@ -691,6 +690,7 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
 
         <div className="form-group">
           <label className="form-label" htmlFor="champ-s1-3">Usage principal du bâtiment *</label>
+          {origineChamp('typeUsage')}
           <select id="champ-s1-3" className="form-select" value={projectData.typeUsage || ''}
             onChange={(e) => updateProjectData({ typeUsage: e.target.value })}>
             <option value="">— Choisissez l'usage —</option>
@@ -719,11 +719,13 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
 
         <div className="form-group">
           <label className="form-label" htmlFor="champ-s1-5">Nombre de niveaux *</label>
-          <input id="champ-s1-5" type="number" min="1" step="1" className="form-control" value={projectData.nombreNiveaux ?? ''}
+          {origineChamp('nombreNiveaux')}
+          <input id="champ-s1-5" type="number" min="1" max={referentiel?.limites_structuration?.nb_niveaux_max} step="1" className="form-control" value={projectData.nombreNiveaux ?? ''}
             onChange={(e) => updateProjectData({ nombreNiveaux: e.target.value })} />
         </div>
         <div className="form-group">
           <label className="form-label" htmlFor="champ-s1-6">Hauteur d'étage (m) *</label>
+          {origineChamp('hauteurEtage')}
           <input id="champ-s1-6" type="number" min="0" step="0.01" className="form-control" value={projectData.hauteurEtage ?? ''}
             onChange={(e) => updateProjectData({ hauteurEtage: e.target.value })} />
         </div>
@@ -735,7 +737,8 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         </div>
         <div className="form-group">
           <label className="form-label" htmlFor="champ-s1-8">Portée en X (m) {projectData.ifcImporte || projectData.planArchitecte ? '' : '*'}</label>
-          <input id="champ-s1-8" type="number" min="0" step="0.01" className="form-control" value={projectData.porteeX ?? ''}
+          {origineChamp('porteeX')}
+          <input id="champ-s1-8" type="number" min={referentiel?.limites_structuration?.portee_min_m} max={referentiel?.limites_structuration?.portee_max_m} step="0.01" className="form-control" value={projectData.porteeX ?? ''}
             onChange={(e) => updateProjectData({ porteeX: e.target.value })} />
         </div>
         <div className="form-group">
@@ -745,12 +748,14 @@ export default function Step1_Parametres({ projectData, updateProjectData, assur
         </div>
         <div className="form-group">
           <label className="form-label" htmlFor="champ-s1-10">Portée en Y (m) {projectData.ifcImporte || projectData.planArchitecte ? '' : '*'}</label>
-          <input id="champ-s1-10" type="number" min="0" step="0.01" className="form-control" value={projectData.porteeY ?? ''}
+          {origineChamp('porteeY')}
+          <input id="champ-s1-10" type="number" min={referentiel?.limites_structuration?.portee_min_m} max={referentiel?.limites_structuration?.portee_max_m} step="0.01" className="form-control" value={projectData.porteeY ?? ''}
             onChange={(e) => updateProjectData({ porteeY: e.target.value })} />
         </div>
 
         <div className="form-group">
           <label className="form-label" htmlFor="champ-s1-11">Contrainte admissible du sol (kN/m²)</label>
+          {origineChamp('contrainteSol')}
           <input id="champ-s1-11" type="number" min="25" max="2000" step="1" className="form-control"
             placeholder={referentiel ? `vide = ${referentiel.contrainte_sol_defaut_kn_m2} (hypothèse)` : ''}
             value={projectData.contrainteSol ?? ''} onChange={(e) => updateProjectData({ contrainteSol: e.target.value })} />

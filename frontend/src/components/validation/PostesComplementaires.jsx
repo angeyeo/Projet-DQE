@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { BookOpen, HardHat, Loader2, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { dqeService, formatFCFA } from '../../api/dqeService';
+import { useConsentementGemini, useEtatConsentementGemini } from '../ui/ConsentementGemini';
+import AssistanceIADesactivee from '../ui/AssistanceIADesactivee';
 import useReferentiel from '../../hooks/useReferentiel';
 import Alerte from '../ui/Alerte';
+import { etiquetteSourceIA } from '../ui/sourceIA';
 import { ChampsPrix, partsIncompletes } from '../bibliotheque/BibliothequeOuvrages';
 
 const UNITES = ['forfait', 'ens.', 'u', 'm²', 'm³', 'ml', 'kg', 'jour'];
@@ -12,6 +15,8 @@ const VIDE = { lot: '', mode: 'simple', designation: '', unite: '', quantite: ''
 // Mode simple : quantité et prix SAISIS. Mode ratio : géométrie saisie,
 // quantités calculées par le moteur au DQE avec le barème du cabinet.
 export default function PostesComplementaires({ postes, onAjouter, onSupprimer, erreur }) {
+  const demanderConsentementGemini = useConsentementGemini();
+  const { assistanceDesactivee } = useEtatConsentementGemini();
   const { data: ref, erreur: erreurRef } = useReferentiel();
   const [p, setP] = useState(VIDE);
   const [enCours, setEnCours] = useState(false);
@@ -78,6 +83,7 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
   };
 
   const suggerer = async () => {
+    if (!await demanderConsentementGemini()) return;
     setIa((s) => ({ ...s, chargement: true, erreur: null, info: null }));
     try {
       const res = await dqeService.suggererPosteIA(ia.description.trim());
@@ -89,7 +95,7 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
       setP((x) => ({ ...x, mode: 'simple', designation: s.designation || '', unite: s.unite || '', lot: s.lot_suggere || x.lot }));
       setIa((x) => ({
         ...x, chargement: false,
-        info: `RECOMMANDATION IA (confiance : ${s.confiance ?? 'non précisée'}${res.source === 'MOCK' ? ', SIMULATION non IA' : ''}) : désignation, unité et lot pré-remplis. Quantité et prix restent à saisir et à vérifier.`,
+        info: `RECOMMANDATION IA (${etiquetteSourceIA(res.source)}, confiance : ${s.confiance ?? 'non précisée'}) : désignation, unité et lot pré-remplis. Quantité et prix restent à saisir et à vérifier.`,
       }));
     } catch (err) {
       setIa((x) => ({ ...x, chargement: false, erreur: err.message }));
@@ -144,14 +150,16 @@ export default function PostesComplementaires({ postes, onAjouter, onSupprimer, 
 
       <div className="encart-ia">
         <label className="form-label" htmlFor="poste-ia">Décrire le poste (l'IA propose désignation, unité et lot)</label>
-        <div className="actions-ligne">
-          <input id="poste-ia" className="form-control" maxLength={500} placeholder="ex : installation et repli de chantier"
-            value={ia.description} onChange={(e) => setIa({ ...ia, description: e.target.value })} />
-          <button type="button" className="btn btn-ia" disabled={ia.chargement || !ia.description.trim()} onClick={suggerer}>
-            {ia.chargement ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
-            <span>{ia.chargement ? 'Analyse…' : 'Suggérer'}</span>
-          </button>
-        </div>
+        {assistanceDesactivee ? <AssistanceIADesactivee compact label="Assistance IA désactivée" /> : (
+          <div className="actions-ligne">
+            <input id="poste-ia" className="form-control" maxLength={500} placeholder="ex : installation et repli de chantier"
+              value={ia.description} onChange={(e) => setIa({ ...ia, description: e.target.value })} />
+            <button type="button" className="btn btn-ia" disabled={ia.chargement || !ia.description.trim()} onClick={suggerer}>
+              {ia.chargement ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
+              <span>{ia.chargement ? 'Analyse…' : 'Suggérer'}</span>
+            </button>
+          </div>
+        )}
         {ia.erreur && <p className="texte-erreur">Suggestion IA indisponible : {ia.erreur}</p>}
         {ia.info && <p className="texte-discret">{ia.info}</p>}
       </div>

@@ -1,5 +1,6 @@
 import math
 import re
+from moteur_calcul.validators import valider_contrainte_sol_kn_m2, valider_nb_niveaux, valider_portee
 from projets.models import PosteComplementaire
 
 USAGES_VALIDES = ["HABITATION", "BUREAU", "COMMERCE", "INDUSTRIEL", "AUTRE"]
@@ -66,6 +67,8 @@ def valider_donnees_extraites(data: dict) -> dict:
         "configuration": None,
         "usage": None,
         "portee_m": None,
+        "portee_x_m": None,
+        "portee_y_m": None,
         "hauteur_niveau_m": None,
         "contrainte_sol_kn_m2": None,
         "donnees_manquantes": [],
@@ -81,9 +84,7 @@ def valider_donnees_extraites(data: dict) -> dict:
     nombre_niveaux = data.get("nombre_niveaux")
     if nombre_niveaux is not None:
         val_int = valider_entier(nombre_niveaux, "nombre_niveaux")
-        if val_int < 1 or val_int > 100:
-            raise ValueError("Le nombre de niveaux doit être compris entre 1 et 100.")
-        res["nombre_niveaux"] = val_int
+        res["nombre_niveaux"] = valider_nb_niveaux(val_int)
 
     # 3. Validation croisée entre configuration et nombre_niveaux
     niveaux_config = niveaux_depuis_configuration(res["configuration"])
@@ -108,9 +109,13 @@ def valider_donnees_extraites(data: dict) -> dict:
     portee_m = data.get("portee_m")
     if portee_m is not None:
         val_float = valider_nombre(portee_m, "portee_m")
-        if val_float <= 0:
-            raise ValueError("La portée doit être strictement positive.")
-        res["portee_m"] = val_float
+        res["portee_m"] = valider_portee(val_float)
+
+    # Axes indépendants : aucune déduction depuis la portée générique.
+    for champ in ("portee_x_m", "portee_y_m"):
+        if data.get(champ) is not None:
+            valeur = valider_nombre(data[champ], champ)
+            res[champ] = valider_portee(valeur)
 
     # 5. Validation de hauteur_niveau_m
     hauteur_niveau_m = data.get("hauteur_niveau_m")
@@ -124,9 +129,7 @@ def valider_donnees_extraites(data: dict) -> dict:
     contrainte_sol = data.get("contrainte_sol_kn_m2")
     if contrainte_sol is not None:
         val_float = valider_nombre(contrainte_sol, "contrainte_sol_kn_m2")
-        if val_float <= 0:
-            raise ValueError("La contrainte de sol doit être strictement positive.")
-        res["contrainte_sol_kn_m2"] = val_float
+        res["contrainte_sol_kn_m2"] = valider_contrainte_sol_kn_m2(val_float)
 
     # 7. Données manquantes
     donnees_manquantes = data.get("donnees_manquantes")
@@ -135,7 +138,16 @@ def valider_donnees_extraites(data: dict) -> dict:
     else:
         # Détection automatique si non fourni par le LLM
         for champ in ["nombre_niveaux", "usage", "portee_m"]:
+            if champ == "portee_m" and (res["portee_x_m"] is not None or res["portee_y_m"] is not None):
+                continue
             if res[champ] is None:
+                res["donnees_manquantes"].append(champ)
+
+    # Nouveau contrat directionnel : le LLM ne peut masquer un axe absent
+    # en renvoyant une liste de données manquantes vide.
+    if "portee_x_m" in data or "portee_y_m" in data:
+        for champ in ("portee_x_m", "portee_y_m"):
+            if res[champ] is None and champ not in res["donnees_manquantes"]:
                 res["donnees_manquantes"].append(champ)
 
     # 8. Avertissements
