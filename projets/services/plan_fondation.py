@@ -300,18 +300,20 @@ def _dessiner_legende_types(msp, x_insert, y_insert, titre, types_comptes, layer
 
 def _dessiner_cartouche(msp, x_min, y_min, x_max, y_max, nom_projet=""):
     """
-    Dessine et remplit automatiquement le cartouche technique en bas à droite
-    du plan DXF avec le nom de projet dynamique détecté.
+    Dessine et remplit le cartouche technique en bas à droite
+    avec des coordonnées parfaitement calées pour l'affichage DXF.
     """
-    largeur_cartouche = 9.0
-    hauteur_cartouche = 3.5
+    largeur_cartouche = 10.0
+    hauteur_cartouche = 4.0
     
+    # Positionné proprement en bas à droite du bâtiment
     x_cart = x_max - largeur_cartouche
-    y_cart = y_min - 5.0
+    y_cart = y_min - 6.0
     
     if not msp.doc.layers.has_entry("CARTOUCHE"):
         msp.doc.layers.add(name="CARTOUCHE", color=7)
         
+    # Cadre extérieur du cartouche
     msp.add_lwpolyline(
         [
             (x_cart, y_cart),
@@ -323,22 +325,24 @@ def _dessiner_cartouche(msp, x_min, y_min, x_max, y_max, nom_projet=""):
         dxfattribs={"layer": "CARTOUCHE"}
     )
     
-    msp.add_line((x_cart, y_cart + 2.5), (x_cart + largeur_cartouche, y_cart + 2.5), dxfattribs={"layer": "CARTOUCHE"})
-    msp.add_line((x_cart, y_cart + 1.5), (x_cart + largeur_cartouche, y_cart + 1.5), dxfattribs={"layer": "CARTOUCHE"})
+    # Lignes de séparation horizontales internes
+    msp.add_line((x_cart, y_cart + 2.6), (x_cart + largeur_cartouche, y_cart + 2.6), dxfattribs={"layer": "CARTOUCHE"})
+    msp.add_line((x_cart, y_cart + 1.3), (x_cart + largeur_cartouche, y_cart + 1.3), dxfattribs={"layer": "CARTOUCHE"})
     
     titre_projet = f"PROJET : {nom_projet.upper()}" if nom_projet else "PROJET : BÂTIMENT / STRUCTURE"
     
+    # Textes positionnés à l'intérieur des cases du cartouche
     msp.add_text(
         titre_projet,
-        dxfattribs={"layer": "CARTOUCHE", "height": 0.25, "insert": (x_cart + 0.2, y_cart + 2.8)}
+        dxfattribs={"layer": "CARTOUCHE", "height": 0.3, "insert": (x_cart + 0.3, y_cart + 3.1)}
     )
     msp.add_text(
-        "ELEMENT : PLAN DE FONDATION & COFFRAGE GENERAL",
-        dxfattribs={"layer": "CARTOUCHE", "height": 0.18, "insert": (x_cart + 0.2, y_cart + 1.8)}
+        "ELEMENT : PLAN DE FONDATION & COFFRAGE",
+        dxfattribs={"layer": "CARTOUCHE", "height": 0.2, "insert": (x_cart + 0.3, y_cart + 1.7)}
     )
     msp.add_text(
-        "CABINET : BTP INNOVATION IVOIRE -- CONFORME BAEL 91",
-        dxfattribs={"layer": "CARTOUCHE", "height": 0.16, "insert": (x_cart + 0.2, y_cart + 0.6)}
+        "CABINET : BTP INNOVATION -- BAEL 91",
+        dxfattribs={"layer": "CARTOUCHE", "height": 0.18, "insert": (x_cart + 0.3, y_cart + 0.5)}
     )
 
 
