@@ -66,7 +66,13 @@ class NoteDeCalcul(APITestCase):
         return next(f for g in note["groupes"] for f in g["elements"] if f["identifiant"] == identifiant)
 
     def test_cas_de_reference_poteau_recalcule_a_la_main(self):
-        f = self.fiche(self.note(), "P_0_0")
+        note_legacy = self.note()
+        f = self.fiche(note_legacy, "P_0_0")
+        note_v1 = self.client.get(
+            f"/api/v1/projets/{self.projet.id}/note-calcul/", {"format": "json"},
+        )
+        self.assertEqual(note_v1.status_code, 200, note_v1.data)
+        self.assertEqual(note_v1.data, note_legacy)
         s = (0 / 2 + 4 / 2) * (0 / 2 + 4 / 2)
         g = 2 * (s * 5 + 2 * (4 / 2) * 0.20 * 0.50 * 25 + 0.20 ** 2 * 3 * 25)
         q = s * 1.5 + s * 1.5

@@ -36,10 +36,26 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiResponse, extend_schema
+
+from api.schema import (
+    ActivationRequest,
+    ConfirmationReinitialisationRequest,
+    ConsentementIAProfilResponse,
+    DecisionConsentementRequest,
+    DemandeReinitialisationRequest,
+    InscriptionRequest,
+    InvitationRequest,
+    LogoutRequest,
+    MotDePasseRequest,
+    ProfilMembreResponse,
+)
 
 from .models import EvenementProduit, Profil, EntrepriseParametres
 from .services.evenements import enregistrer_evenement
 from .permissions import EstAdminEntreprise
+from .services.assistant_ia.consentement import CONSENTEMENT_VERSION, enregistrer_consentement
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +98,8 @@ def _envoyer_email(destinataire: str, sujet: str, template_base: str, contexte: 
         return False
 
 
-def _profil_serialise(profil: Profil) -> dict:
-    return {
+def _profil_serialise(profil: Profil, inclure_consentement: bool = False) -> dict:
+    resultat = {
         "id": profil.utilisateur_id,
         "username": profil.utilisateur.username,
         "email": profil.utilisateur.email,
@@ -93,6 +109,15 @@ def _profil_serialise(profil: Profil) -> dict:
         "entreprise_id": profil.entreprise_id,
         "date_creation": profil.date_creation,
     }
+    if inclure_consentement:
+        resultat["consentement_ia"] = profil.consentement_ia
+        resultat["consentement_ia_version"] = profil.consentement_ia_version
+        resultat["consentement_ia_date"] = profil.consentement_ia_date
+        resultat["consentement_ia_valide"] = (
+            profil.consentement_ia == Profil.ConsentementIA.ACCEPTE
+            and profil.consentement_ia_version == CONSENTEMENT_VERSION
+        )
+    return resultat
 
 
 class InscriptionEntrepriseView(APIView):
@@ -107,6 +132,10 @@ class InscriptionEntrepriseView(APIView):
 
     permission_classes = [AllowAny]
 
+    @extend_schema(auth=[], request=InscriptionRequest, responses={
+        201: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Profil et jetons créés."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Erreurs par champ."),
+    }, tags=["Comptes"])
     def post(self, request):
         nom_entreprise = (request.data.get("nom_entreprise") or "").strip()
         username = (request.data.get("username") or request.data.get("email") or "").strip()
@@ -174,6 +203,10 @@ class InviterUtilisateurView(APIView):
 
     permission_classes = [IsAuthenticated, EstAdminEntreprise]
 
+    @extend_schema(request=InvitationRequest, responses={
+        201: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Compte et lien d'activation."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Données invalides."),
+    }, tags=["Comptes"])
     def post(self, request):
         email = (request.data.get("email") or "").strip()
         role = (request.data.get("role") or Profil.Role.TECHNICIEN).strip()
@@ -234,6 +267,10 @@ class ActiverCompteView(APIView):
 
     permission_classes = [AllowAny]
 
+    @extend_schema(auth=[], request=ActivationRequest, responses={
+        200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Compte activé."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Lien ou mot de passe invalide."),
+    }, tags=["Comptes"])
     def post(self, request):
         uid = request.data.get("uid") or ""
         token = request.data.get("token") or ""
@@ -273,11 +310,37 @@ class MoiView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses={
+        200: OpenApiResponse(response=ConsentementIAProfilResponse, description="Profil du compte et état du consentement T12."),
+        404: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Profil absent."),
+    }, tags=["Comptes"])
     def get(self, request):
         profil = getattr(request.user, "profil", None)
         if profil is None:
             return Response({"detail": "Aucun profil pour cet utilisateur."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(_profil_serialise(profil))
+        return Response(_profil_serialise(profil, inclure_consentement=True))
+
+
+class ConsentementIAView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=DecisionConsentementRequest, responses={
+        200: OpenApiResponse(response=ConsentementIAProfilResponse, description="Choix individuel et version du consentement."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Décision invalide."),
+        404: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Profil absent."),
+    }, tags=["Consentement IA"])
+    def post(self, request):
+        profil = getattr(request.user, "profil", None)
+        if profil is None:
+            return Response({"detail": "Aucun profil pour cet utilisateur."}, status=status.HTTP_404_NOT_FOUND)
+        decision = str(request.data.get("decision") or "").strip().lower()
+        if decision not in {"accepte", "refuse"}:
+            return Response(
+                {"detail": "La décision doit être 'accepte' ou 'refuse'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        enregistrer_consentement(profil, decision)
+        return Response(_profil_serialise(profil, inclure_consentement=True), status=status.HTTP_200_OK)
 
 
 class MembresEntrepriseView(APIView):
@@ -287,6 +350,7 @@ class MembresEntrepriseView(APIView):
 
     permission_classes = [IsAuthenticated, EstAdminEntreprise]
 
+    @extend_schema(responses={200: OpenApiResponse(response=ProfilMembreResponse(many=True), description="Profils du cabinet courant.")}, tags=["Comptes"])
     def get(self, request):
         entreprise = request.user.profil.entreprise
         profils = Profil.objects.filter(entreprise=entreprise).select_related("utilisateur")
@@ -301,6 +365,11 @@ class DesactiverUtilisateurView(APIView):
 
     permission_classes = [IsAuthenticated, EstAdminEntreprise]
 
+    @extend_schema(request=None, responses={
+        200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Profil désactivé."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Auto-désactivation refusée."),
+        404: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Membre absent du cabinet."),
+    }, tags=["Comptes"])
     def post(self, request, user_id):
         entreprise = request.user.profil.entreprise
         try:
@@ -326,6 +395,10 @@ class ChangerMotDePasseView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=MotDePasseRequest, responses={
+        200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Mot de passe modifié."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Mot de passe actuel ou nouveau invalide."),
+    }, tags=["Comptes"])
     def post(self, request):
         ancien = request.data.get("ancien_mot_de_passe") or ""
         nouveau = request.data.get("nouveau_mot_de_passe") or ""
@@ -353,6 +426,10 @@ class DemanderReinitialisationView(APIView):
 
     permission_classes = [AllowAny]
 
+    @extend_schema(auth=[], request=DemandeReinitialisationRequest, responses={
+        200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Réponse identique pour compte connu ou inconnu."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Corps invalide."),
+    }, tags=["Comptes"])
     def post(self, request):
         email = (request.data.get("email") or "").strip()
         user = User.objects.filter(email=email, is_active=True).first()
@@ -402,6 +479,10 @@ class ConfirmerReinitialisationView(APIView):
 
     permission_classes = [AllowAny]
 
+    @extend_schema(auth=[], request=ConfirmationReinitialisationRequest, responses={
+        200: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Mot de passe réinitialisé."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Lien ou mot de passe invalide."),
+    }, tags=["Comptes"])
     def post(self, request):
         uid = request.data.get("uid") or ""
         token = request.data.get("token") or ""
@@ -435,6 +516,10 @@ class LogoutView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=LogoutRequest, responses={
+        205: OpenApiResponse(description="Jeton de renouvellement révoqué."),
+        400: OpenApiResponse(response=OpenApiTypes.OBJECT, description="Jeton absent ou invalide."),
+    }, tags=["Comptes"])
     def post(self, request):
         refresh_token = request.data.get("refresh")
         if not refresh_token:

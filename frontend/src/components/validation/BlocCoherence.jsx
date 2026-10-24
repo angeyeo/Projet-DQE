@@ -1,7 +1,10 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from 'react';
 import { Activity, Info, Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import { dqeService } from '../../api/dqeService';
+import { useConsentementGemini, useEtatConsentementGemini } from '../ui/ConsentementGemini';
+import AssistanceIADesactivee from '../ui/AssistanceIADesactivee';
 import Alerte from '../ui/Alerte';
+import { etiquetteSourceIA } from '../ui/sourceIA';
 
 const STATUTS_AVEC_EXPLICATION_IA = ['CRITIQUE', 'ATTENTION', 'INFORMATION'];
 
@@ -25,13 +28,13 @@ const RESUME = [
   ['calculs_non_disponibles', 'Sans résultat', 'neutre'],
 ];
 
-const SOURCES_IA = { GEMINI: 'Source : Gemini', MOCK: 'SIMULATION (non IA)' };
-
 // Contrôle de cohérence DÉTERMINISTE (serveur), plus explication IA à la
 // demande. L'IA explique un signal existant ; elle ne calcule rien et ne
 // modifie aucune valeur. `ref.recharger()` relance l'analyse (après une
 // validation ou un déverrouillage).
 const BlocCoherence = forwardRef(function BlocCoherence({ projetId }, ref) {
+  const demanderConsentementGemini = useConsentementGemini();
+  const { assistanceDesactivee } = useEtatConsentementGemini();
   const [donnees, setDonnees] = useState(null);
   const [chargement, setChargement] = useState(false);
   const [erreur, setErreur] = useState(null);
@@ -55,6 +58,7 @@ const BlocCoherence = forwardRef(function BlocCoherence({ projetId }, ref) {
   useEffect(() => { recharger(); }, [recharger]);
 
   const expliquer = async (elementId) => {
+    if (!await demanderConsentementGemini()) return;
     setExplications((p) => ({ ...p, [elementId]: { chargement: true } }));
     try {
       const res = await dqeService.expliquerCoherenceElement(elementId);
@@ -70,6 +74,7 @@ const BlocCoherence = forwardRef(function BlocCoherence({ projetId }, ref) {
 
   return (
     <section className="bloc-coherence" aria-labelledby="titre-coherence">
+      <AssistanceIADesactivee compact />
       <div className="bloc-entete">
         <div className="bloc-titre">
           <Activity size={22} color="var(--accent)" aria-hidden="true" />
@@ -132,7 +137,7 @@ const BlocCoherence = forwardRef(function BlocCoherence({ projetId }, ref) {
               {STATUTS_AVEC_EXPLICATION_IA.includes(el.statut_analyse) && (
                 <div className="explication-ia">
                   {!expl?.res && (
-                    <button type="button" className="btn btn-ia btn-compact" disabled={expl?.chargement} onClick={() => expliquer(el.element_id)}>
+                    <button type="button" className="btn btn-ia btn-compact" disabled={expl?.chargement || assistanceDesactivee} onClick={() => expliquer(el.element_id)}>
                       {expl?.chargement ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
                       <span>{expl?.chargement ? 'Explication…' : expl?.erreur ? 'Réessayer' : "Expliquer avec l'IA"}</span>
                     </button>
@@ -142,7 +147,7 @@ const BlocCoherence = forwardRef(function BlocCoherence({ projetId }, ref) {
                     <div className="explication-ia-corps">
                       <div className="explication-ia-entete">
                         <span><Sparkles size={14} aria-hidden="true" /> RECOMMANDATION IA — n'est pas une donnée calculée</span>
-                        {SOURCES_IA[expl.res.source_explication] && <span className="type-donnee">{SOURCES_IA[expl.res.source_explication]}</span>}
+                        <span className="type-donnee">{etiquetteSourceIA(expl.res.source_explication)}</span>
                       </div>
                       <p>{expl.res.explication_ia || "L'explication IA n'est pas disponible ; le contrôle ci-dessus reste valable."}</p>
                       {expl.res.validation_humaine_requise && (

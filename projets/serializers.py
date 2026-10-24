@@ -1,6 +1,8 @@
 from decimal import ROUND_HALF_UP, Decimal
 
 from rest_framework import serializers
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 
 from .services.decomposition_prix import verifier_decomposition
 
@@ -8,7 +10,11 @@ import re
 
 from moteur_calcul.constantes import CHARGES_EXPLOITATION, POIDS_MURS_MAX_KN_M2, POURCENTAGE_BAIES_MAX
 from moteur_calcul.hypotheses import resoudre_charge_permanente
-from moteur_calcul.validators import EntreeInvalide, valider_contrainte_sol_kn_m2
+from moteur_calcul.validators import (
+    EntreeInvalide,
+    valider_contrainte_sol_kn_m2,
+    valider_nb_niveaux,
+)
 
 from .models import (
     Projet,
@@ -129,6 +135,7 @@ class PosteComplementaireSerializer(serializers.ModelSerializer):
         # Le lot peut venir de l'ouvrage de la bibliothèque (voir validate).
         extra_kwargs = {"lot": {"required": False}}
 
+    @extend_schema_field(serializers.IntegerField(allow_null=True))
     def get_montant(self, obj):
         if obj.mode != PosteComplementaire.Mode.SIMPLE or obj.quantite is None or obj.prix_unitaire is None:
             return None
@@ -221,6 +228,7 @@ class OuvrageTypeSerializer(serializers.ModelSerializer):
                   "prix_main_oeuvre", "source_prix", "date_prix", "nb_postes", "date_modification")
         read_only_fields = ("date_modification",)
 
+    @extend_schema_field(OpenApiTypes.INT)
     def get_nb_postes(self, obj):
         annote = getattr(obj, "nb_postes_annote", None)
         return annote if annote is not None else obj.postes.count()
@@ -270,6 +278,8 @@ MAX_ETAGES_MURS = 60  # étages R+2 et plus ayant un plan des murs propre
 
 
 class ProjetSerializer(serializers.ModelSerializer):
+    acceptations_ia = serializers.DictField(
+        child=serializers.CharField(max_length=10000), write_only=True, required=False)
     elements = ElementStructurelSerializer(many=True, read_only=True)
     couches_charges = CoucheChargeSerializer(many=True, read_only=True)
     postes_complementaires = PosteComplementaireSerializer(many=True, read_only=True)
@@ -284,7 +294,47 @@ class ProjetSerializer(serializers.ModelSerializer):
         # l'utilisateur connecté : jamais modifiables par le client (avant,
         # un utilisateur pouvait déplacer un projet dans un autre cabinet).
         read_only_fields = ("entreprise", "cree_par", "plan_fondation_valide", "fichier_import_origine",
-                            "parametres_import", "source_structure", "poteaux_saisis")
+                            "parametres_import", "source_structure", "poteaux_saisis",
+                            "provenance_parametres")
+
+    def _valider_provenance(self, attrs):
+        from .services.assistant_ia.provenance import verifier_acceptations
+
+        if "provenance_parametres" in self.initial_data:
+            raise serializers.ValidationError(
+                {"provenance_parametres": "Métadonnées réservées au serveur."}
+            )
+        acceptations = attrs.pop("acceptations_ia", {})
+        user = getattr(self.context.get("request"), "user", None)
+        if acceptations and not getattr(user, "is_authenticated", False):
+            raise serializers.ValidationError(
+                {"acceptations_ia": "Authentification requise."}
+            )
+        self._preuves_ia = verifier_acceptations(acceptations, attrs, user)
+        return attrs
+
+    def create(self, validated_data):
+        from .services.assistant_ia.provenance import construire_provenance
+
+        user = getattr(self.context.get("request"), "user", None)
+        if getattr(user, "is_authenticated", False):
+            validated_data["provenance_parametres"] = construire_provenance(
+                None, validated_data, self._preuves_ia, user
+            )
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        from django.db import transaction
+        from .services.assistant_ia.provenance import construire_provenance
+
+        with transaction.atomic():
+            instance = Projet.objects.select_for_update().get(pk=instance.pk)
+            user = getattr(self.context.get("request"), "user", None)
+            if getattr(user, "is_authenticated", False):
+                validated_data["provenance_parametres"] = construire_provenance(
+                    instance, validated_data, self._preuves_ia, user
+                )
+            return super().update(instance, validated_data)
 
     def validate_usage_batiment(self, usage):
         if usage and usage not in CHARGES_EXPLOITATION:
@@ -296,6 +346,14 @@ class ProjetSerializer(serializers.ModelSerializer):
     def validate_contrainte_sol_kn_m2(self, valeur):
         try:
             return valider_contrainte_sol_kn_m2(valeur)
+        except EntreeInvalide as exc:
+            raise serializers.ValidationError(str(exc))
+
+    def validate_nb_niveaux(self, valeur):
+        if valeur is None:
+            return None
+        try:
+            return valider_nb_niveaux(valeur)
         except EntreeInvalide as exc:
             raise serializers.ValidationError(str(exc))
 
@@ -339,11 +397,13 @@ class ProjetSerializer(serializers.ModelSerializer):
                 f"La part des baies doit être comprise entre 0 et {POURCENTAGE_BAIES_MAX:g} %.")
         return valeur
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_hypotheses_calcul(self, obj):
         from .services.parametres_projet import messages_hypotheses
 
         return messages_hypotheses(obj)
 
+    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
     def get_alertes_plausibilite(self, obj):
         from moteur_calcul.plausibilite import controler_projet
 
@@ -368,7 +428,7 @@ class ProjetSerializer(serializers.ModelSerializer):
             v = attrs.get(champ)
             if v is not None and v <= 0:
                 raise serializers.ValidationError({champ: f"La {libelle} doit être strictement positive."})
-        return attrs
+        return self._valider_provenance(attrs)
 
 
 class ProjetResumeSerializer(serializers.ModelSerializer):
@@ -387,11 +447,13 @@ class ProjetResumeSerializer(serializers.ModelSerializer):
             "nb_elements", "nb_elements_valides", "cree_par_nom", "statut",
         )
 
+    @extend_schema_field(OpenApiTypes.STR)
     def get_statut(self, obj):
         from .services.parametres_projet import statut_projet
 
         return statut_projet(obj.nb_elements, obj.nb_elements_valides, bool(getattr(obj, "a_dqe", False)))
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_cree_par_nom(self, obj):
         u = obj.cree_par
         if u is None:

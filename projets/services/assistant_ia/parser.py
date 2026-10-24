@@ -54,6 +54,8 @@ def structurer_description_projet(description: str) -> dict:
             # frontend n'a pas à deviner la correspondance.
             "usage_batiment": _usage_canonique(validated_data["usage"]),
             "portee_m": validated_data["portee_m"],
+            "portee_x_m": validated_data["portee_x_m"],
+            "portee_y_m": validated_data["portee_y_m"],
             "hauteur_niveau_m": validated_data["hauteur_niveau_m"],
             "contrainte_sol_kn_m2": validated_data["contrainte_sol_kn_m2"],
         },

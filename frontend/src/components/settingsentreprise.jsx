@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Building2, UploadCloud, Save, Loader2, Image as ImageIcon, Coins } from 'lucide-react';
 import { dqeService } from '../api/dqeService';
+import { useEtatConsentementGemini } from './ui/ConsentementGemini';
 import useReferentiel from '../hooks/useReferentiel';
 import Alerte from './ui/Alerte';
 import ParametresApprovisionnement from './parametres/ParametresApprovisionnement';
@@ -26,7 +27,8 @@ const uniteDeCle = (cle) => {
   return { m3: 'FCFA / m³', m2: 'FCFA / m²', kg: 'FCFA / kg', ml: 'FCFA / ml', u: 'FCFA / u' }[suffixe] || 'FCFA';
 };
 
-export default function SettingsEntreprise({ estAdmin }) {
+export default function SettingsEntreprise({ estAdmin, moi, onConsentementChange }) {
+  const { activerConsentementGemini } = useEtatConsentementGemini();
   const { data: referentiel, erreur: erreurReferentiel } = useReferentiel();
   const [champs, setChamps] = useState(CHAMPS_VIDES);
   const [prix, setPrix] = useState({});
@@ -44,6 +46,8 @@ export default function SettingsEntreprise({ estAdmin }) {
   const [enregistrement, setEnregistrement] = useState(false);
   const [erreur, setErreur] = useState(null);
   const [succes, setSucces] = useState(false);
+  const [consentementEnCours, setConsentementEnCours] = useState(false);
+  const [erreurConsentement, setErreurConsentement] = useState(null);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -201,6 +205,25 @@ export default function SettingsEntreprise({ estAdmin }) {
   const parOuvrage = referentiel?.cles_prix_par_ouvrage || [];
   const reference = referentiel?.prix_reference;
   const manquants = clesPrix.filter(({ cle }) => prix[cle] === undefined || prix[cle] === null || prix[cle] === '');
+
+  const modifierConsentement = async (decision) => {
+    setConsentementEnCours(true);
+    setErreurConsentement(null);
+    try {
+      if (decision === 'accepte') {
+        // Le composant partagé présente l'information puis enregistre le choix.
+        // Une fermeture ou un refus renvoie false et ne réactive pas l'IA.
+        await activerConsentementGemini();
+        return;
+      }
+      const profil = await dqeService.enregistrerConsentementIA(decision);
+      onConsentementChange?.(profil);
+    } catch (err) {
+      setErreurConsentement(err.message);
+    } finally {
+      setConsentementEnCours(false);
+    }
+  };
 
   // Pré-remplissage EXPLICITE (bouton) avec le barème de référence documenté,
   // uniquement pour les champs vides. Rien n'est enregistré sans « Enregistrer ».
@@ -424,6 +447,21 @@ export default function SettingsEntreprise({ estAdmin }) {
 
       <ParametresApprovisionnement referentiel={referentiel} params={paramsAppro} onParam={handleParamAppro}
         prix={prix} onPrix={handlePrix} origines={origines} onPreremplir={preremplirMateriaux} estAdmin={estAdmin} />
+
+      <section className="parametres-ia-utilisateur" aria-labelledby="titre-assistance-intelligente">
+        <h2 id="titre-assistance-intelligente">Assistance intelligente DQE</h2>
+        <p className="texte-discret">Votre choix est personnel et s'applique à vos appels IA sur tous vos projets.</p>
+        <p><strong>État actuel :</strong> {moi?.consentement_ia === 'accepte' && moi?.consentement_ia_valide ? 'Activée' : moi?.consentement_ia === 'refuse' ? 'Désactivée' : 'Non configurée'}</p>
+        {erreurConsentement && <Alerte type="erreur">{erreurConsentement}</Alerte>}
+        <div className="actions-ligne">
+          <button type="button" className="btn btn-primary" disabled={consentementEnCours || (moi?.consentement_ia === 'accepte' && moi?.consentement_ia_valide)} onClick={() => modifierConsentement('accepte')}>
+            {consentementEnCours ? 'Enregistrement…' : 'Activer l’assistance IA'}
+          </button>
+          <button type="button" className="btn btn-secondary" disabled={consentementEnCours || moi?.consentement_ia !== 'accepte'} onClick={() => modifierConsentement('refuse')}>
+            Désactiver l’assistance IA
+          </button>
+        </div>
+      </section>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
         <button type="button" className="btn btn-primary" onClick={handleEnregistrer} disabled={enregistrement || !estAdmin}>

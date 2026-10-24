@@ -51,6 +51,26 @@ class ModifierPoteaux(APITestCase):
         self.assertEqual(self.projet.source_structure, Projet.SourceStructure.MIXTE)
         self.assertTrue(any(h.startswith("Structure modifiée par l'utilisateur : 3 poteau(x)") for h in r.data["hypotheses"]))
 
+    def test_modifier_poteaux_v1_persiste_les_nouveaux_poteaux(self):
+        projet_v1 = Projet.objects.create(
+            nom="Villa API v1", entreprise=self.cabinet, usage_batiment="habitation", nb_niveaux=2,
+            hauteur_etage=3.0, contrainte_sol_kn_m2=150, nb_travees_x=2, nb_travees_y=2,
+            portee_x=4.0, portee_y=4.0,
+        )
+        self.assertEqual(
+            self.client.post(f"/api/v1/projets/{projet_v1.id}/generer_trame/").status_code, 201,
+        )
+        response = self.client.post(
+            f"/api/v1/projets/{projet_v1.id}/modifier_poteaux/",
+            {"poteaux": TRAME + [{"x": 0, "y": 12}, {"x": 4, "y": 12}, {"x": 8, "y": 12}]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["poteaux"], {"total": 12, "saisis": 3, "conserves": 9})
+        projet_v1.refresh_from_db()
+        self.assertEqual(projet_v1.source_structure, Projet.SourceStructure.MIXTE)
+        self.assertEqual(projet_v1.elements.filter(type_element=T.POTEAU).count(), 12)
+
     def test_deplacement_et_suppression(self):
         # La file x = 8 est déplacée en x = 9 : seconde travée de 5 m, poteaux déplacés « saisi ».
         deplaces = [t if t["x"] < 8 else {"x": 9.0, "y": t["y"]} for t in TRAME]

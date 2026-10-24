@@ -22,6 +22,7 @@ import ProjetDashboard from './components/dashboards/ProjetDashboard';
 import StaffDashboard from './components/dashboards/StaffDashboard';
 import Alerte from './components/ui/Alerte';
 import AucunProjet from './components/ui/AucunProjet';
+import { ConsentementGeminiProvider } from './components/ui/ConsentementGemini';
 import { dqeService, projetVersFormulaire } from './api/dqeService';
 import useProjetCourant from './hooks/useProjetCourant';
 
@@ -133,6 +134,12 @@ export default function App() {
     courant.fermer();
     setMoi(null);
     setActiveView('landing');
+  };
+
+  const enregistrerConsentementIA = async (decision) => {
+    const profil = await dqeService.enregistrerConsentementIA(decision);
+    setMoi((precedent) => ({ ...(precedent || {}), ...profil }));
+    return profil;
   };
 
   // --- Formulaire du projet (miroir éditable des données serveur) ----------
@@ -430,7 +437,7 @@ export default function App() {
           />
         );
       case 'settingsEntreprise':
-        return <SettingsEntreprise estAdmin={moi?.role === 'admin'} />;
+        return <SettingsEntreprise estAdmin={moi?.role === 'admin'} moi={moi} onConsentementChange={(profil) => setMoi((precedent) => ({ ...(precedent || {}), ...profil }))} />;
       case 'bibliotheque':
         return <BibliothequeOuvrages peutModifier={moi?.role === 'admin' || moi?.role === 'ingenieur'} />;
       case 'equipe':
@@ -441,7 +448,8 @@ export default function App() {
   };
 
   return (
-    <div className="app-layout">
+    <ConsentementGeminiProvider consentement={moi} onEnregistrer={enregistrerConsentementIA}>
+      <div className="app-layout">
       <Sidebar
         activeView={activeView}
         setActiveView={naviguer}
@@ -475,6 +483,7 @@ export default function App() {
           {contenu()}
         </main>
       </div>
-    </div>
+      </div>
+    </ConsentementGeminiProvider>
   );
 }

@@ -29,6 +29,12 @@ try:
             break
 
         description_clean = description.strip()
+        print("\nPour cette analyse, DQE transmettra la description à Google Gemini.")
+        print("Assurez-vous d'être autorisé à transmettre ces informations.")
+        print("Le résultat est une proposition à vérifier par un ingénieur.")
+        if input("Acceptez-vous cette transmission ? Tapez OUI pour continuer :\n> ").strip().upper() != "OUI":
+            print("Transmission refusée : aucune donnée n'a été envoyée à Gemini.")
+            continue
         print("\n[Gemini] Analyse en cours...")
 
         try:
@@ -37,16 +43,6 @@ try:
             print(json.dumps(res, indent=2, ensure_ascii=False))
         except Exception as e:
             print(f"\n[Erreur] L'appel à l'API Gemini a échoué : {e}")
-            # Tentative de récupération et affichage de la réponse brute pour débugger
-            try:
-                from projets.services.assistant_ia.client import get_ai_client
-                from projets.services.assistant_ia.prompts import PROMPT_STRUCTURATION
-                client = get_ai_client()
-                prompt = PROMPT_STRUCTURATION.format(description=description_clean)
-                raw = client.appeler_llm(prompt, forcer_json=True)
-                print(f"[Debug] Réponse brute du LLM :\n{raw}")
-            except Exception as debug_e:
-                print(f"[Debug] Impossible de récupérer la réponse brute : {debug_e}")
 
         # Petite pause pour éviter de dépasser le quota de requêtes par minute
         time.sleep(2)

@@ -3,7 +3,21 @@ import re
 import json
 import urllib.request
 import urllib.error
+from contextvars import ContextVar
 from abc import ABC, abstractmethod
+
+_last_usage_ctx = ContextVar("last_ai_usage", default=None)
+
+
+def get_last_usage():
+    return _last_usage_ctx.get()
+
+
+def pop_last_usage():
+    usage = _last_usage_ctx.get()
+    _last_usage_ctx.set(None)
+    return usage
+
 
 class LLMServiceError(Exception):
     """Exception levée en cas de défaillance contrôlée du service LLM externe."""
@@ -227,9 +241,12 @@ class GeminiAIClient(BaseAIClient):
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
+        self.last_usage = None
 
     def _executer_requete(self, req: urllib.request.Request) -> str:
         max_bytes = int(os.getenv("LLM_MAX_RESPONSE_BYTES", "65536"))
+        self.last_usage = None
+        _last_usage_ctx.set(None)
 
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
@@ -241,6 +258,15 @@ class GeminiAIClient(BaseAIClient):
                         status_code=502
                     )
                 res_data = json.loads(raw_bytes.decode("utf-8"))
+                usage = res_data.get("usageMetadata", {})
+                self.last_usage = {
+                    "modele": self.model,
+                    "tokens_entree": usage.get("promptTokenCount"),
+                    "tokens_sortie": usage.get("candidatesTokenCount"),
+                    "tokens_reflexion": usage.get("thoughtsTokenCount"),
+                    "tokens_total": usage.get("totalTokenCount"),
+                }
+                _last_usage_ctx.set(self.last_usage)
                 text = res_data["candidates"][0]["content"]["parts"][0]["text"]
                 return text
         except LLMServiceError:
@@ -318,6 +344,7 @@ class GeminiAIClient(BaseAIClient):
             raise ValueError("Les données de l'image doivent être de type bytes.")
         if not image_bytes:
             raise ValueError("L'image ne doit pas être vide.")
+        mime_type = str(mime_type).strip().lower()
         if mime_type not in {"image/jpeg", "image/png"}:
             raise ValueError(f"Type MIME '{mime_type}' non supporté. Types autorisés : image/jpeg, image/png")
 
@@ -334,13 +361,19 @@ class GeminiAIClient(BaseAIClient):
                         "inlineData": {
                             "mimeType": mime_type,
                             "data": encoded_data
+                        },
+                        "mediaResolution": {
+                            "level": "MEDIA_RESOLUTION_MEDIUM"
                         }
                     }
                 ]
             }]
         }
+        payload["generationConfig"] = {
+            "thinkingConfig": {"thinkingLevel": "minimal"}
+        }
         if forcer_json:
-            payload["generationConfig"] = {"responseMimeType": "application/json"}
+            payload["generationConfig"]["responseMimeType"] = "application/json"
 
         req_data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
