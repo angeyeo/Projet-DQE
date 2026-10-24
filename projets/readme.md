@@ -46,7 +46,7 @@ FRONTEND_URL=https://www.ivoireinnovationbtp.com    # ou http://localhost:5173 e
 
 - `EMAIL_HOST_PASSWORD` doit être un **mot de passe d'application** Gmail (généré sur `myaccount.google.com/apppasswords`, nécessite la validation en 2 étapes), pas le mot de passe du compte.
 - Tant qu'`EMAIL_HOST` n'est pas renseigné, l'app retombe automatiquement sur l'ancien comportement (lien affiché à l'écran, aucun email réel) -- rien ne casse en local si vous ne configurez rien.
-- **En production (Railway)**, ces variables doivent être ajoutées dans les Environment Variables de Railway, pas seulement dans le `.env` local.
+- **En production**, ces variables doivent être déclarées chez l'hébergeur, pas seulement dans le `.env` local.
 
 ### Ce qui a changé côté code
 

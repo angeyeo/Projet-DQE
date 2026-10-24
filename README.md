@@ -232,11 +232,16 @@ frontend/src/
 
 ## Déploiement
 
-- **Plateforme** : Railway (voir `RAILWAY_DEPLOYMENT.md`). Le `Procfile` lance, dans l'ordre :
+- **Hébergement** : pas encore choisi (l'application n'est pas en production). Le `Procfile` décrit le lancement
+  standard, valable chez tout hébergeur qui le lit :
 
   ```
-  python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT
+  python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT --timeout 120
   ```
+
+  `--timeout 120` : la lecture d'un plan de 50 Mo dépasse le délai par défaut de gunicorn (30 s), issue #90.
+- **Fichiers déposés** (`media/` : plans, logos) : stockés sur le disque du serveur. L'hébergement retenu devra
+  offrir un disque **persistant** (ou un stockage de fichiers), sinon ils sont perdus à chaque redéploiement.
 
 - **Variables de production** : `DEBUG=False`, `SECRET_KEY`, `DATABASE_URL` (PostgreSQL), `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS`, SMTP et Gemini.
 - **Contrôle avant mise en ligne** :
@@ -283,12 +288,11 @@ frontend/src/
 
 | Limite | Issue |
 |---|---|
-| Fichiers de `media/` (plans de clients) encore suivis par git | #61 |
-| Acier des poteaux, poutres et dalles estimé par ratio ; acier des chaînages mal étiqueté « calculé » | #63 |
-| Poutres continues calculées comme isostatiques (méthode de Caquot codée mais non branchée) | #68 |
-| Maçonnerie et enduit pas encore tirés du plan des murs | #73 |
-| Pas de variantes pour un plan importé ; dalles non lues dans les DXF | — |
-| Pas de calcul de main-d'œuvre ni de déboursés détaillés | — |
+| Anciens fichiers de `media/` (plans de clients) toujours présents dans l'historique git | #61 |
+| Acier des poteaux, poutres, longrines, dalles et chaînages estimé par ratio (marqué « estimé ») | #79 |
+| Poutres continues calculées comme isostatiques (règle B3 validée ; Caquot non branché) | #68 |
+| Main-d'œuvre : parts saisies par le cabinet seulement, pas de temps unitaires ni de déboursés détaillés | #85 |
+| Poteaux très élancés (hauteur d'étage de 5 m et plus) refusés par le moteur | audit du 24/10 |
 
 ---
 
@@ -297,7 +301,6 @@ frontend/src/
 | Document | Contenu |
 |---|---|
 | `moteur_calcul/README.md` | Détail du moteur |
-| `RAILWAY_DEPLOYMENT.md` | Mise en production |
 | `walkthrough_ia.md` | Parcours de l'assistant IA |
 | `docs_audit_mathematique_2026-10-06.md` | Audit mathématique initial |
 | Audit d'équipe du 17/10/2026 | État vérifié du projet, anomalies, plan d'action |
