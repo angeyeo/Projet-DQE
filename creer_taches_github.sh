@@ -258,7 +258,7 @@ creer 'T16 · HSTS et redirection SSL en production' 'P2,securite,audit-2026-10-
 **Résultat attendu** : `check --deploy` sans avertissement
 
 ### Critère d'acceptation
-- [ ] Variables posées sur Railway
+- [ ] Variables posées chez l'hébergeur
 
 ### Risque
 Activer HSTS demande de la prudence (voir la documentation Django)

@@ -16,7 +16,7 @@ NORME = "BAEL 91 modifié 99"
 
 
 def identifiant_version():
-    """« 2026.10.23 », complété du commit déployé quand l'hébergeur le fournit
-    (Railway : RAILWAY_GIT_COMMIT_SHA). Rien n'est inventé s'il est absent."""
-    commit = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT") or "").strip()
+    """« 2026.10.23 », complété du commit déployé quand la variable GIT_COMMIT
+    est fournie. Rien n'est inventé si elle est absente."""
+    commit = (os.getenv("GIT_COMMIT") or "").strip()
     return f"{VERSION_MOTEUR} ({commit[:7]})" if commit else VERSION_MOTEUR
