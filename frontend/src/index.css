@@ -1620,3 +1620,11 @@ button.account-card { width: 100%; border: none; background: transparent; color:
 .progression-envoi-barre > span.indeterminee { width: 35%; position: absolute; animation: progression-va-et-vient 1.2s ease-in-out infinite; }
 @keyframes progression-va-et-vient { 0% { left: -35%; } 100% { left: 100%; } }
 @media (prefers-reduced-motion: reduce) { .progression-envoi-barre > span.indeterminee { animation: none; width: 100%; opacity: 0.5; } }
+
+/* Prix par type d'ouvrage (béton, coffrage) dans le barème */
+.bloc-prix { display: grid; gap: 0.4rem; align-content: start; }
+.prix-par-ouvrage { border: 1px dashed var(--core-border); border-radius: var(--radius-md); padding: 0.5rem 0.75rem; background: var(--core-surface); }
+.prix-par-ouvrage summary { cursor: pointer; font-size: 0.86rem; font-weight: 600; color: var(--ink-700); }
+.prix-par-ouvrage[open] summary { margin-bottom: 0.4rem; }
+.grille-prix-ouvrage { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0.6rem 0.9rem; }
+.grille-prix-ouvrage .form-group { margin-bottom: 0; }

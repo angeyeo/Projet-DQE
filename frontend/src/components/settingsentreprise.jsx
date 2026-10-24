@@ -30,6 +30,7 @@ export default function SettingsEntreprise({ estAdmin }) {
   const { data: referentiel, erreur: erreurReferentiel } = useReferentiel();
   const [champs, setChamps] = useState(CHAMPS_VIDES);
   const [prix, setPrix] = useState({});
+  const [prixEnregistres, setPrixEnregistres] = useState({}); // dernier état serveur
   // Parts matériaux / main-d'œuvre par clé du barème (issue #92), saisies
   // telles quelles : {cle: {materiaux, main_oeuvre}} ; vide = non décomposé.
   const [parts, setParts] = useState({});
@@ -67,6 +68,7 @@ export default function SettingsEntreprise({ estAdmin }) {
         setMeta(data.prix_unitaires_meta || {});
         setLogoUrl(data.logo || null);
         setPrix(data.prix_unitaires || {});
+        setPrixEnregistres(data.prix_unitaires || {});
         setParts(data.prix_decomposition || {});
         setParamsAppro(data.parametres_approvisionnement || {});
       })
@@ -153,6 +155,7 @@ export default function SettingsEntreprise({ estAdmin }) {
       setOrigines({});
       setLogoUrl(data.logo || logoUrl);
       setPrix(data.prix_unitaires || prix);
+      setPrixEnregistres(data.prix_unitaires || prix);
       setParts(data.prix_decomposition || decomposition);
       setLogoFile(null);
       setLogoPreview(null);
@@ -164,8 +167,38 @@ export default function SettingsEntreprise({ estAdmin }) {
     }
   };
 
+  // Champ de prix du barème (prix général ou prix propre à un type d'ouvrage),
+  // avec sa décomposition facultative et sa traçabilité.
+  const champPrix = ({ cle, libelle, placeholder = 'Non renseigné : bloque le DQE' }) => (
+          <div className="form-group" key={cle}>
+            <label className="form-label" htmlFor={`prix-${cle}`}>{libelle} <span className="texte-discret">({uniteDeCle(cle)})</span></label>
+            <input id={`prix-${cle}`} type="number" min="0" step="1" className="form-control" disabled={!estAdmin}
+              readOnly={etatParts(cle) === 'complet'} value={prix[cle] ?? ''} onChange={handlePrix(cle)}
+              placeholder={placeholder} />
+            <div className="parts-bareme" role="group" aria-label={`Décomposition du prix : ${libelle}`}>
+              <label className="part-bareme"><span aria-hidden="true">mat.</span>
+                <input type="number" min="0" step="1" className="form-control" disabled={!estAdmin} aria-label={`${libelle} : dont matériaux`}
+                  placeholder="facultatif" value={parts[cle]?.materiaux ?? ''} onChange={handlePart(cle, 'materiaux')}
+                  aria-invalid={etatParts(cle) === 'incomplet' && !partRemplie(parts[cle]?.materiaux)} /></label>
+              <span className="plus" aria-hidden="true">+</span>
+              <label className="part-bareme"><span aria-hidden="true">MO</span>
+                <input type="number" min="0" step="1" className="form-control" disabled={!estAdmin} aria-label={`${libelle} : dont main-d'œuvre`}
+                  placeholder="facultatif" value={parts[cle]?.main_oeuvre ?? ''} onChange={handlePart(cle, 'main_oeuvre')}
+                  aria-invalid={etatParts(cle) === 'incomplet' && !partRemplie(parts[cle]?.main_oeuvre)} /></label>
+            </div>
+            {etatParts(cle) === 'incomplet' && <small className="texte-erreur">Renseignez les deux parts, ou aucune.</small>}
+            <small className="aide-champ">
+              {origines[cle] === 'reference' ? 'Pré-rempli avec le barème de référence — non enregistré'
+                : (prix[cle] ?? null) !== (prixEnregistres[cle] ?? null) ? 'Modifié — non enregistré'
+                : meta[cle] ? `${meta[cle].source === 'reference' ? 'Barème de référence' : 'Saisi'} le ${meta[cle].date}${meta[cle].auteur ? ` par ${meta[cle].auteur}` : ''}`
+                  : prix[cle] != null && prix[cle] !== '' ? 'Date de saisie non tracée (antérieure au suivi)' : ''}
+            </small>
+          </div>
+  );
+
   const apercuLogo = logoPreview || logoUrl;
   const clesPrix = referentiel?.cles_prix || [];
+  const parOuvrage = referentiel?.cles_prix_par_ouvrage || [];
   const reference = referentiel?.prix_reference;
   const manquants = clesPrix.filter(({ cle }) => prix[cle] === undefined || prix[cle] === null || prix[cle] === '');
 
@@ -335,31 +368,31 @@ export default function SettingsEntreprise({ estAdmin }) {
         </Alerte>
       )}
       <div className="grid-2">
-        {clesPrix.map(({ cle, libelle }) => (
-          <div className="form-group" key={cle}>
-            <label className="form-label" htmlFor={`prix-${cle}`}>{libelle} <span className="texte-discret">({uniteDeCle(cle)})</span></label>
-            <input id={`prix-${cle}`} type="number" min="0" step="1" className="form-control" disabled={!estAdmin}
-              readOnly={etatParts(cle) === 'complet'} value={prix[cle] ?? ''} onChange={handlePrix(cle)}
-              placeholder="Non renseigné : bloque le DQE" />
-            <div className="parts-bareme" role="group" aria-label={`Décomposition du prix : ${libelle}`}>
-              <label className="part-bareme"><span aria-hidden="true">mat.</span>
-                <input type="number" min="0" step="1" className="form-control" disabled={!estAdmin} aria-label={`${libelle} : dont matériaux`}
-                  placeholder="facultatif" value={parts[cle]?.materiaux ?? ''} onChange={handlePart(cle, 'materiaux')}
-                  aria-invalid={etatParts(cle) === 'incomplet' && !partRemplie(parts[cle]?.materiaux)} /></label>
-              <span className="plus" aria-hidden="true">+</span>
-              <label className="part-bareme"><span aria-hidden="true">MO</span>
-                <input type="number" min="0" step="1" className="form-control" disabled={!estAdmin} aria-label={`${libelle} : dont main-d'œuvre`}
-                  placeholder="facultatif" value={parts[cle]?.main_oeuvre ?? ''} onChange={handlePart(cle, 'main_oeuvre')}
-                  aria-invalid={etatParts(cle) === 'incomplet' && !partRemplie(parts[cle]?.main_oeuvre)} /></label>
+        {clesPrix.map(({ cle, libelle }) => {
+          const propres = parOuvrage.filter((p) => p.generale === cle);
+          return (
+            <div key={cle} className="bloc-prix">
+              {champPrix({ cle, libelle })}
+              {propres.length > 0 && (
+                <details className="prix-par-ouvrage" open={propres.some((p) => prix[p.cle] != null && prix[p.cle] !== '')}>
+                  <summary>
+                    Prix par type d&apos;ouvrage <span className="texte-discret">(facultatif ·{' '}
+                      {propres.filter((p) => prix[p.cle] != null && prix[p.cle] !== '').length} renseigné(s))</span>
+                  </summary>
+                  <p className="texte-discret">
+                    Vide : le prix général ci-dessus s&apos;applique à ce type d&apos;ouvrage (la ligne du DQE l&apos;indique).
+                  </p>
+                  <div className="grille-prix-ouvrage">
+                    {propres.map((p) => champPrix({
+                      cle: p.cle, libelle: p.famille,
+                      placeholder: prix[cle] != null && prix[cle] !== '' ? `= prix général (${prix[cle]})` : '= prix général',
+                    }))}
+                  </div>
+                </details>
+              )}
             </div>
-            {etatParts(cle) === 'incomplet' && <small className="texte-erreur">Renseignez les deux parts, ou aucune.</small>}
-            <small className="aide-champ">
-              {origines[cle] === 'reference' ? 'Pré-rempli avec le barème de référence — non enregistré'
-                : meta[cle] ? `${meta[cle].source === 'reference' ? 'Barème de référence' : 'Saisi'} le ${meta[cle].date}${meta[cle].auteur ? ` par ${meta[cle].auteur}` : ''}`
-                  : prix[cle] != null && prix[cle] !== '' ? 'Date de saisie non tracée (antérieure au suivi)' : ''}
-            </small>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <h3 className="sous-titre">Prix de vente et taxes</h3>

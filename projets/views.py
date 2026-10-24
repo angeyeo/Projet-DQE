@@ -90,7 +90,10 @@ from .services.versions_dqe import comparer as comparer_versions_dqe
 from .services.versions_dqe import enregistrer_version, resume_version
 from .services.dqe_calculator import (
     DQEIncomplet,
+    CLES_SPECIALISABLES,
+    FAMILLES_OUVRAGE,
     LIBELLES_PRIX,
+    LIBELLES_PRIX_SPECIALISES,
     PRIX_UNITAIRES_REFERENCE,
     TAUX_TVA_REFERENCE_PCT,
     calculer_projet_dqe,
@@ -1641,6 +1644,14 @@ class ReferentielView(APIView):
             ],
             "contrainte_sol_defaut_kn_m2": CONTRAINTE_SOL_DEFAUT,
             "cles_prix": [{"cle": c, "libelle": l} for c, l in LIBELLES_PRIX.items()],
+            # Prix facultatifs par type d'ouvrage (béton, coffrage) : à défaut,
+            # le prix général du cabinet s'applique, et la ligne du DQE le dit.
+            "cles_prix_par_ouvrage": [
+                {"generale": generale, "cle": f"{racine}_{famille}_{unite}",
+                 "famille": libelle_famille, "libelle": LIBELLES_PRIX_SPECIALISES[f"{racine}_{famille}_{unite}"]}
+                for generale, (racine, unite, _) in CLES_SPECIALISABLES.items()
+                for famille, (libelle_famille, _) in FAMILLES_OUVRAGE.items()
+            ],
             "lots": [{"cle": c, "libelle": l} for c, l in PosteComplementaire.Lot.choices],
             "types_postes_ratio": [
                 {"cle": c, "libelle": l, "geometrie": SCHEMA_GEOMETRIE[c]}
