@@ -1,37 +1,6 @@
 """
 Plan de fondation DXF -- feuille de route "Ma partie -- Backend", Jour 3
 §3.2 (extension trame).
-
-Différence par rapport à la première version de ce document : Samuel
-stocke maintenant position_x/position_y directement sur chaque
-ElementStructurel (remplis à la génération de la grille, son Jour 2) --
-plus besoin d'inventer une disposition en grille arbitraire ici, on
-dessine directement aux vraies coordonnées reçues.
-
-Comme trame.py, generer_plan_fondation_dxf() est une fonction pure : elle
-ne touche à aucun modèle Django ni à la base. Elle prend en entrée le
-format exact retourné par GET /api/projets/{id}/plan_fondation/ (Samuel,
-Jour 2.4) -- une simple liste de dicts, pas des ElementStructurel.
-
-Adjacence pour le chaînage dessiné
------------------------------------
-Point ouvert de la feuille de route, tranché ici en attendant Samuel :
-deux méthodes sont supportées, avec priorité à la plus robuste.
-
-1. Indices de grille (i, j) -- si CHAQUE semelle transmet "indice_i" et
-   "indice_j" (clés optionnelles), on relie deux poteaux directement
-   adjacents dans le graphe (i, j) : même i et |j1-j2|==1, ou même j et
-   |i1-i2|==1. C'est la méthode robuste demandée dans la feuille de
-   route -- aucun risque d'erreur d'arrondi.
-2. Positions en mètres -- si les indices ne sont pas fournis (ou
-   incomplets), on retombe sur la méthode "trier par position_x puis
-   position_y, relier chaque poteau à son voisin immédiat dans chaque
-   direction" décrite dans la feuille de route, avec une tolérance
-   (`tolerance_position_m`, 1 cm par défaut) pour absorber les flottants.
-
-À TRANCHER AVEC SAMUEL (comme prévu) : lui demander de transmettre
-systématiquement indice_i/indice_j dans plan_fondation/ pour basculer
-définitivement sur la méthode 1 et supprimer la méthode 2.
 """
 
 import io
@@ -47,26 +16,16 @@ from moteur_calcul.formules.complements_plan_coffrage import (
 from moteur_calcul.formules.dimensionnement_dalles import predimensionner_dalle
 from moteur_calcul.validators import EntreeInvalide
 
-# Couleurs DXF (index ACI) -- cohérent avec l'image d'exemple de la
-# feuille de route ("poteaux reliés par des segments verts").
 COULEUR_SEMELLES = 5   # bleu
 COULEUR_POTEAUX = 1    # rouge
 COULEUR_CHAINAGE = 3   # vert
-COULEUR_ANNOTATIONS = 7  # blanc/noir (couleur du calque courant)
-# Phase C (voir Feuille_de_route_Import_Plan_Automatique.md) : nouveaux
-# types d'ouvrages transmis par _ouvrages_lineaires_pour_dxf() (Samuel,
-# projets/views.py) -- couleurs distinctes du chaînage "implicite"
-# (segments recalculés entre semelles adjacentes, COULEUR_CHAINAGE
-# ci-dessus) pour ne pas les confondre visuellement sur le plan.
+COULEUR_ANNOTATIONS = 7  # blanc/noir
 COULEUR_POUTRES = 4          # cyan
 COULEUR_LONGRINES = 6        # magenta
 COULEUR_CHAINAGES_IDENTIFIES = 2  # jaune
-# Compléments Phase C (dallage, joints de dilatation, cotations) --
-# géométrie calculée par moteur_calcul/formules/complements_plan_coffrage.py,
-# tracé ici uniquement.
-COULEUR_DALLAGE = 8              # gris -- discret, en arrière-plan
-COULEUR_JOINTS_DILATATION = 30   # orange -- doit ressortir, ouvrage sensible
-COULEUR_COTATIONS = 7            # blanc/noir, calque dédié COTATIONS
+COULEUR_DALLAGE = 8              # gris
+COULEUR_JOINTS_DILATATION = 30   # orange
+COULEUR_COTATIONS = 7            # blanc/noir
 
 
 def _cm_vers_m(valeur_cm) -> float:
@@ -74,7 +33,6 @@ def _cm_vers_m(valeur_cm) -> float:
 
 
 def _polygone_carre(centre_x, centre_y, cote_m):
-    """Retourne les 5 sommets (fermés) d'un carré centré sur (centre_x, centre_y)."""
     demi = cote_m / 2
     return [
         (centre_x - demi, centre_y - demi),
@@ -86,10 +44,6 @@ def _polygone_carre(centre_x, centre_y, cote_m):
 
 
 def _segments_par_indices(semelles):
-    """
-    Méthode robuste : relie les poteaux adjacents dans le graphe (i, j).
-    Suppose que chaque semelle a "indice_i" et "indice_j".
-    """
     par_indice = {(s["indice_i"], s["indice_j"]): s for s in semelles}
     segments = []
     vus = set()
@@ -110,11 +64,6 @@ def _segments_par_indices(semelles):
 
 
 def _segments_par_position(semelles, tolerance_position_m):
-    """
-    Méthode de secours : regroupe par position_x puis position_y (et
-    inversement), relie chaque poteau à son voisin immédiat dans
-    chaque alignement. Tolérance pour absorber les erreurs de flottants.
-    """
     if tolerance_position_m <= 0:
         raise ValueError("tolerance_position_m doit être strictement positif.")
 
@@ -122,8 +71,6 @@ def _segments_par_position(semelles, tolerance_position_m):
         return round(valeur / tolerance_position_m)
 
     segments = []
-
-    # Alignements verticaux (même x, y variable)
     par_x = {}
     for s in semelles:
         par_x.setdefault(cle_arrondie(s["position_x"]), []).append(s)
@@ -132,7 +79,6 @@ def _segments_par_position(semelles, tolerance_position_m):
         for a, b in zip(groupe, groupe[1:]):
             segments.append(((a["position_x"], a["position_y"]), (b["position_x"], b["position_y"])))
 
-    # Alignements horizontaux (même y, x variable)
     par_y = {}
     for s in semelles:
         par_y.setdefault(cle_arrondie(s["position_y"]), []).append(s)
@@ -155,18 +101,6 @@ def _calculer_segments_chainage(semelles, tolerance_position_m):
 
 
 def _dessiner_ouvrages_lineaires(doc, msp, ouvrages, nom_calque, couleur):
-    """
-    Phase C : dessine une liste plate d'ouvrages linéaires (poutres,
-    longrines ou chaînages identifiés -- même forme
-    {identifiant, x1, y1, x2, y2, largeur_cm, hauteur_cm}, voir
-    _ouvrages_lineaires_pour_dxf() côté vue) : un trait d'axe par
-    ouvrage sur son propre calque, annoté de son repère.
-
-    MVP : trait d'axe simple, pas encore le rectangle de largeur réelle
-    (largeur_cm/hauteur_cm sont transmis mais pas encore utilisés pour
-    dessiner l'emprise -- à enrichir si le plan de coffrage final doit
-    montrer l'épaisseur réelle plutôt qu'un simple repère de tracé).
-    """
     if not ouvrages:
         return
     if not doc.layers.has_entry(nom_calque):
@@ -188,18 +122,6 @@ def _dessiner_ouvrages_lineaires(doc, msp, ouvrages, nom_calque, couleur):
 
 
 def _dessiner_dallage(doc, msp, positions_semelles):
-    """
-    Phase C : trace le contour du dallage (dalle sur terre-plein) en
-    arrière-plan du plan, via calculer_contour_dallage() (moteur pur).
-    Annote son épaisseur pré-dimensionnée (predimensionner_dalle(),
-    BAEL 91) en se basant sur la plus grande portée détectée entre
-    semelles adjacentes -- valeur la plus défavorable (dalle la plus
-    épaisse), cohérent avec la logique prudente déjà utilisée ailleurs
-    dans le moteur (voir predimensionner_dalle : "ratio le plus
-    défavorable"). Si aucune portée n'est disponible (une seule
-    semelle), le contour est quand même tracé mais sans annotation
-    d'épaisseur -- pas assez d'information pour la calculer.
-    """
     if not doc.layers.has_entry("DALLAGE"):
         doc.layers.add(name="DALLAGE", color=COULEUR_DALLAGE)
 
@@ -212,17 +134,6 @@ def _dessiner_dallage(doc, msp, positions_semelles):
 
 
 def _annoter_epaisseur_dallage(msp, x_min, y_min, portee_max_m):
-    """
-    Annote l'épaisseur pré-dimensionnée du dallage si la plus grande
-    portée détectée entre semelles adjacentes reste dans le domaine de
-    validité du moteur (PORTEE_MIN_M..PORTEE_MAX_M, voir
-    moteur_calcul/validators.py) -- une "portée" de chaînage hors de ce
-    domaine (grand bâtiment industriel, chaînage traversant tout un
-    pignon...) n'est de toute façon pas représentative d'une vraie
-    portée de dalle ; on trace le dallage sans annotation d'épaisseur
-    plutôt que de faire échouer tout l'export DXF pour un détail
-    secondaire.
-    """
     if not portee_max_m or portee_max_m <= 0:
         return
     try:
@@ -240,13 +151,6 @@ def _annoter_epaisseur_dallage(msp, x_min, y_min, portee_max_m):
 
 
 def _dessiner_joints_dilatation(doc, msp, positions_semelles):
-    """
-    Phase C : trace les joints de dilatation calculés par
-    calculer_joints_dilatation() (moteur pur) -- traits discontinus sur
-    calque dédié, annotés "JOINT DE DILATATION" à mi-longueur. Aucun
-    tracé si le bâtiment tient dans DISTANCE_MAX_JOINT_DILATATION_M sur
-    les deux axes (cas courant en petit bâtiment).
-    """
     resultat = calculer_joints_dilatation(positions_semelles)
     if not resultat["joints"]:
         return []
@@ -272,27 +176,12 @@ def _dessiner_joints_dilatation(doc, msp, positions_semelles):
 
 
 def _dessiner_cotations(doc, msp, segments):
-    """
-    Phase C : cotation automatique de chaque segment de chaînage (même
-    liste que le tracé du calque CHAINAGE, voir
-    _calculer_segments_chainage()) -- une vraie entité DXF DIMENSION
-    (pas un simple texte), pour que la distance s'affiche et se
-    recalcule correctement dans un logiciel CAO si le plan est modifié.
-
-    Décalée de DISTANCE_COTATION_M perpendiculairement au segment, du
-    côté "extérieur" (direction opposée au reste du nuage de points) --
-    évite que la ligne de cote ne traverse le bâtiment. Utilise
-    add_aligned_dim() (pas add_linear_dim()) pour fonctionner quelle que
-    soit l'orientation du segment, y compris en diagonale.
-    """
     DISTANCE_COTATION_M = 0.8
     if not segments:
         return
     if not doc.layers.has_entry("COTATIONS"):
         doc.layers.add(name="COTATIONS", color=COULEUR_COTATIONS)
 
-    # Centroïde du nuage de points du bâtiment, pour choisir le sens du
-    # décalage (vers l'extérieur plutôt qu'au hasard).
     tous_points = [pt for seg in segments for pt in seg]
     centre_x = sum(p[0] for p in tous_points) / len(tous_points)
     centre_y = sum(p[1] for p in tous_points) / len(tous_points)
@@ -301,10 +190,8 @@ def _dessiner_cotations(doc, msp, segments):
         dx, dy = x2 - x1, y2 - y1
         longueur = math.hypot(dx, dy)
         if longueur == 0:
-            continue  # semelles superposées -- rien à coter
+            continue
 
-        # Vecteur perpendiculaire unitaire, orienté à l'opposé du centre
-        # du bâtiment (vers l'extérieur du segment).
         perp_x, perp_y = -dy / longueur, dx / longueur
         milieu_x, milieu_y = (x1 + x2) / 2, (y1 + y2) / 2
         if (perp_x * (milieu_x - centre_x) + perp_y * (milieu_y - centre_y)) < 0:
@@ -320,12 +207,6 @@ def _dessiner_cotations(doc, msp, segments):
 
 
 def _clusteriser_axe(valeurs, tolerance):
-    """Regroupe des coordonnées proches en axes de repère -- même principe
-    que _clusteriser_1d() de moteur_calcul/import_ifc/lecture_ifc.py, mais
-    dupliqué ici en petit (pas de dépendance croisée entre les deux
-    modules) avec une tolérance dédiée, plus large : on veut un repère
-    par alignement visuellement significatif du plan, pas par alignement
-    structurel strict (voir docstring de _dessiner_axes_reperes)."""
     if not valeurs:
         return []
     valeurs_triees = sorted(valeurs)
@@ -339,8 +220,6 @@ def _clusteriser_axe(valeurs, tolerance):
 
 
 def _lettre_repere(index_zero_based):
-    """0->A, 1->B, ..., 25->Z, 26->AA, 27->AB... (convention des plans BTP
-    pour numéroter les axes au-delà de 26)."""
     n = index_zero_based + 1
     lettres = ""
     while n > 0:
@@ -350,39 +229,19 @@ def _lettre_repere(index_zero_based):
 
 
 def _dessiner_axes_reperes(doc, msp, positions_semelles, tolerance_axe_m=0.4, marge_m=1.5):
-    """
-    Trace un système d'axes de repère (lignes de grille numérotées 1, 2,
-    3... et lettrées A, B, C...) autour du bâtiment, avec des bulles aux
-    extrémités -- la convention standard des plans de coffrage BTP (voir
-    l'exemple de plan professionnel fourni par Ange : axes A à O et 1 à
-    11 en bordure du plan).
-
-    Contrairement à detecter_parametres_trame() (Phase A, import_ifc/
-    lecture_ifc.py), qui utilise une tolérance stricte de 15 cm pour
-    détecter des alignements structurels fiables, ce tracé est purement
-    visuel/annotatif : la tolérance par défaut est volontairement plus
-    large (40 cm) pour limiter le nombre d'axes sur un bâtiment réel à
-    trame irrégulière (sinon on obtient un axe par poteau ou presque, ce
-    qui charge le plan sans le rendre plus lisible). À ajuster projet par
-    projet si besoin -- exposé en paramètre de generer_plan_fondation_dxf().
-
-    Retourne un dict de diagnostic (nombre d'axes tracés dans chaque
-    sens), utile pour avertir l'utilisateur si le nombre d'axes est très
-    élevé (bâtiment très irrégulier, tolérance à revoir).
-    """
     if not positions_semelles:
         return {"nb_reperes_numeriques": 0, "nb_reperes_lettres": 0}
 
     if not doc.layers.has_entry("AXES_REPERES"):
-        doc.layers.add(name="AXES_REPERES", color=9)  # gris clair, discret
+        doc.layers.add(name="AXES_REPERES", color=9)
 
     xs = [p[0] for p in positions_semelles]
     ys = [p[1] for p in positions_semelles]
     x_min, x_max = min(xs), max(xs)
     y_min, y_max = min(ys), max(ys)
 
-    axes_x = sorted(_clusteriser_axe(xs, tolerance_axe_m))  # repères numériques (colonnes, verticaux)
-    axes_y = sorted(_clusteriser_axe(ys, tolerance_axe_m))  # repères lettrés (lignes, horizontaux)
+    axes_x = sorted(_clusteriser_axe(xs, tolerance_axe_m))
+    axes_y = sorted(_clusteriser_axe(ys, tolerance_axe_m))
 
     rayon_bulle = max(0.25, min(0.4, marge_m * 0.3))
 
@@ -413,28 +272,10 @@ def _dessiner_axes_reperes(doc, msp, positions_semelles, tolerance_axe_m=0.4, ma
 
 
 def _arrondir_taille_superieure(valeur_cm, pas_cm=5):
-    """Arrondit une dimension au pas supérieur (5 cm par défaut) -- jamais
-    vers le bas, pour ne jamais sous-dimensionner un ouvrage réel en le
-    faisant entrer dans une classe de taille standardisée. C'est la même
-    logique qu'un bureau d'études : les coffrages sont fabriqués à des
-    dimensions rondes, pas à la valeur théorique exacte du calcul."""
     return math.ceil(float(valeur_cm) / pas_cm) * pas_cm
 
 
 def _grouper_par_type(elements, cle_taille, prefixe, pas_cm=5):
-    """
-    Regroupe une liste d'éléments (semelles ou poteaux) par taille
-    standardisée et attribue un label court (S1, S2, S3... ou P1, P2,
-    P3...) à chaque classe, la plus grande en premier -- convention des
-    plans de coffrage professionnels (voir l'exemple fourni par Ange :
-    S1(170x170x40) en plus grand, jusqu'à S5(80x80x25) en plus petit).
-
-    Retourne un dict {identifiant_element: (type_label, taille_arrondie_cm)}.
-    Les identifiants uniques générés automatiquement (GUID) restent
-    disponibles ailleurs (tableau de coordonnées de l'app, export DQE)
-    pour la traçabilité -- ce label court n'est utilisé QUE pour
-    l'annotation visuelle du plan, qui doit rester lisible.
-    """
     tailles_arrondies = {
         el["identifiant"]: _arrondir_taille_superieure(cle_taille(el), pas_cm) for el in elements
     }
@@ -447,12 +288,6 @@ def _grouper_par_type(elements, cle_taille, prefixe, pas_cm=5):
 
 
 def _dessiner_legende_types(msp, x_insert, y_insert, titre, types_comptes, layer="ANNOTATIONS"):
-    """Petit tableau texte (nomenclature) listant chaque type standardisé,
-    ses dimensions et le nombre d'éléments concernés -- équivalent
-    simplifié de la nomenclature d'un vrai plan de coffrage. Les
-    identifiants individuels (GUID) ne sont volontairement pas listés ici
-    pour ne pas surcharger le plan ; ils restent dans le tableau de
-    coordonnées de l'application."""
     msp.add_text(
         titre, dxfattribs={"layer": layer, "height": 0.3, "insert": (x_insert, y_insert)}
     )
@@ -463,9 +298,53 @@ def _dessiner_legende_types(msp, x_insert, y_insert, titre, types_comptes, layer
         )
 
 
+def _dessiner_cartouche(msp, x_min, y_min, x_max, y_max, nom_projet=""):
+    """
+    Dessine et remplit automatiquement le cartouche technique en bas à droite
+    du plan DXF avec le nom de projet dynamique détecté.
+    """
+    largeur_cartouche = 9.0
+    hauteur_cartouche = 3.5
+    
+    x_cart = x_max - largeur_cartouche
+    y_cart = y_min - 5.0
+    
+    if not msp.doc.layers.has_entry("CARTOUCHE"):
+        msp.doc.layers.add(name="CARTOUCHE", color=7)
+        
+    msp.add_lwpolyline(
+        [
+            (x_cart, y_cart),
+            (x_cart + largeur_cartouche, y_cart),
+            (x_cart + largeur_cartouche, y_cart + hauteur_cartouche),
+            (x_cart, y_cart + hauteur_cartouche),
+            (x_cart, y_cart),
+        ],
+        dxfattribs={"layer": "CARTOUCHE"}
+    )
+    
+    msp.add_line((x_cart, y_cart + 2.5), (x_cart + largeur_cartouche, y_cart + 2.5), dxfattribs={"layer": "CARTOUCHE"})
+    msp.add_line((x_cart, y_cart + 1.5), (x_cart + largeur_cartouche, y_cart + 1.5), dxfattribs={"layer": "CARTOUCHE"})
+    
+    titre_projet = f"PROJET : {nom_projet.upper()}" if nom_projet else "PROJET : BÂTIMENT / STRUCTURE"
+    
+    msp.add_text(
+        titre_projet,
+        dxfattribs={"layer": "CARTOUCHE", "height": 0.25, "insert": (x_cart + 0.2, y_cart + 2.8)}
+    )
+    msp.add_text(
+        "ELEMENT : PLAN DE FONDATION & COFFRAGE GENERAL",
+        dxfattribs={"layer": "CARTOUCHE", "height": 0.18, "insert": (x_cart + 0.2, y_cart + 1.8)}
+    )
+    msp.add_text(
+        "CABINET : BTP INNOVATION IVOIRE -- CONFORME BAEL 91",
+        dxfattribs={"layer": "CARTOUCHE", "height": 0.16, "insert": (x_cart + 0.2, y_cart + 0.6)}
+    )
+
 
 def generer_plan_fondation_dxf(
-    semelles,
+    nom_projet: str = "",
+    semelles=None,
     tolerance_position_m: float = 0.01,
     poutres: list = None,
     longrines: list = None,
@@ -478,74 +357,13 @@ def generer_plan_fondation_dxf(
     pas_cm_regroupement_semelles: float = 5,
     pas_cm_regroupement_poteaux: float = 5,
 ) -> bytes:
-    """
-    semelles : liste de dicts {identifiant, position_x, position_y, cote_cm,
-    hauteur_cm, poteau_associe: {identifiant, cote_cm}, [indice_i, indice_j]}
-    -- format exact retourné par GET /api/projets/{id}/plan_fondation/
-    (Samuel, Jour 2.4). indice_i/indice_j sont optionnels (voir docstring
-    du module pour la méthode d'adjacence utilisée selon leur présence).
-
-    poutres, longrines, chainages_identifies (Phase C, optionnels) :
-    listes plates {identifiant, x1, y1, x2, y2, largeur_cm, hauteur_cm}
-    -- format produit par _ouvrages_lineaires_pour_dxf() (Samuel,
-    projets/views.py). Chacune est dessinée sur son propre calque
-    (POUTRES, LONGRINES, CHAINAGES_IDENTIFIES), en plus du chaînage
-    "implicite" toujours recalculé ci-dessous entre semelles adjacentes
-    (COULEUR_CHAINAGE) -- les deux ne se recouvrent pas forcément
-    (chainages_identifies ne concerne que les chaînages promus en
-    éléments identifiés, ex. chaînages annexes hors trame principale).
-
-    Dessine chaque semelle à sa vraie position (x, y), le poteau associé
-    au centre, et les lignes de chaînage reliant les poteaux adjacents de
-    la grille (mêmes segments que calculer_longueur_chainage(), mais
-    dessinés plutôt que sommés). Annote la longueur totale sur le plan.
-
-    dessiner_dallage, dessiner_joints_dilatation, dessiner_cotations
-    (Phase C, tous True par défaut) : activent respectivement le
-    contour du dallage + son épaisseur pré-dimensionnée (calque
-    DALLAGE, tracé en premier donc en arrière-plan), les joints de
-    dilatation si le bâtiment dépasse
-    DISTANCE_MAX_JOINT_DILATATION_M (calque JOINTS_DILATATION,
-    tireté), et les cotations DXF natives sur chaque segment de
-    chaînage (calque COTATIONS). Géométrie calculée par
-    moteur_calcul/formules/complements_plan_coffrage.py -- voir ce
-    module pour les hypothèses (débord de dallage, distance max avant
-    joint). Paramètres exposés pour permettre de désactiver un calque
-    encombrant sur un plan avec beaucoup de semelles, sans dupliquer la
-    fonction.
-
-    dessiner_axes_reperes (True par défaut) : trace un système d'axes de
-    repère numérotés/lettrés (calque AXES_REPERES) façon plan de
-    coffrage professionnel -- voir _dessiner_axes_reperes(). Sur un
-    bâtiment réel à trame irrégulière, ajuster tolerance_axe_reperes_m
-    (0.4 m par défaut) si le nombre d'axes générés est trop élevé pour
-    rester lisible.
-
-    pas_cm_regroupement_semelles / pas_cm_regroupement_poteaux (5 cm par
-    défaut) : les semelles/poteaux sont annotés avec un label court
-    standardisé (S1, S2... / P1, P2...) plutôt que leur identifiant
-    unique généré automatiquement -- voir _grouper_par_type(). Sur un
-    bâtiment à charges très variées, un pas de 5 cm peut produire une
-    dizaine de types différents (matériellement optimal mais visuellement
-    chargé) ; augmenter le pas (ex. 15 ou 20 cm) réduit le nombre de
-    types en acceptant un léger surdimensionnement de certains éléments
-    -- c'est un choix de compromis matière/simplicité de chantier à faire
-    avec un technicien, pas une valeur universelle.
-
-    Lève ValueError si une semelle n'a pas de poteau_associe -- une
-    semelle orpheline dans un lot généré signale une régression Module 6
-    (cf. Jour 5 de la feuille de route) : mieux vaut un échec explicite
-    ici que de dessiner un plan de fondation silencieusement incomplet.
-
-    Retour : bytes du fichier DXF.
-    """
     if not semelles:
         raise ValueError("Aucune semelle fournie : impossible de générer un plan de fondation.")
 
     semelles_sans_poteau = [s["identifiant"] for s in semelles if not s.get("poteau_associe")]
     if semelles_sans_poteau:
         raise ValueError(
-            "Semelle(s) sans poteau associé (régression Module 6 probable) : "
+            "Semelle(s) sans poteau associé : "
             + ", ".join(str(i) for i in semelles_sans_poteau)
         )
 
@@ -558,8 +376,6 @@ def generer_plan_fondation_dxf(
 
     positions_semelles = [(s["position_x"], s["position_y"]) for s in semelles]
 
-    # Dallage tracé en tout premier : calque en arrière-plan, sous les
-    # semelles/poteaux dessinés juste après.
     if dessiner_dallage:
         dallage_x_min, dallage_y_min = _dessiner_dallage(doc, msp, positions_semelles)
 
@@ -570,14 +386,6 @@ def generer_plan_fondation_dxf(
 
     xs, ys = [], []
 
-    # Regroupement par taille standardisée (S1, S2, S3... / P1, P2, P3...),
-    # la plus grande en premier -- même convention que l'exemple de plan
-    # professionnel fourni par Ange. Les identifiants complets (GUID)
-    # restent la clé de vérité pour la traçabilité (tableau de
-    # coordonnées de l'app) ; ce label court n'est utilisé QUE pour
-    # l'annotation visuelle du dessin, qui devient illisible avec des
-    # identifiants générés automatiquement dès qu'on dépasse une dizaine
-    # d'éléments.
     types_semelles = _grouper_par_type(semelles, lambda s: s["cote_cm"], "S", pas_cm=pas_cm_regroupement_semelles)
     types_poteaux = _grouper_par_type(
         [s["poteau_associe"] for s in semelles], lambda p: p["cote_cm"], "P", pas_cm=pas_cm_regroupement_poteaux
@@ -641,10 +449,6 @@ def generer_plan_fondation_dxf(
         },
     )
 
-    # Nomenclature des types standardisés (S1, S2... / P1, P2...) : compte
-    # combien d'éléments de chaque taille, pour que le plan reste lisible
-    # avec des labels courts (voir _grouper_par_type()) tout en gardant
-    # une trace de ce que chaque type représente concrètement.
     def _compter_par_type(types_dict, hauteur_par_id=None):
         comptage = {}
         for identifiant, (label, taille) in types_dict.items():
@@ -695,6 +499,9 @@ def generer_plan_fondation_dxf(
         _dessiner_joints_dilatation(doc, msp, positions_semelles)
     if dessiner_cotations:
         _dessiner_cotations(doc, msp, segments)
+
+    # Cartouche dynamique sans nom figé
+    _dessiner_cartouche(msp, x_min, y_min, max(xs), min(ys), nom_projet=nom_projet)
 
     tampon = io.StringIO()
     doc.write(tampon)

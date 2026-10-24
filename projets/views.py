@@ -1212,11 +1212,14 @@ class ProjetViewSet(FiltreCabinetMixin, viewsets.ModelViewSet):
             ouvrages = _ouvrages_lineaires_pour_dxf(projet.elements.all())
             try:
                 content = generer_plan_fondation_dxf(
-                    _semelles_pour_dxf(semelles),
+                    nom_projet=projet.nom,
+                    semelles=_semelles_pour_dxf(semelles),
                     poutres=ouvrages["poutres"],
                     longrines=ouvrages["longrines"],
                     chainages_identifies=ouvrages["chainages_identifies"],
                 )
+            except ValueError as err:
+                return Response({"erreur": str(err)}, status=status.HTTP_400_BAD_REQUEST)
             except ValueError as err:
                 return Response({"erreur": str(err)}, status=status.HTTP_400_BAD_REQUEST)
             response = HttpResponse(content, content_type="application/dxf")
